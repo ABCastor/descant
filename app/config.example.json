@@ -1,0 +1,35 @@
+{
+  "publicOrigin": "https://reader.example.com",
+  "shareTokenFile": "~/.config/descant/share-token",
+  "reviewersFile": "~/.config/descant/reviewers.json",
+  "sites": [
+    {
+      "name": "team.example.com",
+      "liveBase": "https://team.example.com/writing/",
+      "tagsFrom": {
+        "url": "https://team.example.com/writing/",
+        "format": "html"
+      },
+      "tagsRequired": true,
+      "chip": true,
+      "receiver": {
+        "kind": "receive-script",
+        "repo": "~/code/team-site",
+        "remotePath": "/you/team-site.git"
+      }
+    },
+    {
+      "name": "me.example.com",
+      "liveBase": "https://me.example.com/writing/",
+      "tagsFrom": {
+        "url": "https://me.example.com/rss.xml",
+        "format": "rss"
+      },
+      "default": true,
+      "receiver": {
+        "kind": "personal-repo",
+        "path": "~/code/my-site"
+      }
+    }
+  ]
+}

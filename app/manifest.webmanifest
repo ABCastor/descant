@@ -1,0 +1,28 @@
+{
+  "id": "/",
+  "name": "Descant",
+  "short_name": "Descant",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FAF9F4",
+  "theme_color": "#FAF9F4",
+  "icons": [
+    {
+      "src": "/icons/castor-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/castor-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/castor-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+/* Keep history and keyboard controls reachable while formatting scrolls. */
+.command-island-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  border-left: 1px solid var(--rule);
+}
+.command-island-actions .command-island-word {
+  min-width: 44px;
+  min-height: 44px;
+  padding-inline: .55rem;
+}
+.command-island-word:disabled {
+  opacity: .38;
+  cursor: default;
+  background: transparent;
+}
+.command-island-word:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -3px;
+}
+.command-island-row {
+  scroll-padding-inline: .4rem;
+  scroll-snap-type: none;
+}
+.command-island-clip::after { content: none; }
+.command-island[data-toolbar="symbols"] .command-island-word sub {
+  font-size: .65em;
+  line-height: 0;
+  vertical-align: sub;
+}
+.command-island-actions svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+/* The split comparison has two fixed ends around the same scrollable strip. */
+.command-island[data-arrangement="split"] .command-island-history {
+  border-left: 0;
+  border-right: 1px solid var(--rule);
+}
+.command-island[data-arrangement="split"] .command-island-keyboard {
+  margin-left: 0;
+}

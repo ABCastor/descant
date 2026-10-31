@@ -1,0 +1,82 @@
+# An example configuration for the optional reader service (this Worker). Copy it to
+# wrangler.toml beside this file, put in your own domain, D1 database id, sender address and
+# writer origin, then: npx wrangler deploy. Paths below are relative to this file.
+#
+# Descant: the public side of the writing app. It holds only what a founder has shared with a
+# named person; the private app (design/app/serve.py) talks to it through outbound requests
+# from the private server and nothing here can reach that server.
+name = "descant"
+main = "src/worker/index.ts"
+compatibility_date = "2026-09-25"
+
+# The one address: a Custom Domain on your own zone. No address on Cloudflare's shared Worker domain and no preview URLs,
+# so there is no second way in.
+workers_dev = false
+preview_urls = false
+routes = [
+  { pattern = "reader.example.com", custom_domain = true },
+]
+
+# Rebuild both empty frontend bundles and their exact CSP hashes for every deploy.
+[build]
+command = "python3 ../build.py --public-reviewer --public-writer"
+
+[observability]
+enabled = false
+
+# Under `wrangler dev` the Worker sees its local address instead of the custom domain, so the
+# https redirect (src/worker/index.ts) lets loopback through. Open it at http://localhost:8787.
+[dev]
+ip = "127.0.0.1"
+port = 8787
+host = "localhost:8787"
+upstream_protocol = "http"
+
+# Every request reaches the Worker first; it serves the few files in public/ itself (the
+# reader page, its fonts and icons) and answers everything else with 404.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+html_handling = "none"
+not_found_handling = "none"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "descant"
+# Create it with `npx wrangler d1 create descant` and paste its id here.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Descant's sender uses existing Email Routing, free for verified destinations.
+# A new reader must verify their destination in Cloudflare before this binding can reach them.
+# Code-only sign-in avoids password derivation under Workers Free.
+[[send_email]]
+name = "MAIL"
+allowed_sender_addresses = ["descant@example.com"]
+
+[vars]
+APP_URL = "https://reader.example.com"
+FROM_ADDRESS = "descant@example.com"
+# Optional: serve the writing app itself at /write/ from your Descant server, which must then be on
+# a public HTTPS address. Without it the comment page works on its own.
+# WRITER_ORIGIN = "https://writer.example.com:8443"
+# The writers' founder keys (the keys of .descant/people.json), comma separated. None: no one is a writer.
+WRITERS = "ada,bo"
+
+# Secrets, set with `npx wrangler secret put <NAME>` and never written here:
+#   SESSION_SECRET      at least 32 characters; signs the reader and founder session cookies
+#   SHARE_TOKEN_SHA256  the SHA-256 (64 hex characters) of the token the private server sends
+
+# Per-invocation ceilings reduce runaway work; these are not a monthly spending cap.
+[limits]
+cpu_ms = 1000
+subrequests = 100
+
+# Cheap admission before D1. Private authenticated synchronization remains separate.
+[[ratelimits]]
+name = "PUBLIC_REQUESTS"
+namespace_id = "5002"
+[ratelimits.simple]
+limit = 120
+period = 60

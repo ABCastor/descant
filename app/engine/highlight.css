@@ -1,0 +1,9 @@
+/* highlight.css — the six colours fenced code can carry.
+   A world declares the tokens in its theme; a world that declares none renders
+   plain ink, which is a legible outcome rather than a broken one. */
+.code-keyword { color: var(--code-keyword, inherit); }
+.code-string  { color: var(--code-string,  inherit); }
+.code-number  { color: var(--code-number,  inherit); }
+.code-comment { color: var(--code-comment, inherit); font-style: italic; }
+.code-name    { color: var(--code-name,    inherit); }
+.code-punct   { color: var(--code-punct,   inherit); }

@@ -1,0 +1,534 @@
+/* Castor engine · island.js
+ *
+ * The command island. A world's --island token decides whether it is phone-only
+ * (the default), always present, or off. It owns no document state and writes no
+ * Markdown DOM itself: every edit is committed through Castor.editor's public
+ * getCaret/getBlocks/replaceBlock/restoreCaret API, so undo and rendering stay
+ * with the editor. The island never enters localStorage.
+ */
+(function (global) {
+  'use strict';
+
+  var Castor = global.Castor || (global.Castor = {});
+  var DOC = global.document;
+  var toolbarChoice = new URLSearchParams((global.location && global.location.search) || '').get('toolbar');
+  var COMMANDS = [
+    { id: 'heading', label: 'Paragraph', title: 'Heading level' },
+    { id: 'bold', label: 'Bold', title: 'Bold' },
+    { id: 'bullet', label: 'Bullet', title: 'Bullet list' },
+    { id: 'checkbox', label: 'Box', title: 'Checkbox' },
+    { id: 'outdent', label: 'Outdent', title: 'Outdent' },
+    { id: 'indent', label: 'Indent', title: 'Indent' },
+    { id: 'highlight', label: 'Highlight', title: 'Highlight' },
+    { id: 'link', label: 'Link', title: 'Link' },
+    { id: 'footnote', label: 'Footnote', title: 'Add footnote' }
+  ];
+
+  if (toolbarChoice === 'symbols') COMMANDS.splice(7, 0,
+    { id: 'quote', label: 'Quote', title: 'Quote' });
+  if (toolbarChoice !== 'words' && toolbarChoice !== 'symbols') {
+    COMMANDS = COMMANDS.filter(function (def) { return def.id !== 'checkbox'; });
+  }
+
+  function commandSymbol(id) {
+    if (id === 'heading') return 'P';
+    if (id === 'bold') return '<b>B</b>';
+    if (id === 'highlight') return '<u>H</u>';
+    if (id === 'footnote') return 'x<sup>1</sup>';
+    var paths = {
+      bullet: '<circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/><path d="M9 6h11M9 12h11M9 18h11"/>',
+      checkbox: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m7 12 3 3 7-7"/>',
+      outdent: '<path d="M3 5h18M11 10h10M11 14h10M3 19h18M7 9l-3 3 3 3M4 12h4"/>',
+      indent: '<path d="M3 5h18M11 10h10M11 14h10M3 19h18M4 9l3 3-3 3M3 12h4"/>',
+      undo: '<path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12"/>',
+      redo: '<path d="m15 5 5 5-5 5M20 10h-10a6 6 0 0 0 0 12"/>',
+      'hide-keyboard': '<rect x="3" y="3" width="18" height="11" rx="2"/><path d="M6 7h1m3 0h1m3 0h1m3 0h0M7 11h10m-9 7 4 3 4-3"/>',
+      'show-keyboard': '<rect x="3" y="3" width="18" height="11" rx="2"/><path d="M6 7h1m3 0h1m3 0h1m3 0h0M7 11h10m-9 10 4-3 4 3"/>',
+      quote: '<path d="M4 6h6v7H4V6m6 7c0 4-2 5-4 5M14 6h6v7h-6V6m6 7c0 4-2 5-4 5"/>',
+      link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'
+    };
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + paths[id] + '</svg>';
+  }
+
+  var S = {
+    mounted: false, ctx: null, frame: null, app: null, article: null, root: null,
+    row: null, heading: null, focused: false, dismissed: false,
+    actions: null, desktopActions: null, keyboardCaret: null,
+    keyboardOverride: null, viewportHigh: 0, viewportWidth: 0, viewportOrientation: null,
+    resizeObserver: null, headingBlockId: null,
+    touchEnabled: true
+  };
+  var touchMedia = global.matchMedia && global.matchMedia('(any-pointer: coarse)');
+  function touchScreen() {
+    return !!((touchMedia && touchMedia.matches) || (global.navigator && global.navigator.maxTouchPoints > 0));
+  }
+
+  function editor() { return Castor.editor; }
+  function mode() {
+    if (S.app && S.app.dataset.mode) return S.app.dataset.mode;
+    return S.app && S.app.clientWidth < 700 ? 'phone' : 'desktop';
+  }
+  function policy() {
+    var value = '';
+    try {
+      var style = Castor.frameReads ? Castor.frameReads.style(DOC.documentElement) : global.getComputedStyle(DOC.documentElement);
+      value = style.getPropertyValue('--island').trim().toLowerCase();
+    }
+    catch (e) { value = ''; }
+    return value === 'always' || value === 'off' || value === 'phone' ? value : 'phone';
+  }
+  function allowed() {
+    var value = policy();
+    if (touchScreen()) return value !== 'off' && S.touchEnabled;
+    return value !== 'off' && (value === 'always' || mode() === 'phone');
+  }
+  function focusActive() {
+    return !!(S.app && S.app.getAttribute('data-focus') === 'on');
+  }
+  function editFocused() {
+    var e = editor();
+    return !!(e && e.isFocused && e.isFocused() && DOC.activeElement &&
+      DOC.activeElement.classList && DOC.activeElement.classList.contains('cw-edit'));
+  }
+  function viewport() { return global.visualViewport || null; }
+  function updateViewportBaseline() {
+    var vv = viewport(), scale = vv && vv.scale || 1;
+    var width = vv && vv.width ? vv.width * scale : global.innerWidth || S.app && S.app.clientWidth || 0;
+    var height = vv ? vv.height * scale : global.innerHeight;
+    var orientation = global.screen && global.screen.orientation;
+    var direction = orientation ? String(orientation.angle == null ? orientation.type : orientation.angle)
+      : global.orientation == null ? '' : String(global.orientation);
+    // Keyboard resize retains the layout width. Rotation and Split View start
+    // a new baseline, including while the native editing host retains focus.
+    if (S.viewportOrientation !== direction ||
+        Math.abs(width - S.viewportWidth) > Math.max(24, S.viewportWidth * .05)) {
+      S.viewportWidth = width;
+      S.viewportOrientation = direction;
+      S.viewportHigh = height;
+    } else S.viewportHigh = Math.max(S.viewportHigh, height);
+  }
+
+  function keyboardUp() {
+    if (S.keyboardOverride != null) return !!S.keyboardOverride;
+    if (!editFocused()) return false;
+    var vv = viewport();
+    if (!vv) return true;
+    var high = S.viewportHigh || vv.height;
+    // Panning changes offsetTop, not keyboard size; zoom changes CSS pixels.
+    // A focused host can keep focus after Android's keyboard is dismissed.
+    return high - vv.height * (vv.scale || 1) > Math.max(96, high * .14);
+  }
+
+  function createButton(def, symbols) {
+    var b = DOC.createElement('button');
+    b.type = 'button';
+    b.className = 'command-island-word';
+    b.dataset.command = def.id;
+    if (symbols) b.innerHTML = commandSymbol(def.id);
+    else b.textContent = def.label;
+    b.setAttribute('title', def.title);
+    b.setAttribute('aria-label', def.title);
+    b.addEventListener('pointerdown', function (event) { event.preventDefault(); });
+    b.addEventListener('click', function () { run(def.id); });
+    return b;
+  }
+
+  function ensure() {
+    if (S.root || !DOC || !allowed()) return S.root;
+    var root = DOC.createElement('aside');
+    root.className = 'command-island';
+    root.setAttribute('aria-label', 'Writing commands');
+    root.dataset.open = '0';
+    var split = toolbarChoice === 'split';
+    var symbols = split || toolbarChoice === 'symbols' || (toolbarChoice !== 'words' && touchScreen());
+    if (symbols) root.dataset.toolbar = 'symbols';
+    root.dataset.arrangement = split ? 'split' : 'combined';
+
+    var clip = DOC.createElement('div');
+    clip.className = 'command-island-clip';
+    var row = DOC.createElement('div');
+    row.className = 'command-island-row';
+    row.setAttribute('role', 'toolbar');
+    COMMANDS.forEach(function (def) {
+      var button = createButton(def, symbols);
+      row.appendChild(button);
+      if (def.id === 'heading') S.heading = button;
+    });
+    clip.appendChild(row);
+
+    var close = DOC.createElement('button');
+    close.type = 'button';
+    close.className = 'command-island-close';
+    close.textContent = 'Close';
+    close.setAttribute('aria-label', 'Dismiss writing commands');
+    close.addEventListener('pointerdown', function (event) { event.preventDefault(); });
+    close.addEventListener('click', function () { S.dismissed = true; refresh(); });
+
+    if (!split) root.appendChild(clip);
+    var actions = DOC.createElement('div');
+    actions.className = 'command-island-actions' + (split ? ' command-island-history' : '');
+    actions.setAttribute('role', 'group');
+    actions.setAttribute('aria-label', split ? 'Editing history' : 'Editing history and keyboard');
+    var actionButtons = [];
+    [
+      { id: 'undo', label: 'Undo', title: 'Undo' },
+      { id: 'redo', label: 'Redo', title: 'Redo' },
+      { id: 'hide-keyboard', label: 'Hide keyboard', title: 'Hide keyboard' }
+    ].forEach(function (def) {
+      if (split && def.id === 'hide-keyboard') return;
+      var button = createButton(def, symbols);
+      actions.appendChild(button); actionButtons.push(button);
+    });
+    root.appendChild(actions);
+    if (split) {
+      root.appendChild(clip);
+      var keyboard = DOC.createElement('div');
+      keyboard.className = 'command-island-actions command-island-keyboard';
+      keyboard.setAttribute('role', 'group');
+      keyboard.setAttribute('aria-label', 'Keyboard');
+      var hide = createButton({ id: 'hide-keyboard', label: 'Hide keyboard', title: 'Hide keyboard' }, symbols);
+      keyboard.appendChild(hide); actionButtons.push(hide);
+      root.appendChild(keyboard);
+    }
+    root.appendChild(close);
+    root.dataset.docked = touchScreen() ? '1' : '0';
+    if (touchScreen() && S.app) S.app.insertBefore(root, DOC.getElementById('footline'));
+    else (S.frame || DOC.body).appendChild(root);
+    S.root = root;
+    S.row = row;
+    S.actions = actionButtons;
+    refreshHeading(true);
+    refreshControls();
+    return root;
+  }
+
+  function ensureDesktopHistory() {
+    if (S.desktopActions || !DOC) return;
+    var line = DOC.getElementById('footline');
+    var footer = line && line.querySelector('.foot-meta');
+    if (!footer) return;
+    var group = DOC.createElement('span');
+    group.className = 'desktop-history';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'Editing history');
+    S.desktopActions = ['undo', 'redo'].map(function (id) {
+      var button = createButton({ id: id, label: id === 'undo' ? 'Undo' : 'Redo', title: id === 'undo' ? 'Undo' : 'Redo' }, true);
+      group.appendChild(button);
+      return button;
+    });
+    footer.insertBefore(group, footer.firstChild);
+  }
+
+  function remove() {
+    if (S.root) S.root.remove();
+    S.root = null; S.row = null; S.heading = null; S.headingBlockId = null; S.actions = null;
+    if (S.app) S.app.dataset.touchFormat = '0';
+  }
+
+  function caretRect() {
+    var caret = DOC.querySelector('.cw-caret:not([hidden])');
+    if (caret) {
+      var cr = caret.getBoundingClientRect();
+      if (cr.height) return cr;
+    }
+    var snapshot = Castor.frameReads ? Castor.frameReads.selection() : null;
+    var sel = snapshot ? snapshot.sel : global.getSelection && global.getSelection();
+    var range = snapshot ? snapshot.range : sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+    if (range) {
+      var r = range.getBoundingClientRect();
+      if (r.height) return r;
+    }
+    return null;
+  }
+
+  function place() {
+    if (!S.root || S.root.dataset.open !== '1') return;
+    if (S.root.dataset.docked === '1') return;
+    var frame = (S.frame || DOC.documentElement).getBoundingClientRect();
+    var vv = viewport();
+    var visibleBottom = Math.min(frame.bottom, vv ? (vv.offsetTop + vv.height) : frame.bottom);
+    var footer = DOC.getElementById('footline');
+    var footerBox = footer && footer.getBoundingClientRect();
+    if (footerBox && footerBox.height && footerBox.top >= frame.top) visibleBottom = Math.min(visibleBottom, footerBox.top);
+    var phone = mode() === 'phone';
+    if (phone) {
+      S.root.style.maxWidth = '';
+    } else {
+      var column = S.article && S.article.closest ? S.article.closest('.page-column') : null;
+      var columnRect = column && column.getBoundingClientRect();
+      var rootStyle = Castor.frameReads ? Castor.frameReads.style(S.root) : global.getComputedStyle(S.root);
+      var left = parseFloat(rootStyle.left) || 0;
+      var room = columnRect ? Math.floor(columnRect.left - frame.left - left - 12) : Math.floor(frame.width * .28);
+      S.root.style.maxWidth = Math.max(1, room) + 'px';
+    }
+    var h = S.root.offsetHeight || 44;
+    var top = visibleBottom - frame.top - h - 10;
+    var caret = phone && caretRect();
+    if (caret) {
+      var islandTop = frame.top + top, islandBottom = islandTop + h;
+      if (islandBottom > caret.top - 7 && islandTop < caret.bottom + 7) {
+        var above = caret.top - frame.top - h - 10;
+        var below = caret.bottom - frame.top + 10;
+        if (above >= 8) top = above;
+        else if (frame.top + below + h <= visibleBottom - 6) top = below;
+      }
+    }
+    top = Math.max(8, Math.min(top, visibleBottom - frame.top - h - 6));
+    S.root.style.top = Math.round(top) + 'px';
+  }
+
+  function currentBlock(saved) {
+    var e = editor();
+    if (!e || !saved || !e.getBlocks) return null;
+    var blocks = e.getBlocks();
+    for (var i = 0; i < blocks.length; i++) if (blocks[i].id === saved.blockId) return blocks[i];
+    return null;
+  }
+
+  function headingLabel() {
+    var e = editor(), id = e && e.focusedBlockId && e.focusedBlockId();
+    var block = currentBlock(id ? { blockId: id } : e && e.getCaret && e.getCaret());
+    if (!block || !/^h[1-6]$/.test(block.type)) return 'Paragraph';
+    return block.type.toUpperCase();
+  }
+
+  function lineRange(source, at) {
+    var start = source.lastIndexOf('\n', Math.max(0, at - 1)) + 1;
+    var end = source.indexOf('\n', at);
+    return { start: start, end: end < 0 ? source.length : end };
+  }
+
+  function commit(block, saved, source, start, end) {
+    var e = editor();
+    if (!e || !e.replaceBlock || !e.restoreCaret || source === block.source) return false;
+    if (!e.replaceBlock(block.id, source)) return false;
+    e.restoreCaret({ blockId: block.id, start: start, end: end == null ? start : end }, 'snap');
+    refreshHeading();
+    global.requestAnimationFrame(place);
+    return true;
+  }
+
+  function wrapInline(block, saved, marker, empty) {
+    var a = saved.start, b = saved.end, source = block.source;
+    if (b > a) {
+      return commit(block, saved, source.slice(0, a) + marker + source.slice(a, b) + marker + source.slice(b),
+        a + marker.length, b + marker.length);
+    }
+    var pair = empty || marker + marker;
+    return commit(block, saved, source.slice(0, a) + pair + source.slice(a), a + marker.length);
+  }
+
+  function listCommand(block, saved, kind) {
+    var source = block.source, lr = lineRange(source, saved.start), line = source.slice(lr.start, lr.end);
+    var indent = (/^\s*/.exec(line) || [''])[0];
+    var rest = line.slice(indent.length).replace(/^(?:[-*+] |\d+[.)] )(?:\[[ xX]\] )?/, '');
+    var marker = kind === 'checkbox' ? '- [ ] ' : '- ';
+    var nextLine = indent + marker + rest;
+    var delta = nextLine.length - line.length;
+    return commit(block, saved, source.slice(0, lr.start) + nextLine + source.slice(lr.end),
+      Math.max(lr.start + indent.length + marker.length, saved.start + delta),
+      Math.max(lr.start + indent.length + marker.length, saved.end + delta));
+  }
+
+  function run(id) {
+    var e = editor();
+    if (!e) return false;
+    if (id === 'undo' || id === 'redo') {
+      var history = e.historyState && e.historyState();
+      if (!history || !history[id] || typeof e[id] !== 'function') return false;
+      e[id](); refreshControls(); return true;
+    }
+    if (id === 'hide-keyboard') {
+      var savedKeyboard = keyboardCaret();
+      if (!savedKeyboard) return false;
+      S.keyboardCaret = savedKeyboard;
+      var toggled;
+      if (keyboardUp()) toggled = e.hideKeyboard && e.hideKeyboard();
+      // Keep focus inside the trusted click. Deferring this to a timer or a
+      // frame prevents iOS from reopening the software keyboard.
+      else toggled = e.restoreCaret && e.restoreCaret(savedKeyboard, 'snap');
+      refresh(); return !!toggled;
+    }
+    if (e.can && !e.can(id)) return false;
+    if (e && typeof e.command === 'function') return e.command(id);
+    var saved = e && e.getCaret && e.getCaret();
+    var block = currentBlock(saved);
+    if (!e || !saved || !block) return false;
+
+    var source = block.source, lr, take, prefix, next, delta;
+    if (id === 'heading') {
+      take = /^#{1,6}\s+/.exec(source);
+      var clean = take ? source.slice(take[0].length) : source;
+      var levels = { p: 1, h1: 2, h2: 3, h3: 4, h4: 5, h5: 6, h6: 0 };
+      var level = levels[block.type] == null ? 1 : levels[block.type];
+      prefix = level ? new Array(level + 1).join('#') + ' ' : '';
+      delta = prefix.length - (take ? take[0].length : 0);
+      return commit(block, saved, prefix + clean, Math.max(prefix.length, saved.start + delta),
+        Math.max(prefix.length, saved.end + delta));
+    }
+    if (id === 'bold') return wrapInline(block, saved, '**');
+    if (id === 'highlight') return wrapInline(block, saved, '==');
+    if (id === 'link') {
+      if (saved.end > saved.start) {
+        return commit(block, saved,
+          source.slice(0, saved.start) + '[[' + source.slice(saved.start, saved.end) + ']]' + source.slice(saved.end),
+          saved.start + 2, saved.end + 2);
+      }
+      return commit(block, saved, source.slice(0, saved.start) + '[[]]' + source.slice(saved.start), saved.start + 2);
+    }
+    if (id === 'bullet' || id === 'checkbox') return listCommand(block, saved, id);
+    if (id === 'indent') {
+      lr = lineRange(source, saved.start);
+      return commit(block, saved, source.slice(0, lr.start) + '    ' + source.slice(lr.start), saved.start + 4, saved.end + 4);
+    }
+    if (id === 'outdent') {
+      lr = lineRange(source, saved.start);
+      take = /^ {1,4}/.exec(source.slice(lr.start));
+      if (!take) return false;
+      next = source.slice(0, lr.start) + source.slice(lr.start + take[0].length);
+      return commit(block, saved, next, Math.max(lr.start, saved.start - take[0].length),
+        Math.max(lr.start, saved.end - take[0].length));
+    }
+    return false;
+  }
+
+  function refreshHeading(force) {
+    if (!S.heading) return;
+    var e = editor(), id = e && e.focusedBlockId && e.focusedBlockId();
+    if (!force && id === S.headingBlockId) return;
+    S.headingBlockId = id;
+    var label = headingLabel();
+    if (S.root.dataset.toolbar === 'symbols') {
+      if (/^H[1-6]$/.test(label)) S.heading.innerHTML = 'H<sub>' + label.slice(1) + '</sub>';
+      else S.heading.textContent = 'P';
+    } else S.heading.textContent = label;
+    S.heading.setAttribute('title', 'Heading level, currently ' + label);
+    S.heading.setAttribute('aria-label', 'Heading level, currently ' + label);
+  }
+
+  function keyboardCaret() {
+    var e = editor(), saved = e && e.getCaret && e.getCaret();
+    if (saved && currentBlock(saved)) return saved;
+    return e && S.keyboardCaret && currentBlock(S.keyboardCaret) ? S.keyboardCaret : null;
+  }
+
+  function publishKeyboard() {
+    if (!S.app) return;
+    var state = keyboardUp() ? 'up' : 'down';
+    if (S.app.dataset.keyboard === state) return;
+    S.app.dataset.keyboard = state;
+    var bus = S.ctx && S.ctx.bus || Castor.bus;
+    if (bus && bus.emit) bus.emit('keyboard:change', { up: state === 'up' });
+  }
+
+  function refreshControls() {
+    var e = editor();
+    if (!S.actions && !S.desktopActions) return;
+    var state = e && e.historyState ? e.historyState() : {};
+    var saved = keyboardCaret();
+    if (editFocused() && saved) S.keyboardCaret = saved;
+    (S.actions || []).concat(S.desktopActions || []).forEach(function (button) {
+      var id = button.dataset.command;
+      button.disabled = id === 'hide-keyboard' ? !saved : !state[id];
+      if (id === 'hide-keyboard') {
+        var up = keyboardUp(), label = up ? 'Hide keyboard' : 'Show keyboard';
+        button.setAttribute('title', label);
+        button.setAttribute('aria-label', label);
+        if (S.root.dataset.toolbar === 'symbols') button.innerHTML = commandSymbol(up ? 'hide-keyboard' : 'show-keyboard');
+        else button.textContent = label;
+      }
+      button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
+    });
+    if (S.row) Array.prototype.forEach.call(S.row.children, function (button) {
+      button.disabled = !e || !!(e.can && !e.can(button.dataset.command));
+      button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
+    });
+  }
+
+  function refresh() {
+    if (!S.mounted) return;
+    ensureDesktopHistory();
+    S.focused = editFocused();
+    updateViewportBaseline();
+    publishKeyboard();
+    if (!allowed()) { remove(); refreshControls(); return; }
+    var docked = touchScreen();
+    if (S.root && S.root.dataset.docked !== (docked ? '1' : '0')) remove();
+    ensure();
+    if (S.app) S.app.dataset.touchFormat = docked ? '1' : '0';
+    var value = policy();
+    S.root.dataset.layout = mode() === 'phone' ? 'phone' : 'computer';
+    var show = docked || (!S.dismissed && !focusActive() &&
+      (value === 'always' || (S.focused && keyboardUp())));
+    S.root.dataset.open = show ? '1' : '0';
+    S.root.setAttribute('aria-hidden', show ? 'false' : 'true');
+    refreshHeading();
+    refreshControls();
+    if (show) global.requestAnimationFrame(place);
+  }
+
+  function onFocusIn(event) {
+    if (event.target && event.target.classList && event.target.classList.contains('cw-edit')) {
+      S.dismissed = false; refresh();
+    }
+  }
+  function onFocusOut() {
+    global.setTimeout(function () {
+      if (!editFocused()) { S.dismissed = false; refresh(); }
+    }, 0);
+  }
+  function onViewport() { refresh(); }
+
+  function mount(ctx) {
+    if (!DOC) return api;
+    S.ctx = ctx || {};
+    S.frame = S.ctx.frame || DOC.getElementById('frame') || DOC.body;
+    S.app = S.ctx.app || DOC.getElementById('app');
+    S.article = S.ctx.article || S.ctx.pageEl || DOC.getElementById('page-article');
+    var vv = viewport();
+    updateViewportBaseline();
+    if (!S.mounted) {
+      DOC.addEventListener('focusin', onFocusIn, true);
+      DOC.addEventListener('focusout', onFocusOut, true);
+      DOC.addEventListener('selectionchange', function () { refreshHeading(false); refreshControls(); });
+      global.addEventListener('resize', refresh);
+      global.addEventListener('orientationchange', refresh);
+      if (global.screen && global.screen.orientation && global.screen.orientation.addEventListener) {
+        global.screen.orientation.addEventListener('change', refresh);
+      }
+      if (touchMedia) {
+        if (touchMedia.addEventListener) touchMedia.addEventListener('change', refresh);
+        else if (touchMedia.addListener) touchMedia.addListener(refresh);
+      }
+      if (vv) { vv.addEventListener('resize', onViewport); vv.addEventListener('scroll', onViewport); }
+      if (global.ResizeObserver && S.app) {
+        S.resizeObserver = new ResizeObserver(refresh);
+        S.resizeObserver.observe(S.app);
+      }
+      if (Castor.panels && Castor.panels.onLayout) Castor.panels.onLayout(refresh);
+      var bus = S.ctx.bus || Castor.bus;
+      if (bus && bus.on) bus.on('size', refresh);
+      if (bus && bus.on) {
+        bus.on('doc:change', function () { refreshHeading(true); refreshControls(); });
+        bus.on('editor:history', refreshControls);
+        bus.on('piece:open', function () { S.keyboardCaret = null; S.headingBlockId = null; refreshHeading(true); refreshControls(); });
+      }
+      S.mounted = true;
+    }
+    refresh();
+    return api;
+  }
+
+  var api = {
+    mount: mount,
+    run: run,
+    refresh: refresh,
+    setTouchEnabled: function (on) { S.touchEnabled = !!on; refresh(); },
+    hide: function () { S.dismissed = true; refresh(); },
+    state: function () { return { mounted: S.mounted, present: !!S.root, open: !!(S.root && S.root.dataset.open === '1'), mode: mode(), policy: policy() }; },
+    _setKeyboardForTest: function (on) { S.keyboardOverride = on == null ? null : !!on; refresh(); }
+  };
+
+  Castor.island = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof window !== 'undefined' ? window : globalThis);

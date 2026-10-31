@@ -1,0 +1,4 @@
+__pycache__/
+.DS_Store
+# Rando Sans, which each writer downloads (README.md)
+app/fonts/randosans-500-sharpie.woff2

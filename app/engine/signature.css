@@ -1,0 +1,567 @@
+:root {
+  --human: #C4552A;
+  --machine: #006770;
+  --between: #667D2F;
+
+  /* Deprecated aliases. Retire with the last usage. */
+  --mortal: var(--human);
+  --immortal: var(--machine);
+  --star: #CBD8FF;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --machine: #00858F;
+  }
+}
+
+:root[data-theme="dark"] {
+  --machine: #00858F;
+}
+
+:root[data-theme="light"] {
+  --machine: #006770;
+}
+
+html .castor-msg > .castor-msg-text { color: var(--ink, inherit); }
+html .castor-msg[data-by="human"] { border-left: 2px solid var(--mortal); padding-left: .5rem; }
+html .castor-msg[data-by="agent"] { border-left: 2px solid var(--immortal); padding-left: .5rem; }
+html .castor-thread[data-by="human"] > .castor-quote { border-left: 1px solid var(--mortal); padding-left: .55rem; }
+html .castor-thread[data-by="agent"] > .castor-quote { border-left: 1px solid var(--immortal); padding-left: .55rem; }
+
+/* Each provenance clause owns its role. The separators stay neutral. */
+html :where(.castor-prov, .castor-agent-prov) [data-by="human"] { color: var(--mortal); }
+html :where(.castor-prov, .castor-agent-prov) [data-by="agent"] { color: var(--immortal); }
+
+/* A change and a save take the role stored on their own version. */
+html .saves-rail .tick[data-by="human"] { background: var(--mortal); }
+html .saves-rail .tick[data-by="agent"] { background: var(--immortal); }
+html .history-row[data-by="human"] .who { color: var(--ink); }
+html .history-row[data-by="agent"] .who { color: var(--ink); }
+html .history-row[data-by="human"] .heat-fill { background: var(--mortal); }
+html .history-row[data-by="agent"] .heat-fill { background: var(--immortal); }
+html .ins[data-by="human"] { text-decoration-color: var(--mortal); }
+html .ins[data-by="agent"] { text-decoration-color: var(--immortal); }
+html .cut[data-by="human"]::before { border-color: var(--mortal); }
+html .cut[data-by="agent"]::before { border-color: var(--immortal); }
+html .gutter-note[data-by="human"] { border-left-color: var(--mortal); }
+html .gutter-note[data-by="agent"] { border-left-color: var(--immortal); }
+html .moved-from[data-by="human"] a { color: var(--ink); }
+html .moved-from[data-by="agent"] a { color: var(--ink); }
+html .chg-ghost[data-by="human"] { border-top-color: var(--mortal); }
+html .chg-ghost[data-by="agent"] { border-top-color: var(--immortal); }
+
+
+/* State and controls do not identify an author, so they remain neutral ink. */
+html .castor-state-word[data-state] { color: var(--ink, #23231f); }
+html .castor-state-word[data-state]::before { background: var(--ink-3, #777); box-shadow: none; }
+html :where(.castor-acts button, .castor-word, .castor-agent-acts button, .castor-say-send, .castor-live-word) {
+  color: var(--ink, #23231f);
+}
+
+
+/* ===========================================================================
+   THE CASTOR PRODUCT HEADER AND THE FOOTER LINE
+
+   Every Castor product opens with the same header. The reference for an app is
+   the logbook (2_Code/logbook: src/worker/views.ts for the markup, public/app.css
+   for the rules); its master is castor-identity master/header/header.html, and
+   the rules behind it are castor-site RULES.md, sections 1 to 5. The rules below
+   are the logbook's, copied value for value. Where the app differs it says why,
+   in a comment on that rule: the bar is a grid row of a fixed height rather
+   than a page header, the panel words are buttons rather than links, the name
+   is smaller (22px, not 30px), and nothing in it moves with
+   the scroll.
+
+   The markup is written once, in engine/topbar.html and engine/footline.html,
+   and build.py fills every shell's two placeholders with it.
+
+   What the product supplies, as the master asks: --paper, --ink, --rule (the
+   world's own), --human, --machine and --between (the top of this file), and
+   two derived tokens given ON THE CHROME ONLY: --quiet is the world's second ink
+   and --soft its hover ground. --ease is set there too, because the engine reads
+   --ease with its own fallback and a :root value would change the docks' motion.
+   =========================================================================== */
+
+/* Literata, copied byte for byte from castor-identity/fonts into design/app/fonts/.
+   The url is relative to the BUILT page (design/app/<world>/), because build.py
+   inlines this file there. */
+@font-face{font-family:Word;font-weight:200 900;src:url(../fonts/literata.woff2) format('woff2');font-display:swap}
+
+/* THE LINE, as one token (the logbook's): --site-line:1 is the website's 2px line,
+   terracotta on the left half and teal on the right, the human and the machine;
+   0 is the master's 1px hairline in the world's own rule colour. The current
+   panel's bar follows its width. */
+:root{--underline-offset:.14em;--link-underline:var(--human);--site-line:1;--t-move:450ms;
+  --line-w:calc(1px + var(--site-line) * 1px);
+  --line-l:color-mix(in srgb,var(--human) calc(var(--site-line) * 100%),var(--rule));
+  --line-r:color-mix(in srgb,var(--machine) calc(var(--site-line) * 100%),var(--rule))}
+html[data-underline="green"]{--link-underline:#527A38}
+html[data-underline="green"][data-resolved="dark"]{--link-underline:#9EBC79}
+html[data-world="typewell"] #frame:not([data-ready]){visibility:hidden}
+html[data-world="typewell"] #frame:not([data-ready]) #app{transition:none}
+
+.mast,.find-panel,.footline,.castor-settings,.castor-tabs-fold{
+  --quiet:var(--ink-2,#5A554C);
+  --soft:var(--pane-hot,#F1EEE5);
+  --ease:cubic-bezier(.45,0,.55,1);
+  --word:Word,Georgia,"Times New Roman",serif;
+  --ui:var(--font-ui,-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif)}
+:is(.mast,.find-panel,.footline,.castor-settings,.castor-tabs-fold) :focus-visible{outline:2px solid var(--ink);outline-offset:2px;border-radius:3px}
+
+/* ---- the bar: "on the line" --------------------------------------------------
+   The name, the panel words and the two tools stand on the bar's line, their
+   baselines 10px above it. The bar is the app's grid row (--bar-h), so the row
+   never wraps: the line is drawn inside its box, at its foot, the column's width
+   (the bar's side padding at each end), and the name starts at the line's left
+   end while the light/dark button's box ends at its right end. */
+#topbar.mast{display:flex;align-items:flex-end;flex-wrap:nowrap;gap:0;
+  padding:0 var(--bar-pad,1.25rem) calc(8px + var(--line-w));border-bottom:0;overflow:visible;
+  font-family:var(--ui);anchor-name:--mast}
+@property --article-junction{syntax:'<length-percentage>';inherits:true;initial-value:50%}
+#topbar.mast::after{content:"";position:absolute;z-index:-1;left:var(--bar-pad,1.25rem);right:var(--bar-pad,1.25rem);bottom:0;
+  height:var(--line-w);background:linear-gradient(90deg,var(--line-l) 0 var(--article-junction,50%),var(--line-r) var(--article-junction,50%));pointer-events:none}
+
+/* The name: Literata 560, optical size 72, the header's tracking, in ink, then
+   the typed Castor asterisk in --human at the name's size and weight 650, .1em
+   after it. 22px where the logbook's is 30: a writing surface carries its name
+   small. The button opens the article files without leaving the editor. */
+#topbar.mast .brand{position:relative;display:block;flex:0 0 auto;margin-right:1.5rem;
+  padding:0;border:0;background:none;text-align:left;
+  font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;letter-spacing:-.04em;font-size:var(--header-brand,22px);
+  line-height:1;text-box:trim-both cap alphabetic;color:var(--ink);white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none}
+.mast .brand-name{display:inline-block}
+.mast .brand .star{display:inline-block;margin-left:.1em;line-height:.88;font-size:1em;font-weight:650;color:var(--human)}
+@media (prefers-reduced-motion:no-preference){
+  .mast .brand .star{transition:transform var(--t-move) var(--ease)}
+  @media (hover:hover){.mast .brand-name:hover .star{transform:rotate(90deg)}}
+  .mast .brand-name.brand-play .star{transform:rotate(90deg)}
+}
+
+/* The panel words: the logbook's .nav, as buttons. Padding widens each target to
+   33px and the negative margin gives the space back, so the baseline stays on
+   the name's. Open panels carry a 1px underline at the studio link distance. */
+#topbar.mast .nav{margin-left:auto;display:flex;align-items:flex-end;gap:1.1rem;flex:0 0 auto;
+  font-size:var(--header-label,15px);font-weight:500;letter-spacing:.02em;white-space:nowrap}
+#topbar.mast .nav .word{position:relative;display:block;box-sizing:border-box;min-width:44px;min-height:44px;text-align:center;margin:-14px 0 -10px;padding:19px 0 5px;
+  font:inherit;letter-spacing:inherit;line-height:1;text-box:trim-both cap alphabetic;color:var(--quiet);border-radius:0}
+#topbar.mast .nav .word:hover,
+#topbar.mast .nav .word[aria-pressed="true"],
+#topbar.mast .nav .word[aria-expanded="true"]{color:var(--ink)}
+#topbar.mast :is(.nav,#more-sheet) .word::after{content:none}
+#topbar.mast :is(.nav,#more-sheet) .word{text-decoration-line:underline;text-decoration-thickness:1px;text-underline-offset:var(--underline-offset);text-decoration-skip-ink:auto;text-decoration-color:transparent;transition:text-decoration-color 225ms var(--ease)}
+#topbar.mast :is(.nav,#more-sheet) .word[aria-pressed="true"]{text-decoration-color:var(--link-underline)}
+@media (hover:hover){#topbar.mast :is(.nav,#more-sheet) .word:hover{text-decoration-color:var(--link-underline)}}
+#topbar.mast .nav .word .word-key{top:auto;bottom:28px;right:auto;left:50%;transform:translateX(-50%);margin:0}  /* Numbers share the caption row above the words. */
+
+#topbar.mast .bar-tools{position:relative;display:flex;align-items:center;flex:none;align-self:flex-end;
+  margin:-14px 0 -10px 1.1rem;anchor-name:--tools}
+.find{display:flex;position:relative;color:var(--machine)}
+html[data-resolved="light"] .find{color:var(--human)}
+.find > *{background:none;border:0;padding:.35rem;color:inherit;font:inherit;cursor:pointer;display:flex;align-items:center}
+.find svg{display:block;width:1.15rem;height:1.15rem}
+.bar-tools :is(.settings-toggle,.find-lens,.theme-toggle){position:relative;box-sizing:border-box;padding:0;width:24.4px;min-width:24.4px;height:44px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:8.5px;border-radius:2px;opacity:1;color:inherit}
+/* Touch keeps the desktop spacing (round 1029); each tool answers across its slot, gaps included, 44px tall. */
+.bar-tools :is(.settings-toggle,.find-lens,.theme-toggle)::after{content:"";position:absolute;inset:0 -3px}
+.bar-tools{color:var(--human)}
+html[data-resolved="dark"] .bar-tools{color:var(--machine)}
+.bar-tools .find{color:inherit}
+
+
+/* ---- light and dark: the website's control and cross-fade ------------------- */
+:root[data-theme="light"]{color-scheme:light}
+:root[data-theme="dark"]{color-scheme:dark}
+html.theming,html.theming body,html.theming *{
+  transition:background-color 320ms var(--ease,ease),color 320ms var(--ease,ease),border-color 320ms var(--ease,ease),
+             fill 320ms var(--ease,ease),stroke 320ms var(--ease,ease)!important}
+@media (prefers-reduced-motion:reduce){html.theming *{transition:none!important}}
+html.theming-vt *{view-transition-name:none!important}
+html.theming-vt::view-transition-group(root){animation-duration:320ms}
+html.theming-vt::view-transition-old(root){animation:vt-theme-out 320ms cubic-bezier(.45,0,.55,1) both;mix-blend-mode:normal}
+html.theming-vt::view-transition-new(root){animation:vt-theme-in 320ms cubic-bezier(.45,0,.55,1) both;mix-blend-mode:normal}
+@keyframes vt-theme-out{from{opacity:1}to{opacity:0}}
+@keyframes vt-theme-in{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){
+  html.theming-vt::view-transition-group(*),html.theming-vt::view-transition-old(*),html.theming-vt::view-transition-new(*){animation:none!important}
+}
+
+.theme-toggle{appearance:none;background:none;border:0;padding:.35rem;cursor:pointer;line-height:0;border-radius:2px}
+/* Generated by scripts/build_toolbar.py. Load after the host's toolbar CSS.
+   Override --tool-icon-size on a toolbar or icon. The host owns hit targets. */
+.castor-toolbar,.bar-tools{
+  --tool-icon-color:light-dark(#C4552A,#00858F);
+  color:var(--tool-icon-color);
+}
+.castor-toolbar :is(.find-lens,.theme-toggle,.settings-toggle),
+.bar-tools :is(.find-lens,.theme-toggle,.settings-toggle){color:inherit}
+svg.castor-tool-icon,.castor-toolbar .castor-tool-icon,
+.bar-tools :is(.find-lens,.theme-toggle,.settings-toggle) svg{
+  display:block;
+  width:var(--tool-icon-size,17px);
+  height:var(--tool-icon-size,17px);
+  fill:none;
+  stroke:currentColor;
+  stroke-width:1.6;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+.castor-tool-icon :is(.t-asterisk,.t-half),
+.bar-tools .theme-toggle :is(.t-asterisk,.t-half){fill:currentColor;stroke:none}
+.theme-toggle :is(.t-sun,.t-moon,.t-system){display:none}
+html[data-theme-choice="light"] .theme-toggle .t-sun,
+html[data-theme-choice="dark"] .theme-toggle .t-moon,
+html[data-theme-choice="system"] .theme-toggle .t-system{display:block}
+
+/* ---- search everything: the flap under the lens -----------------------------
+   It hangs from the bar's line under the lens: the line is its top, a hairline
+   its other three sides, the page's paper behind it. A native popover, so a click
+   anywhere outside or Escape closes it with no script; search.js adds the
+   results and the keys. It unfolds downwards as it opens. */
+.find-panel{position:fixed;inset:auto;margin:0;top:var(--bar-h,44px);right:var(--bar-pad,1.25rem);box-sizing:border-box;
+  width:min(25rem,calc(100vw - 2rem));max-height:calc(100dvh - 5rem);overflow:auto;padding:1rem;
+  border:1px solid var(--rule);border-top:0;background:var(--paper);color:var(--ink);font:400 15px/1.5 var(--ui)}
+@supports (anchor-name:--mast){.find-panel{top:anchor(--mast bottom);right:anchor(--tools right)}}
+.find-panel form{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:0}
+.find-panel .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media (prefers-reduced-motion:no-preference){
+  .find-panel{clip-path:inset(0);transition:clip-path 225ms cubic-bezier(.16,1,.3,1)}
+  @starting-style{.find-panel:popover-open{clip-path:inset(0 0 100%)}}
+}
+@media (max-width:560px){.find-panel{left:1rem;right:1rem;width:auto}}
+.search-field{position:relative;display:flex;align-items:center;flex:1;min-width:0}
+.search-field input{box-sizing:border-box;width:100%;min-width:0;margin:0;padding:.6rem 3.9rem .6rem .7rem;
+  font:16px/1.3 var(--ui);color:var(--ink);background:var(--paper);border:1px solid var(--rule);border-radius:9px}
+.search-field input::placeholder{color:var(--quiet)}
+.search-key{position:absolute;right:.5rem;top:50%;transform:translateY(-50%);padding:.05rem .35rem;border:1px solid var(--rule);border-radius:4px;font:13px/1.4 var(--ui);color:var(--quiet);background:var(--soft);pointer-events:none}
+.search-field input:not(:placeholder-shown) + .search-key{display:none}  /* visible while the field is empty, gone once he types */
+@media (hover:none) and (pointer:coarse){.search-key{display:none}.search-field input{padding-right:.8rem}}
+.find-panel .search-popover{flex-basis:100%;position:static;width:auto;max-height:none;overflow:visible;margin-top:.5rem;padding:0;border:0;border-radius:0}
+.search-popover[hidden]{display:none}
+.search-group + .search-group{margin-top:1.5rem}
+.search-group h2{margin:0 0 .4rem;font:700 15px/1.3 var(--ui);letter-spacing:.07em;text-transform:uppercase;color:var(--quiet)}
+.search-results{list-style:none;margin:0;padding:0}
+.search-results li + li{border-top:1px solid var(--rule)}
+.search-result{appearance:none;display:block;width:100%;margin:0;padding:.7rem 0;border:0;border-radius:0;background:none;
+  font:inherit;text-align:left;color:var(--ink);text-decoration:none;overflow-wrap:anywhere;cursor:pointer}
+.search-result:hover,.search-result[aria-selected="true"]{background:var(--soft)}
+.search-result-title,.search-result-detail{display:block}
+.search-result-title{font-weight:700}
+.search-result-title b{font-weight:700;text-decoration:underline;text-decoration-color:var(--human);text-decoration-thickness:2px;text-underline-offset:.18em}
+.search-result-detail{color:var(--quiet);font-size:13px;margin-top:.2rem}
+.search-empty{margin:0;padding:1rem 0;color:var(--quiet);font-size:14px}
+.search-empty b{display:block;color:var(--ink)}
+.search-more{margin:1rem 0 0;font-size:13px;color:var(--quiet)}
+
+/* ---- the article tabs' fold ---------------------------------------------------
+   A thin chevron at the right end of the tab row, under the light/dark button.
+   It folds the row away and turns half a turn; folded, the row keeps a band just
+   deep enough for the chevron hanging under the bar's line, so it never lands on
+   a docked panel's own controls. */
+.castor-tabs-fold{position:absolute;z-index:4;right:var(--bar-pad,1.25rem);top:calc(var(--bar-h) + (var(--tabs-h) - 24px) / 2);
+  box-sizing:border-box;width:24.4px;height:24px;margin:0;padding:0;display:flex;align-items:center;justify-content:center;
+  border:0;border-radius:2px;background:none;color:var(--quiet);cursor:pointer}
+.castor-tabs-fold svg{display:block;width:13px;height:13px;overflow:visible}
+.castor-tabs-fold path{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.castor-tabs-fold:hover{color:var(--ink)}
+.castor-tabs-fold::after{content:"";position:absolute;inset:-6px -10px}
+@media (prefers-reduced-motion:no-preference){.castor-tabs-fold svg{transition:transform .2s var(--ease)}}
+#app[data-tabs="folded"] .castor-tabs-fold svg{transform:rotate(180deg)}
+#app[data-focus="on"] .castor-tabs-fold{opacity:0;pointer-events:none}
+
+/* One olive bead travels on the article line; a folded row carries its title. */
+.castor-tabs{position:relative;border-bottom:1px solid var(--rule);padding-bottom:4px}
+#app[data-tabs="folded"] .castor-tabs{padding-block:0;border-block:0}
+.castor-tab-name{display:block;overflow:hidden;text-overflow:ellipsis}
+.castor-tab[aria-selected="true"]::after{content:none}
+#app[data-tabs="on"]{--tabs-h:34px}
+.article-knot{position:absolute;left:-4px;top:-4px;width:8px;height:8px;z-index:5;pointer-events:none;--ease:cubic-bezier(.45,0,.55,1)}
+.article-knot i{display:block;width:8px;height:8px;border-radius:50%;background:var(--between,#667D2F);box-shadow:0 0 0 2px var(--paper)}
+.folded-article{position:absolute;top:calc(var(--bar-h) + 2px);left:calc(var(--bar-pad,1.25rem) + 14px);right:calc(var(--bar-pad,1.25rem) + 34px);
+  font:400 .86rem/1.2 var(--font-ui);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0;pointer-events:none}
+#app[data-tabs="folded"] .folded-article{opacity:1}
+#app[data-tabs="folded"] #topbar .folded-article{position:static;flex:0 1 auto;min-width:0;max-width:12rem;align-self:flex-end;margin:0 0 -3px;line-height:24px}
+#app[data-tabs="folded"] #topbar .castor-tabs-fold{position:relative;inset:auto;flex:0 0 24.4px;align-self:flex-end;height:44px;margin:-14px .5rem -13px 0;padding:0;align-items:center}
+#app[data-tabs="folded"] #topbar .castor-tabs-fold::after{inset:0}
+@media(any-pointer:coarse){#app[data-tabs="folded"] #topbar .castor-tabs-fold{flex-basis:44px;width:44px}}
+@media(max-width:700px){#app[data-tabs="folded"] #topbar .brand{margin-right:.5rem}#app[data-tabs="folded"] #topbar .folded-article{max-width:9rem}}
+#topbar[data-tight="1"] .brand{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+#app[data-tabs="folded"] #topbar[data-tight="1"] .folded-article{flex-shrink:10}
+#app[data-focus="on"] :is(.article-knot,.folded-article){opacity:0}
+@media(prefers-reduced-motion:no-preference){
+  .folded-article{transition:opacity 180ms var(--ease)}
+  .castor-tabs{transition:opacity 180ms var(--ease),transform var(--t-move) cubic-bezier(.45,0,.55,1)}
+  #app[data-tabs="folded"] .castor-tabs{transform:translateY(-8px)}
+  #app[data-tabs-moving]{transition:--tabs-h var(--t-move) cubic-bezier(.45,0,.55,1),--dock-l-w var(--dur) var(--ease),--dock-r-w var(--dur) var(--ease)}
+}
+.footline{grid-area:footline;position:relative;display:grid;grid-template-columns:auto 1fr;align-items:center;align-content:center;gap:1rem;min-width:0;
+  padding:0 var(--bar-pad,1.25rem);font:400 13px/1 var(--ui);color:var(--quiet);white-space:nowrap;overflow:hidden;
+  transition:opacity 140ms linear}
+.footline::before{content:"";position:absolute;top:0;left:var(--bar-pad,1.25rem);right:var(--bar-pad,1.25rem);height:1px;background:var(--rule);pointer-events:none}
+.footline a{text-decoration:none}
+.foot-by{display:inline-flex;align-items:baseline;flex:0 0 auto;color:var(--quiet)}
+.foot-castor{margin-left:.3em;font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;letter-spacing:-.04em;font-size:14px;color:var(--ink)}
+.foot-ast{display:inline-block;font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;font-size:14px;line-height:.88;color:var(--human)}  /* typed, at the word's size and weight, where typing "Castor*" puts it */
+@media (prefers-reduced-motion:no-preference){
+  .foot-ast{transition:transform var(--t-move) var(--ease)}
+  @media (hover:hover){.foot-by:hover .foot-ast{transform:rotate(90deg)}}
+}
+.foot-meta{--status-gap:1rem;margin-left:auto;display:flex;align-items:center;gap:var(--status-gap);min-width:0}
+.foot-count{font-variant-numeric:tabular-nums}
+.foot-count:empty,.foot-save:empty{display:none}
+.footline .foot-word{margin:0;padding:0;font:inherit;color:var(--quiet);border-radius:2px}
+.footline .foot-word:hover,.footline .foot-word[aria-expanded="true"]{color:var(--ink)}
+.footline .foot-word[aria-pressed="true"]::after{display:none}
+/* The save signal shares the footer's button and keeps its receipts on click. */
+.footline .castor-save{margin:0;padding:0;font:inherit;color:var(--quiet);opacity:1}
+.footline .castor-save:hover{color:var(--ink);opacity:1}
+.foot-save{display:inline-flex;align-items:center;gap:var(--status-gap)}
+.castor-save[data-signal]{position:relative;display:inline-flex;align-items:center;padding-left:calc(18px + .35em);gap:.35em;justify-content:center;min-width:24px;min-height:24px;opacity:1;text-decoration:none}
+.castor-save[data-signal] .save-signal{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.castor-save[data-signal="saved"] .save-signal{color:var(--between)}
+.castor-save[data-signal="partial"] .save-signal{color:var(--save-amber)}
+.castor-save[data-signal="saving"] .save-signal{color:var(--quiet,var(--ink-2))}
+.save-signal-label{white-space:nowrap}
+.castor-save[data-signal] .save-signal{position:absolute;left:0;top:calc(50% - 9px)}
+@media(max-width:699px){.footline{gap:.75rem}.foot-meta{--status-gap:.75rem}.footline{padding-inline:var(--bar-pad,1rem)}}
+:root{--save-amber:#936400}
+:root[data-theme="dark"]{--save-amber:#D9AB50}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--save-amber:#D9AB50}}
+@media(prefers-reduced-motion:no-preference){
+  .castor-save[data-signal="saving"] .save-signal{animation:save-spin .9s linear infinite}
+}
+@keyframes save-spin{to{transform:rotate(360deg)}}
+.footline .castor-session{margin-left:0;letter-spacing:.04em}  /* the initials of who is writing, a quiet step after the save word */
+.footline .castor-save:is([data-state="unsaved"],[data-state="saving"]){opacity:1}
+.footline .castor-save:is([data-state="stale"],[data-state="dirty"],[data-state="conflict"],[data-state="refused"],[data-state="offline"],[data-state="locked"]){color:var(--ink)}
+#app[data-focus="on"] .footline{opacity:0;pointer-events:none}
+@media print{.footline,.castor-tabs-fold{display:none!important}}
+
+/* ---- Settings: four focused pages, with native inputs under house controls ---- */
+.castor-settings{position:fixed;inset:auto;margin:0;right:var(--bar-pad,1.25rem);top:calc(var(--bar-h,44px) + 4px);
+  box-sizing:border-box;width:min(27rem,calc(100vw - 2rem));padding:1rem;
+  border:1px solid var(--rule);border-radius:9px;background:var(--paper);color:var(--ink);font:400 15px/1.45 var(--ui)}
+.settings-title{margin:0 0 .55rem;font:700 13px/1.3 var(--ui);letter-spacing:.07em;text-transform:uppercase;color:var(--quiet)}
+.set-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin:0;padding:.6rem 0;border-top:1px solid var(--rule)}
+.set-lbl{flex:1;min-width:0;color:var(--ink)}
+.castor-settings input.switch{appearance:none;-webkit-appearance:none;position:relative;flex:0 0 auto;width:46px;height:28px;margin:0;padding:0;border:0;border-radius:999px;background:color-mix(in srgb,var(--ink) 20%,transparent);cursor:pointer;transition:background .2s var(--ease)}
+.castor-settings input.switch::after{content:"";position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.28);transition:transform .2s var(--ease)}
+.castor-settings input.switch:checked{background:var(--ink)}
+.castor-settings input.switch:checked::after{transform:translateX(18px)}
+.castor-settings .seg{display:grid;grid-template-columns:repeat(3,auto);flex:0 0 auto;margin:0;padding:2px;border-radius:9px;background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.castor-settings .seg label{position:relative;display:flex;margin:0;color:var(--ink)}
+.castor-settings .seg input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer}
+.castor-settings .seg span{flex:1;display:flex;align-items:center;justify-content:center;min-height:30px;padding:.25rem .6rem;border-radius:7px;font-size:13px;line-height:1.2}
+.castor-settings .seg input:checked + span{background:var(--paper);box-shadow:0 1px 3px rgba(0,0,0,.14);font-weight:700}
+.castor-settings .seg input:focus-visible + span{outline:2px solid var(--ink);outline-offset:1px}
+.settings-toggle{appearance:none;border:0;background:none;color:var(--quiet);position:relative;display:flex;align-items:center;justify-content:center;width:28px;height:29.6px;padding:0;cursor:pointer}
+.settings-toggle svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.bar-tools :is(.settings-toggle,.find-lens):is(:hover,:focus-visible,[aria-expanded="true"]){color:inherit}
+.bar-tools .theme-toggle:is(:hover,:focus-visible){color:inherit}
+.castor-settings{max-height:calc(100dvh - 70px);overflow:auto;padding-bottom:.75rem}
+.set-hint{margin:0 0 .35rem;font-size:13px;color:var(--quiet)}
+.set-panels{border:0;border-top:1px solid var(--rule);padding:.65rem 0 .35rem;margin:0;display:flex;flex-wrap:wrap;gap:.45rem .9rem}
+.set-panels legend{padding:.6rem 0 0;font:inherit}
+.set-panels label{display:flex;gap:.3rem;align-items:center;font-size:12px}
+.set-panels input{accent-color:var(--ink);margin:0}
+.set-action{width:100%;background:none;border:0;border-top:1px solid var(--rule);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+a.set-action{text-decoration:none;display:flex;align-items:center;box-sizing:border-box}
+.set-action:hover{color:var(--ink)}
+#set-writer-name{font-size:12px;color:var(--quiet);max-width:60%;text-align:right}
+.save-details{position:fixed;inset:auto;right:var(--bar-pad,1.25rem);bottom:calc(var(--footline-h,30px) + 6px);margin:0;
+  width:min(25rem,calc(100vw - 2rem));padding:.75rem 1rem;border:1px solid var(--rule);border-radius:9px;
+  background:var(--paper);color:var(--ink);font:400 13px/1.4 var(--font-ui)}
+.save-step{display:flex;align-items:baseline;gap:.6rem;margin:.5rem 0}
+.save-step-mark{width:1em;flex:none;color:var(--ink)}
+.save-step[data-confirmed="false"] .save-step-mark{color:var(--quiet)}
+.save-step-label,.save-step-detail{display:block}
+.save-step-detail{font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.save-explanation{font-size:12px;color:var(--ink-2);margin:.6rem 0}
+.save-details .castor-who-pick{margin:.3rem 0}
+.shortcuts-reference{position:fixed;inset:auto;right:var(--bar-pad,1.25rem);bottom:calc(var(--footline-h,30px) + 6px);margin:0;
+  width:min(25rem,calc(100vw - 2rem));max-height:60dvh;overflow:auto;padding:1rem;border:1px solid var(--rule);border-radius:9px;
+  background:var(--paper);color:var(--ink);font:400 13px/1.4 var(--font-ui)}
+.shortcut-row{display:flex;justify-content:space-between;gap:1rem;margin:.45rem 0}
+.shortcut-row kbd{font:inherit;color:var(--ink-2);white-space:nowrap}
+html[data-keys="off"] :is(#set-shortcuts,#castor-shortcuts,.shortcut-row kbd){display:none}
+.castor-save[aria-expanded="true"]{text-decoration:underline;text-underline-offset:4px}
+.castor-who[popover]{inset:auto;margin:0;right:var(--bar-pad,1.25rem);bottom:calc(var(--footline-h,30px) + 6px);left:auto;transform:none;max-width:calc(100vw - 2rem)}
+@media(prefers-reduced-motion:no-preference){
+  :is(.castor-settings,.save-details,.castor-who)[popover]{transition:opacity 150ms var(--ease),transform 150ms var(--ease),display 150ms allow-discrete,overlay 150ms allow-discrete}
+  @starting-style{:is(.castor-settings,.save-details,.castor-who)[popover]:popover-open{opacity:0;transform:translateY(-4px)}}
+}
+@media(prefers-reduced-motion:reduce){.castor-tabs,.folded-article,.castor-tabs-fold svg,#app[data-tabs-moving],.mast .word::after{transition:none!important}}
+
+/* ---- a phone ------------------------------------------------------------------
+   The name, two words and More, then the lens and the toggle, at 390px. The
+   other panel words, Focus, Type and Settings go into the More sheet (app.js);
+   the footer keeps the signature and the save word. */
+@container castorapp (max-width: 700px){
+  #topbar.mast .brand{margin-right:1rem}
+  #topbar.mast .nav{gap:.85rem}
+  #topbar.mast .bar-tools :is(.settings-toggle,.find-lens,.theme-toggle){width:24.4px;min-width:24.4px}
+  #castor-shortcuts{display:none}
+}
+@container castorapp (max-width: 359px){#topbar.mast .brand{display:none}}
+
+/* Castor full signature: artwork and base rules copied from the studio master. */
+@font-face{font-family:Hand;font-weight:500;src:url(../fonts/randosans-500-sharpie.woff2) format("woff2");font-display:swap}
+
+/* Chip stands ON the line: his drawing's ground (y 88 of 92) lands on the rule's centre. "by Castor" sits 8px
+   beside him; Castor's asterisk is typed, not drawn: the Literata glyph at the word's own size and weight, in
+   --human, on the word's baseline, exactly where typing "Castor*" puts it (16 September 2026). Under the line,
+   bottom-left like a footnote, "we give a dam*": the words start 2px from Chip's left edge with their cap line
+   10px under the rule's centre, and the drawn underline lives inside the words, 1px past each end, never under
+   the asterisk. No arrow. Vertical geometry rides the browser's cap and baseline edges (text-box: trim-both
+   cap alphabetic), the typed asterisk included. */
+.sig{position:relative;display:flex;align-items:flex-end;margin:3rem 0 40px;padding:0;border-bottom:1px solid var(--rule)}
+.water{position:relative;top:2.26px;display:block;flex:0 0 auto;width:44px;height:40.48px}
+.chip{display:block;width:100%;height:auto;overflow:visible;color:var(--ink)}  /* never crop the tail: at the low end of the wag it swings 2.5px below the drawing's own frame, and a browser clips an inline svg to its frame by default */
+.c-tail{transform-box:view-box;transform-origin:37px 77px}
+.c-eye{transform-box:fill-box;transform-origin:50% 50%}
+.sig:hover .c-tail{animation:wag .9s var(--ease) .35s 2}
+.sig:hover .c-eye{animation:blink .5s var(--ease) .7s 1}
+@keyframes wag{0%,100%{transform:rotate(0)}30%{transform:rotate(18deg)}70%{transform:rotate(6deg)}}
+@keyframes blink{0%,100%{transform:scaleY(1)}45%,55%{transform:scaleY(.08)}}
+.sig .words{display:flex;flex-direction:column;align-items:flex-start;margin-left:8px;padding-bottom:10px}
+.sig .qt,.sig .byt,.sig .wordmark{display:block;line-height:1;text-box:trim-both cap alphabetic}
+.sig .quip{position:absolute;left:2px;top:calc(100% + 10.5px);display:flex;align-items:flex-start;font-family:var(--hand);font-weight:500;font-size:17px;color:var(--ink)}
+.sig .qt{position:relative}
+.sig .qt .ul{position:absolute;left:-1px;width:calc(100% + 2px);top:calc(100% + 4px);height:6px;color:var(--human);overflow:visible}  /* inside the words: 1px past each end, never under the asterisk. The width is explicit because an inline svg is a replaced element: left plus right never stretched it, and its 120:8 ratio at 6px tall held it at 90px whatever the words */
+.sig .by{display:flex;align-items:flex-end;gap:6px}
+.sig .byt{font-size:14px;color:var(--quiet)}
+.sig .lock{display:flex;align-items:baseline}
+.sig a.lock{color:inherit;text-decoration:none}  /* the lockup is the way to the studio, on every product (16 September 2026) */
+.sig .wordmark{font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;letter-spacing:-.055em;font-size:30px;color:var(--ink)}
+.sig .ast{display:block;flex:0 0 auto}
+.sig .quip .ast{width:8.89px;height:8.89px;margin:-1.2px 0 0 .5px}  /* a typed asterisk's size in Rando Sans at 17px: a 7.04px span, its top on the ascender; six arms hold at 1x from a 6.8px span */
+.sig .lock .ast{display:inline;font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;font-size:30px;font-style:normal;line-height:1;color:var(--human);margin:0;text-box:trim-both cap alphabetic}  /* a typed asterisk, as everywhere on the site since 16 September 2026: the glyph, the word's size, on the baseline. It carries the word's own trim so both boxes are cap-to-baseline: without it the untrimmed glyph box hangs a descender below the baseline, and "by" and the line itself move with it */
+.sig .ast svg{display:block;width:100%;height:100%}
+.sig .ast .star{fill:var(--human)}
+.sig .ast .key{fill:var(--paper);stroke:var(--paper)}
+@media (prefers-reduced-motion:reduce){.sig:hover .c-tail,.sig:hover .c-eye{animation:none}}
+
+.castor-full{--hand:Hand,"Bradley Hand",cursive;--word:Word,Georgia,serif;--ease:cubic-bezier(.45,0,.55,1);display:none}
+html[data-signature="full"] #app{--footline-h: 88px}
+html[data-signature="full"] .foot-by{display:none}
+html[data-signature="full"] .castor-full{display:flex;flex:1;margin:0 0 34px}
+html[data-signature="full"] .footline{display:flex;align-items:flex-end;overflow:visible}
+html[data-signature="full"] .footline::before{display:none}
+html[data-signature="full"] .foot-meta{position:absolute;right:var(--bar-pad,1.25rem);bottom:44px}
+
+/* Opt-in Descant marks keep one compact lockup. The wordmark-only option adds no symbol. */
+.descant-mark{display:inline-block;width:40px;height:calc(40px * 30 / 36);margin-right:3px;vertical-align:-8px}
+
+/* More follows the available row width, rather than a device name. */
+#topbar[data-compact] #more-sheet .word{display:flex;align-items:center;box-sizing:border-box;min-height:44px;margin:0;padding:.45em .6em;text-box:none;line-height:1.3;color:var(--quiet);text-align:left}
+#topbar[data-compact] #more-sheet .word:hover,#topbar[data-compact] #more-sheet .word[aria-pressed="true"]{color:var(--ink)}
+@media(any-pointer:coarse){
+  #app{--footline-h:44px}
+  .footline :is(.castor-save,.castor-session,.foot-word){display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:44px;min-height:44px}
+}
+/* An incomplete save stays visible and clickable even while the writing is in Focus. */
+html[data-signature="full"] #app[data-focus="on"]{--footline-h:0px}
+html #app[data-focus="on"]:has(.castor-save[data-signal="partial"]){--footline-h:44px}
+#app[data-focus="on"]:has(.castor-save[data-signal="partial"]) .footline{display:flex;opacity:1;pointer-events:auto;align-items:center}
+#app[data-focus="on"]:has(.castor-save[data-signal="partial"]) :is(.castor-full,.foot-by,.foot-count,#castor-shortcuts){display:none}
+#app[data-focus="on"]:has(.castor-save[data-signal="partial"]) .foot-meta{position:static;align-items:center}
+@container castorapp (max-width:700px){
+  html[data-signature="full"] #app{--footline-h:132px}
+  html[data-signature="full"] .castor-full{margin-bottom:78px}
+  html[data-signature="full"] .foot-meta{bottom:0;min-height:44px}
+}
+
+/* Prose links share the studio website's native underline geometry. */
+.page-column :where(a[href]):not(.anchor):not(.footnote-back):not(.footnote-ref a){text-decoration-line:underline;text-decoration-thickness:max(1.5px, .055em);text-underline-offset:var(--underline-offset);text-decoration-skip-ink:auto;text-decoration-color:var(--link-underline);background-image:none;padding-bottom:0}
+.set-logo-options{margin:.75rem 0 0;padding:.25rem 0;border:0;display:grid;grid-template-columns:1fr 1fr;gap:0 .75rem}
+.set-logo-options legend{padding:0;font-weight:600}
+.set-logo-options a{display:flex;align-items:center;min-height:44px;color:var(--ink);text-underline-offset:4px}
+.set-logo-options .set-hint{grid-column:1/-1;margin:.2rem 0}
+
+/* Header sizes retain the separate controls' interaction targets. */
+:root{--header-brand:22px;--header-label:15px;--tool-icon-size:17px}
+#app{--topbar-h:calc(44px + env(safe-area-inset-top,0px))}
+html[data-header="compact"]{--header-brand:18px;--header-label:13px;--tool-icon-size:16px}
+html[data-header="regular"]{--header-brand:22px;--header-label:15px;--tool-icon-size:17px}
+html[data-header="quiet"]{--header-brand:22px;--header-label:14px;--tool-icon-size:17px}
+html[data-header="large"]{--header-brand:22px;--header-label:15px;--tool-icon-size:17px}
+html[data-header] #app{--topbar-h:calc(44px + env(safe-area-inset-top,0px))}
+html[data-header="large"] #app{--topbar-h:calc(52px + env(safe-area-inset-top,0px))}
+html[data-header] #topbar.mast .brand{font-size:var(--header-brand)}
+#topbar.mast .nav .word:has(.word-key) > .shortcut-hint{display:none}
+#castor-shortcuts[aria-pressed="true"]{text-decoration:underline;text-underline-offset:4px}
+
+.word-key{padding:0;border:0;opacity:1;font:400 10px/1 var(--font-ui);color:var(--ink-2)}
+
+/* Hidden settings remain hidden despite their row's flex layout. */
+.castor-settings [hidden]{display:none!important}
+
+/* The three tool hints have distinct slots even while Command reveals all. */
+#topbar.mast .bar-tools{gap:6px}
+html[data-os] #topbar.mast :is(.nav,.bar-tools) .shortcut-hint,#topbar.mast .word-key{bottom:27px;font:400 9px/1 var(--ui);color:var(--quiet);white-space:nowrap}
+html[data-controls="quiet"] .castor-settings{width:min(26rem,calc(100vw - 2 * var(--bar-pad,1.25rem)));padding:1rem}
+html[data-controls="quiet"] .castor-author-filter summary{text-decoration:underline;text-decoration-color:var(--rule);text-underline-offset:4px}
+html[data-controls="quiet"] .castor-author-menu{min-width:0;width:max-content;max-width:min(240px,calc(100vw - 48px))}
+
+/* Native semantics, shared house surfaces. Labels provide the full touch target. */
+:where(#app,[popover],.cw-type) input:is([type="checkbox"],[type="radio"]):not(.switch):not(.settings-segment input){
+  appearance:none;-webkit-appearance:none;position:relative;box-sizing:border-box;flex:none;width:20px;height:20px;margin:0;
+  border:1.5px solid var(--ink-2);border-radius:6px;background:var(--paper);color:var(--ink);vertical-align:middle;cursor:pointer}
+/* Same weight as the resting rule above, or its paper background wins and the tick disappears. */
+:where(#app,[popover],.cw-type) input[type="checkbox"]:not(.switch):not(.settings-segment input):checked{background:var(--ink);border-color:var(--ink)}
+:where(#app,[popover],.cw-type) input[type="checkbox"]:not(.switch):not(.settings-segment input):checked::after{content:"";position:absolute;left:6px;top:2px;width:5px;height:10px;border:solid var(--paper);border-width:0 2px 2px 0;transform:rotate(45deg)}
+:where(#app,[popover],.cw-type) input[type="radio"]:not(.settings-segment input){border-radius:50%}
+:where(#app,[popover],.cw-type) input[type="radio"]:checked:not(.settings-segment input){background:var(--ink);border-color:var(--ink);box-shadow:inset 0 0 0 4px var(--paper)}
+:is(#app,[popover],.cw-type) select{
+  appearance:none;-webkit-appearance:none;min-height:44px;max-width:100%;padding:.4rem 2rem .4rem .75rem;border:1px solid var(--rule);border-radius:10px;
+  font:inherit;color:var(--ink);background-color:var(--pane-solid,var(--paper));
+  background-image:linear-gradient(45deg,transparent 50%,var(--ink-2) 50%),linear-gradient(135deg,var(--ink-2) 50%,transparent 50%);
+  background-position:calc(100% - 15px) 50%,calc(100% - 10px) 50%;background-size:5px 5px;background-repeat:no-repeat}
+:where(#app,[popover],.cw-type) input:is([type="checkbox"],[type="radio"]):focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+:where(#app,[popover],.cw-type) label:has(> input:is([type="checkbox"],[type="radio"])){min-height:44px;box-sizing:border-box;align-items:center;cursor:pointer}
+.castor-settings .settings-tabs{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:2px;padding:4px;margin-bottom:1rem;border-radius:999px;background:color-mix(in srgb,var(--ink) 7%,var(--paper))}
+.settings-tabs [role="tab"]{appearance:none;min-height:44px;min-width:0;border:0;border-radius:999px;padding:.5rem .15rem;font:500 14px/1.2 var(--ui);background:none;color:var(--quiet);cursor:pointer}
+.settings-tabs [aria-selected="true"]{background:var(--ink);color:var(--paper)}
+.settings-page{border-radius:14px;background:color-mix(in srgb,var(--ink) 4%,var(--paper));padding:.2rem .85rem}
+.castor-settings .set-row{min-height:52px;border-color:color-mix(in srgb,var(--ink) 9%,transparent);gap:.75rem}
+.settings-page > .set-row:first-child{border-top:0}
+.castor-settings .set-choice{display:grid;grid-template-columns:1fr;gap:.55rem;padding-block:.8rem}
+.castor-settings .seg{grid-template-columns:repeat(3,minmax(0,1fr));border-radius:999px;max-width:100%}
+.castor-settings .seg label{min-width:0}
+.castor-settings .seg span{min-height:44px;box-sizing:border-box;padding:.4rem .45rem;font-size:13px;border-radius:999px}
+.castor-settings .set-row-explained{display:grid;grid-template-columns:1fr auto;align-items:center;column-gap:.75rem;row-gap:.15rem;padding-block:.7rem}
+.set-explain{grid-column:1/-1;font-size:13px;line-height:1.4;color:var(--quiet)}
+@media (max-width:420px){.settings-tabs [role="tab"]{font-size:13px}}
+.castor-settings .seg input:checked + span{background:var(--ink);color:var(--paper);box-shadow:none}
+.castor-settings .set-panels{gap:0 .9rem}
+.castor-settings .set-panels label{gap:.5rem}
+.castor-settings .set-hint{line-height:1.5;margin-bottom:.65rem}
+.castor-settings input.switch{width:48px;height:28px;background:color-mix(in srgb,var(--ink) 24%,var(--paper))}
+.castor-settings input.switch:checked{background:var(--ink)}
+.castor-settings input.switch::after{background:var(--paper)}
+.castor-settings input.switch:checked::after{transform:translateX(20px)}
+:where(#app,[popover]) input:disabled{opacity:.45;cursor:default}
+.descant-live-marker.in-foot{display:inline-flex;align-items:center;justify-content:center;gap:.45rem;min-height:24px;padding:0;margin:0;line-height:1}
+.descant-live-marker.in-foot::before{flex:none;margin:0;vertical-align:initial}
+.foot-count,.footline .castor-session,.footline .foot-word,.footline .castor-save{display:inline-flex;align-items:center;line-height:1}
+.foot-meta .castor-session{margin:0}
+.foot-meta .foot-word{padding:0;min-height:24px}
+@media(any-pointer:coarse){.descant-live-marker.in-foot,.foot-meta .foot-word{min-height:44px}}
+.control-tip{position:fixed;inset:auto;margin:0;z-index:1000;max-width:calc(100vw - 16px);box-sizing:border-box;padding:.35rem .55rem;border:1px solid var(--rule);border-radius:7px;background:var(--paper);color:var(--ink);font:400 13px/1.3 var(--font-ui);white-space:nowrap;pointer-events:none;box-shadow:0 3px 12px rgb(0 0 0 / .12)}
+.control-tip[hidden]{display:none}
+
+/* Folded phone: keep the article's name on the line; secondary tools travel
+   into the existing More sheet and return intact on unfold or desktop resize. */
+.more-icon,.more-count{display:none}
+@container castorapp (max-width:700px){
+  #app[data-tabs="folded"] #topbar[data-folded-tools] .folded-article{flex:0 1 auto;max-width:none;align-self:flex-end;margin:0 0 -.3em;padding-bottom:.3em;line-height:1.2;text-box:trim-both cap alphabetic}
+  /* Trim to the same alphabetic baseline as the wordmark. The 44px targets
+     hang around the title's x-height, with the chevron 6px after its text. */
+  #app[data-tabs="folded"] #topbar[data-folded-tools] .castor-tabs-fold{align-self:flex-end;margin:0 0 calc(.5ex - 22px);flex-basis:44px;width:44px;justify-content:flex-start;padding-left:6px;font:400 .86rem/1.2 var(--font-ui)}
+  #topbar[data-folded-tools].mast .nav{align-self:flex-end;margin-left:auto;margin-bottom:calc(.5ex - 22px);gap:0;font:400 .86rem/1.2 var(--font-ui)}
+  #topbar[data-folded-tools].mast .nav #more-word{display:flex;align-items:center;justify-content:center;padding:0;margin:0;width:44px;height:44px}
+  #topbar[data-folded-tools] .more-label{display:none}
+  #topbar[data-folded-tools] .more-count:not([hidden]){display:block;position:absolute;top:0;right:0;font:500 10px/1 var(--font-ui)}
+  #topbar[data-folded-tools] .more-icon{display:block;width:20px;height:20px}
+  #topbar[data-folded-tools] #more-sheet .bar-tools{margin:0;align-self:stretch;justify-content:space-around}
+  #topbar[data-folded-tools] #more-sheet .bar-tools :is(.settings-toggle,.find-lens,.theme-toggle){width:44px;min-width:44px}
+}

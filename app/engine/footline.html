@@ -1,0 +1,54 @@
+<footer id="footline" class="footline">
+      <a class="foot-by" href="https://abcastor.com" target="_blank" rel="noopener"><span class="foot-byt">by</span> <span class="foot-castor">Castor</span><span class="foot-ast" aria-hidden="true">*</span></a>
+      {{castor-full}}
+      <span class="foot-meta">
+        <span class="foot-count" id="castor-words"></span>
+        <span class="foot-save" id="castor-save-slot"></span>
+        <button type="button" class="word foot-word" id="castor-shortcuts">Shortcuts</button>
+      </span>
+    </footer>
+    <div class="castor-settings" id="castor-settings" popover role="dialog" aria-labelledby="castor-settings-title">
+      <h2 class="settings-title" id="castor-settings-title">Settings</h2>
+      <div class="settings-tabs" role="tablist" aria-label="Settings">
+        <button type="button" role="tab" id="settings-tab-focus" aria-controls="settings-focus" aria-selected="true" tabindex="0">Focus</button>
+        <button type="button" role="tab" id="settings-tab-page" aria-controls="settings-page" aria-selected="false" tabindex="-1">Page</button>
+        <button type="button" role="tab" id="settings-tab-writing" aria-controls="settings-writing" aria-selected="false" tabindex="-1">Writing</button>
+        <button type="button" role="tab" id="settings-tab-offline" aria-controls="settings-offline" aria-selected="false" tabindex="-1" hidden>Offline</button>
+        <button type="button" role="tab" id="settings-tab-account" aria-controls="settings-account" aria-selected="false" tabindex="-1">You</button>
+        <button type="button" role="tab" id="settings-tab-help" aria-controls="settings-help" aria-selected="false" tabindex="-1">Help</button>
+      </div>
+      <section class="settings-page" id="settings-focus" role="tabpanel" aria-labelledby="settings-tab-focus" tabindex="0">
+      <label class="set-row set-row-explained"><span class="set-lbl">Zen</span><input type="checkbox" class="switch" id="set-focus" role="switch" aria-describedby="set-focus-hint"><span class="set-explain" id="set-focus-hint">Hides the bars and panels. Escape brings them back.</span></label>
+      <label class="set-row"><span class="set-lbl">Dim other paragraphs</span><input type="checkbox" class="switch" id="set-dim" role="switch"></label>
+      <label class="set-row"><span class="set-lbl">Highlight the current sentence</span><input type="checkbox" class="switch" id="set-sentence" role="switch"></label>
+      </section>
+      <section class="settings-page" id="settings-page" role="tabpanel" aria-labelledby="settings-tab-page" tabindex="0" hidden>
+      <div class="set-row set-choice"><span class="set-lbl">Text width</span><select id="set-width"><option value="60">Narrow</option><option value="68">Comfortable</option><option value="74">Wide</option></select></div>
+      <div class="set-row set-choice"><span class="set-lbl">Text size</span><select id="set-size"><option value="18">Small</option><option value="20">Regular</option><option value="22">Large</option></select></div>
+      <div class="set-row set-choice"><span class="set-lbl">Interface</span><select id="set-preset"><option value="minimal">Minimal</option><option value="writing">Writing</option><option value="advanced">Advanced</option></select></div>
+      <fieldset class="set-panels"><legend>Panels at open</legend><label><input type="checkbox" value="files">Files</label><label><input type="checkbox" value="outline">Outline</label><label><input type="checkbox" value="comments">Comments</label><label><input type="checkbox" value="changes">Changes</label><label><input type="checkbox" value="workspace">Workspace</label></fieldset>
+      <div class="set-row"><span class="set-lbl" id="set-reading-font-label">Reading font</span></div>
+      <div id="set-reading-font" aria-labelledby="set-reading-font-label"></div>
+      <button type="button" class="set-row set-action" id="set-reset-reading">Reset reading font</button>
+      </section>
+      <section class="settings-page" id="settings-writing" role="tabpanel" aria-labelledby="settings-tab-writing" tabindex="0" hidden>
+      <label class="set-row"><span class="set-lbl">Spell-check</span><input type="checkbox" class="switch" id="set-spell" role="switch"></label>
+      <label class="set-row" hidden><span class="set-lbl">Language of this article</span><select id="set-language"></select></label>
+      <label class="set-row"><span class="set-lbl">Format bar on touch screens</span><input type="checkbox" class="switch" id="set-touch-format" role="switch" checked></label>
+      <label class="set-row"><span class="set-lbl">Agent tray</span><input type="checkbox" class="switch" id="set-agent-tray" role="switch"></label>
+      </section>
+      <section class="settings-page" id="settings-account" role="tabpanel" aria-labelledby="settings-tab-account" tabindex="0" hidden>
+      <div id="set-reader-color-row" hidden><label class="set-row"><span class="set-lbl">Comment colour</span><input type="color" id="set-reader-color" aria-describedby="set-reader-color-note"></label><p class="set-hint" id="set-reader-color-note" role="status">New comments use your choice. Earlier comments keep theirs.</p></div>
+      <button type="button" class="set-row set-action" id="set-writer"><span>Writing as</span><span id="set-writer-name"></span></button>
+      <a class="set-row set-action" id="set-writing-password" href="/admin/password" hidden>Password</a>
+      <button type="button" class="set-row set-action" id="set-export-prefs">Export preferences</button>
+      <button type="button" class="set-row set-action" id="set-import-prefs">Import preferences</button>
+      <p class="set-hint" id="set-prefs-note" role="status"></p>
+      </section>
+      <section class="settings-page" id="settings-offline" role="tabpanel" aria-labelledby="settings-tab-offline" tabindex="0" hidden></section>
+      <section class="settings-page" id="settings-help" role="tabpanel" aria-labelledby="settings-tab-help" tabindex="0" hidden>
+      <button type="button" class="set-row set-action" id="set-walkthrough">Repeat the walkthrough</button>
+      <button type="button" class="set-row set-action" id="set-shortcuts">Keyboard shortcuts</button>
+      </section>
+
+    </div>

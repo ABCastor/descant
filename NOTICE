@@ -1,0 +1,15 @@
+Descant
+Copyright 2026 Castor
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party material bundled with it keeps its own licence:
+
+Fonts in app/fonts/, each under the SIL Open Font License, Version 1.1 (see app/fonts/OFL.txt):
+- Commissioner: Copyright 2019 The Commissioner Project Authors (github.com/kosbarts/Commissioner)
+- Literata: Copyright 2017 The Literata Project Authors (github.com/googlefonts/literata)
+- Martian Mono: Copyright 2020 The Martian Mono Project Authors (github.com/evilmartians/mono)
+- Newsreader: Copyright 2020 The Newsreader Project Authors (github.com/productiontype/Newsreader)
+- Source Serif 4: Copyright 2014-2021 Adobe Systems Incorporated (adobe.com), with Reserved Font Name 'Source'
+
+The application code, its icons and the Descant and Castor marks are Castor's own work.

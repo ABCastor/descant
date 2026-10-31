@@ -1,0 +1,192 @@
+/* Typewell: Folio paper and ink, Editorial chrome, Mixed corners.
+   Article reading and heading faces remain the writer's choice. Identity colours
+   still come exclusively from signature.css. */
+@font-face{font-family:"Newsreader";src:url("../fonts/newsreader.woff2") format("woff2");font-weight:400 600;font-style:normal;font-display:swap}
+
+:root {
+  color-scheme: light;
+  --ground: #F7F4EC;
+  --paper: #F7F4EC;
+  --chrome: var(--paper);
+  --field: #FFFDF8;
+  --ink: #1B1915;
+  --ink-2: #5D584E;
+  --ink-3: #6F685C;
+  --ink-dim: #6d6c67;
+  --focus-wash: color-mix(in srgb, var(--star) 5%, transparent);
+  --focus-paragraph: on;
+  --focus-fade: 400ms;
+  /* Nothing recedes until the writer places the caret or a selection. */
+  --focus-rest: off;
+  --accent: #1B1915;
+  --accent-ink: #F7F4EC;
+  --accent-text: #5D584E;
+  --rule: #E1DACB;
+  --edge: #948C7C;
+  --pane: #F1EDE2;
+  --pane-solid: #F1EDE2;
+  --pane-hot: #EDE8DC;
+  --surface-raised: #FFFDF8;
+  --wash: #EDE8DC;
+  --pane-blur: none;
+  --sel: rgba(22, 21, 15, .15);
+  --highlight: rgba(97, 90, 70, .16);
+  --callout-bg: rgba(22, 21, 15, .02);
+  --scrim: rgba(18, 17, 14, .14);
+  --shadow: none;
+  --font-reading: "Source Serif 4", ui-serif, Georgia, "Times New Roman", serif;
+  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-ui-heading: "Newsreader", ui-serif, Georgia, serif;
+  --font-heading: "Source Serif 4", ui-serif, Georgia, serif;
+  --font-mono: "Martian Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --reading-size: 20px;
+  --reading-size-narrow: 18px;
+  --reading-line: 1.62;
+  --ui-size: 12.5px;
+  --ui-size-sm: 11.5px;
+  --ui-line: 1.45;
+  --ui-track: 0;
+  --note-size: 11.5px;
+  --heading-weight: 600;
+  --heading-track: -.014em;
+  --radius-pane: 12px;
+  --radius-card: 6px;
+  --radius-field: 6px;
+  --radius-mark: 2px;
+  --radius-row: 0px;
+  --radius-check: 5px;
+  --radius-sheet: 16px;
+  --radius-chip: 4px;
+  --radius-button: 999px;
+  --radius-sm: 6px;
+  --measure: 60ch;
+  --gutter: 15rem;
+  --topbar-h: 44px;
+  --notice-h: 44px;
+  --level-1: #554b3f;
+  --level-2: #40564b;
+  --level-3: #4b5360;
+  --level-4: #5c4c45;
+  --level-5: #584a56;
+  --level-6: #5d5a52;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground: #000000;
+    --paper: #000000;
+    --field: #13120F;
+    --ink: #EEE9DE;
+    --ink-2: #A8A296;
+    --ink-3: #938C80;
+    --ink-dim: #918f88;
+    --focus-wash: color-mix(in srgb, var(--star) 7%, transparent);
+    --accent: #EEE9DE;
+    --accent-ink: #000000;
+    --accent-text: #A8A296;
+    --rule: #2A2721;
+    --edge: #6F695E;
+    --pane: #0A0907;
+    --pane-solid: #0A0907;
+    --pane-hot: #1A1814;
+    --surface-raised: #13120F;
+    --wash: #1A1814;
+    --sel: rgba(237, 233, 223, .16);
+    --highlight: rgba(180, 170, 142, .17);
+    --callout-bg: rgba(237, 233, 223, .02);
+    --scrim: rgba(0, 0, 0, .42);
+    --level-1: #c4b6a2;
+    --level-2: #aabcaf;
+    --level-3: #abb4c3;
+    --level-4: #c1aaa1;
+    --level-5: #b9a7b6;
+    --level-6: #aaa79e;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground: #000000;
+  --paper: #000000;
+  --field: #13120F;
+  --ink: #EEE9DE;
+  --ink-2: #A8A296;
+  --ink-3: #938C80;
+  --ink-dim: #918f88;
+  --focus-wash: color-mix(in srgb, var(--star) 7%, transparent);
+  --accent: #EEE9DE;
+  --accent-ink: #000000;
+  --accent-text: #A8A296;
+  --rule: #2A2721;
+  --edge: #6F695E;
+  --pane: #0A0907;
+  --pane-solid: #0A0907;
+  --pane-hot: #1A1814;
+  --surface-raised: #13120F;
+  --wash: #1A1814;
+  --sel: rgba(237, 233, 223, .16);
+  --highlight: rgba(180, 170, 142, .17);
+  --callout-bg: rgba(237, 233, 223, .02);
+  --scrim: rgba(0, 0, 0, .42);
+  --level-1: #c4b6a2;
+  --level-2: #aabcaf;
+  --level-3: #abb4c3;
+  --level-4: #c1aaa1;
+  --level-5: #b9a7b6;
+  --level-6: #aaa79e;
+}
+
+#page,
+.page-scroll { background: var(--paper); }
+
+@container castorpage (min-width: 68rem) {
+  .page-column {
+    --page-col-w: min(100% + 2 * var(--page-pad-x, 1.25rem) - 2 * var(--gutter, 15rem), var(--measure, 60ch));
+  }
+}
+
+#changes-notice { background: transparent; border-top-color: transparent; }
+:where(.dock, .palette, .cw-picker, .cw-selmenu, .selection-menu, .panel-ghost,
+       .castor-thread, .cv-card) { box-shadow: none; }
+.saves-rail { display: none; }
+
+/* Editorial applies only to chrome, never --font-heading or --font-reading. */
+.mast, .find-panel, .footline, .castor-settings, .castor-tabs-fold { --word: var(--font-ui-heading); }
+:is(.panel-title, .settings-title, .search-group h2, .walkthrough-title,
+    .publication-card h2, .publication-confirm h2, .descant-publish-sheet h2,
+    .changes-header h1, .changes-side h4, .changes-menu h2, #descant-versions h2,
+    #descant-offline h3, .castor-empty h1, .castor-empty h2) {
+  font-family: var(--font-ui-heading);
+  font-optical-sizing: auto;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+.panel-title { font-size: 16px; }
+.settings-title { font-size: 18px; text-transform: none; }
+:is(.castor-settings, .find-panel, .palette, .cw-picker, .cw-type, .castor-peek,
+    .castor-tab-menu, .descant-live-popover) {
+  background: var(--surface-raised);
+  border-radius: var(--radius-pane);
+}
+:is(.castor-thread, .cv-card, .settings-page, .publication-card) {
+  background: var(--surface-raised);
+  border-radius: var(--radius-card);
+}
+:is(.descant-publish-sheet, .publication-confirm, #descant-offline, #descant-versions) {
+  background: var(--surface-raised);
+  border-radius: var(--radius-sheet);
+}
+:is(.castor-settings select, .find-panel input[type="search"]) { border-radius: var(--radius-field); }
+:where(#app, [popover], .cw-type) input[type="checkbox"]:not(.switch) { border-radius: var(--radius-check); }
+:is(.files-row, .castor-row, .palette-item) { border-radius: var(--radius-row); }
+.descant-tag-chip { border-radius: var(--radius-chip); }
+:is(.descant-publish-sheet, .descant-live-popover, .publication-confirm) button { border-radius: var(--radius-button); }
+:is(.walkthrough .walkthrough-next[data-primary="1"], #descant-offline .descant-offline-action,
+    .descant-recovery-restore, .descant-recovery-download, [data-primary="1"], .descant-publish-primary,
+    .descant-primary, .changes-screen button.changes-publish) {
+  border-radius: var(--radius-button);
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}

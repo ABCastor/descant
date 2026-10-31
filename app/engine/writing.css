@@ -1,0 +1,255 @@
+
+:root {
+  /* the caret */
+  --caret-ink: var(--ink, #1a1a18);      /* the text's own ink, never an accent */
+  --caret-width: 3px;                    /* constant: it does not scale with type */
+  --caret-radius: 0px;                   /* square caps */
+  --caret-nudge: -2px;                   /* straddles the character cell boundary */
+  --caret-fill: 1;                       /* fraction of the LINE box; 1 = exactly it */
+  --caret-wave: 1s;                      /* the opacity period */
+  --caret-ease: cubic-bezier(.4, 0, .2, 1);
+
+  --sel-edge: color-mix(in srgb, var(--ink, #1a1a18) 60%, transparent);
+  --sel-radius: 3px;
+  --sel-handle: var(--ink, #1a1a18);
+
+  /* the shade behind the writing */
+  --focus-wash: transparent;             /* a world lights the live sentence */
+  --wash-glide: 240ms;                   /* compositor motion and fade */
+  --focus-paragraph: off;                /* on: everything but this paragraph dims */
+  --ink-dim: color-mix(in srgb, var(--ink, #1a1a18) 45%, transparent);
+  --focus-fade: 320ms;                   /* slow enough not to flicker while typing */
+
+  /* the typewriter line */
+  --typewriter: off;
+  --typewriter-hold: .4;                 /* held this far down the visible page */
+
+  --trail: off;
+  --trail-length: 60;                    /* characters behind the caret */
+  --trail-quiet: 20;                     /* the nearest ones stay at full ink */
+  --trail-steps: 40;                     /* resolution, not duration */
+  --trail-floor: .55;                    /* never fainter than this */
+
+  /* the page visibly waits when the writer clicks away */
+  --away-scrim: on;
+  --away-blur: 1.5px;
+  --away-wash: 18%;
+
+
+  /* bullets */
+  --bullet-ink: var(--ink-2, var(--ink, #1a1a18));
+  --bullet-size: .34em;                  /* sized to the text, at every level */
+  --bullet-hang: 1.35em;
+  --bullet-rise: 0em;                    /* a world's optical nudge */
+}
+
+/* --- the caret ------------------------------------------------------------- */
+
+.cw-caret-layer { position: fixed; inset: 0; z-index: 79; pointer-events: none; }
+.cw-caret {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 79;
+  width: var(--caret-width);
+  border-radius: var(--caret-radius);
+  background: var(--caret-ink);
+  margin-left: var(--caret-nudge);
+  pointer-events: none;
+  transform: translate3d(-9999px, -9999px, 0);
+  box-shadow: none;
+  animation: cw-caret-wave var(--caret-wave) linear infinite;
+}
+/* Movement holds solid ink; removing this restarts the blink at full opacity. */
+.cw-caret[data-moving="1"] { animation: none; opacity: 1; }
+.cw-caret[hidden] { display: none; }
+
+@keyframes cw-caret-wave {
+  0%   { opacity: 1; }
+  50%  { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+/* --- the selection --------------------------------------------------------- */
+
+.cw-selection-rect {
+  position: absolute;
+  border-radius: var(--sel-radius);
+  background: var(--sel, rgba(138, 106, 69, .22));
+  box-shadow: none;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* On touch there is no drag; the ends are grabbed. Both handles are real
+   targets (44px of touch area around a 12px knob) and they sit UNDER the line
+   so a thumb never covers the words it is choosing. */
+.cw-sel-handle {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 79;
+  width: 44px;
+  height: 44px;
+  margin: -6px 0 0 -22px;
+  pointer-events: auto;
+  touch-action: none;
+  background: none;
+  border: 0;
+}
+.cw-sel-handle[hidden] { display: none; }
+.cw-sel-handle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 6px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: var(--sel-handle);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+}
+.cw-sel-handle::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: calc(0px - var(--handle-line, 1em));
+  width: 2px;
+  height: var(--handle-line, 1em);
+  margin-left: -1px;
+  background: var(--sel-handle);
+  opacity: .9;
+}
+
+/* --- the shade behind the writing ------------------------------------------ */
+
+.cw-wash-layer { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+.cw-focus-wash {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  transform-origin: 0 0;
+  will-change: transform, opacity;
+  transition: transform var(--wash-glide) var(--caret-ease), opacity var(--wash-glide) ease;
+}
+.cw-focus-wash[hidden] { display: none; }
+/* A scroll moves the text itself, so its shade must follow without trailing. */
+.cw-focus-wash[data-snap="1"] { transition: opacity var(--wash-glide) ease; }
+
+/* Paragraph focus: the block the caret is in keeps full ink, the rest recede.
+   The class is moved, never repainted, so the fade cannot re-trigger on a
+   keystroke — it only runs when the writer actually changes paragraph. */
+/* Nothing recedes until something is LIT, and only while the writing has the
+   focus: the caret or a selection placed in the text, by a click or the keys.
+   Escape (the editor lets go of its block) or a click anywhere outside the text
+   takes the focus away and every paragraph returns to full ink, through the same
+   fade. `:has()` and `:focus-within` ask both questions at paint time, so no
+   script has to keep a second copy of either. Settings turns the token off, and
+   then nothing recedes at all (app.js, "Dim the other paragraphs"). */
+.cw-focus-paragraph .cw-block { transition: color var(--focus-fade) ease; }
+.cw-focus-paragraph:focus-within:has(.cw-lit) .cw-block:not(.cw-lit) { color: var(--ink-dim); }
+.cw-focus-paragraph .cw-block.cw-lit { color: var(--ink, #1a1a18); }
+
+/* The trail's steps are written by editor.js into <style id="castor-trail">,
+   because their number is a token and 40 hand-written rules could not follow it.
+   Nothing here paints text: the ranges live in CSS.highlights, so no node under
+   the caret is ever wrapped — the rule that keeps typing exact. Where the
+   Custom Highlight API is missing the feature is simply absent. */
+
+/* The page waits when he clicks away. It only ever appears after he has put the
+   caret in the piece at least once, so a page nobody has touched (a screenshot,
+   a first load) never wears it. */
+.cw-editor-page { position: relative; }
+.cw-editor-page::after {
+  content: "";
+  position: absolute;
+  inset: -1rem;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  background: color-mix(in srgb, var(--paper, #fff) var(--away-wash), transparent);
+  -webkit-backdrop-filter: blur(var(--away-blur));
+  backdrop-filter: blur(var(--away-blur));
+  transition: opacity 200ms ease, visibility 0s linear 200ms;
+}
+.cw-editor-page.cw-away::after { opacity: 1; visibility: visible; transition-delay: 0s; }
+
+
+.cw-editor-page :where(ul, ol),
+.page-column :where(ul, ol),
+.beside-page :where(ul, ol) {
+  padding-left: var(--bullet-hang);
+  margin-block: 0;
+}
+.cw-editor-page ul, .page-column ul, .beside-page ul { list-style: none; }
+
+.cw-editor-page ul > li,
+.page-column ul > li,
+.beside-page ul > li { position: relative; }
+
+.cw-editor-page ul > li::before,
+.page-column ul > li::before,
+.beside-page ul > li::before {
+  content: "";
+  position: absolute;
+  left: calc(0px - var(--bullet-hang) + .38em);
+  top: calc(0px - var(--bullet-rise));
+  width: var(--bullet-size);
+  height: 1.5em;                          /* where `lh` is not known (Safari < 16.4) */
+  height: 1lh;                            /* the first line box, so it centres */
+  box-sizing: content-box;
+  background:
+    radial-gradient(circle at 50% 50%,
+      var(--bullet-ink) 0 calc(var(--bullet-size) / 2),
+      transparent calc(var(--bullet-size) / 2 + .5px));
+}
+/* level 2: hollow */
+.cw-editor-page ul ul > li::before,
+.page-column ul ul > li::before,
+.beside-page ul ul > li::before {
+  background:
+    radial-gradient(circle at 50% 50%,
+      transparent 0 calc(var(--bullet-size) / 2 - 1.2px),
+      var(--bullet-ink) calc(var(--bullet-size) / 2 - 1.2px) calc(var(--bullet-size) / 2),
+      transparent calc(var(--bullet-size) / 2 + .5px));
+}
+.cw-editor-page ul ul ul > li::before,
+.page-column ul ul ul > li::before,
+.beside-page ul ul ul > li::before {
+  background:
+    linear-gradient(var(--bullet-ink), var(--bullet-ink)) no-repeat center /
+    calc(var(--bullet-size) * .82) calc(var(--bullet-size) * .82);
+}
+/* a task item draws its own box; it never gets a bullet as well */
+.cw-editor-page ul > li.task-item::before,
+.page-column ul > li.task-item::before,
+.beside-page ul > li.task-item::before { content: none; }
+
+/* numbered lists measure, so their figures are tabular and their markers ink */
+.cw-editor-page ol, .page-column ol, .beside-page ol,
+.cw-editor-page ol > li, .page-column ol > li, .beside-page ol > li {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.cw-editor-page ol > li::marker,
+.page-column ol > li::marker,
+.beside-page ol > li::marker {
+  font-variant-numeric: tabular-nums;
+  color: var(--bullet-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cw-caret {
+    transition: none !important;
+    animation: none !important;
+    opacity: 1;
+  }
+  .cw-focus-wash, .cw-selection-rect, .cw-focus-paragraph .cw-block {
+    transition: none !important;
+    animation: none !important;
+  }
+}
