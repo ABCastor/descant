@@ -16,6 +16,8 @@ export interface Env {
   WRITER_ORIGIN?: string;
   /** The writers' founder keys, comma separated (writers.ts). None if absent: no one is a writer. */
   WRITERS?: string;
+  /** The space's synthetic sharing test article folder (rules.ts testArticle). None if absent. */
+  TEST_ARTICLE?: string;
   /** Cloudflare sender; only account-verified destinations can receive mail. */
   MAIL?: SendEmail;
   FROM_ADDRESS?: string;

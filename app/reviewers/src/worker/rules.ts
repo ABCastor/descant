@@ -15,9 +15,22 @@ export const FRESH_MAX = 10;             // new comments plus replies in one sav
 export const PER_MINUTE = 30;            // new comments plus replies per reader per minute
 export const PER_DAY = 200;              // and per day
 export const THREADS_PER_ARTICLE = 50;   // threads one reader may start on one article
-export const TEST_PIECE = "articles/99-test-piece/";
 
 export const ARTICLE_RE = /^articles\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/article\.md$/;
+const ARTICLE_FOLDER_RE = /^articles\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/$/;
+
+// The space's synthetic article for trying sharing, never shared or listed: its folder in the
+// TEST_ARTICLE var (wrangler.toml [vars]), such as "articles/zz-test/", as the space's
+// .descant/config.json testArticle names it. None: no article is set apart.
+export function testArticle(env: { TEST_ARTICLE?: unknown }): string {
+  const named = typeof env.TEST_ARTICLE === "string" ? env.TEST_ARTICLE.trim() : "";
+  return ARTICLE_FOLDER_RE.test(named) && !named.includes("..") ? named : "";
+}
+
+export function isTestArticle(env: { TEST_ARTICLE?: unknown }, path: string): boolean {
+  const prefix = testArticle(env);
+  return prefix !== "" && path.startsWith(prefix);
+}
 // Python's EMAIL_RE, applied to the lowercased address.
 export const EMAIL_RE = /^[a-z0-9._%+-]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63})+$/;
 // Python's REVIEWER_NAME_RE: a letter first, then letters, digits, spaces, dots, apostrophes and
@@ -148,10 +161,10 @@ export function wordsOf(markdown: string): string {
 
 /**
  * Whether a founder may grant an article: one whose owner is that founder, both, unassigned or
- * missing; never another founder's; never the synthetic sharing test article (TEST_PIECE).
+ * missing; never another founder's; never the space's synthetic sharing test article (testArticle).
  */
-export function mayShare(founder: string, article: { path: string; owner: string } | undefined | null): boolean {
-  if (!article || !ARTICLE_RE.test(article.path) || article.path.startsWith(TEST_PIECE)) return false;
+export function mayShare(env: { TEST_ARTICLE?: unknown }, founder: string, article: { path: string; owner: string } | undefined | null): boolean {
+  if (!article || !ARTICLE_RE.test(article.path) || isTestArticle(env, article.path)) return false;
   return article.owner === founder || article.owner === "both" || article.owner === "unassigned" || article.owner === "";
 }
 

@@ -197,6 +197,15 @@ export async function writerRoute(req: Request, env: Env, url: URL): Promise<Res
   let origin: URL;
   try { origin = new URL(env.WRITER_ORIGIN); } catch { return fail("writer-not-configured", 503); }
   if (origin.protocol !== "https:" || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) return fail("writer-not-configured", 503);
+  // Who is asking is this Worker's answer: it authenticated the founder above, and
+  // the origin's reply is a function of that principal alone. Asking the origin
+  // would put a tunnel round trip before every article read. The offline check's
+  // live admission still goes to the origin, which compares asset generations. X-Descant-Identity
+  // tells the page's service worker that the origin was not asked, so this answer never lifts a
+  // denial the origin gave or renews the device's offline grant (writer-sw.js).
+  if (req.method === "GET" && api === "whoami" && req.headers.get("X-Descant-Flight-Online") !== "1") {
+    return secure(json({ role: "founder", id: "founder:" + principal, who: principal, publicWriter: true }, 200, { "X-Descant-Account": "founder:" + principal, "X-Descant-Identity": "edge" }), undefined, "private, no-store");
+  }
   if (mutation && req.headers.get("Content-Type")?.split(";")[0].trim() !== "application/json") return fail("json-only", 415);
   if (Number(req.headers.get("Content-Length") || 0) > MAX_BODY) return fail("body-too-large", 413);
   let body: Uint8Array | undefined;

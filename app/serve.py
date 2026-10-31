@@ -945,7 +945,6 @@ def session_commit(people):
         if named:
             lines.append("Co-authored-by: %s" % named)
     return author, "\n".join(lines)
-DEFAULT_PIECE = os.environ.get("CASTOR_DEFAULT_PIECE", "articles/01-why-castor/article.md")
 PIECE_COMMITS = 12                              # saves shown in the rail
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 DRAFT_RE = re.compile(r"^articles/[^/]+/drafts/(" + WRITER_PATTERN + r")/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\.md$")
@@ -1633,7 +1632,7 @@ def listed_article_folders():
     try:
         folders = sorted(d for d in (REPO_ROOT / "articles").iterdir()
                          if d.is_dir() and (d / "article.md").is_file()
-                         and d.relative_to(REPO_ROOT).as_posix() + "/" != SHARE_TEST_PIECE)
+                         and not space_config.is_test_article(d.relative_to(REPO_ROOT).as_posix() + "/"))
     except OSError:
         return []
     return folders
@@ -2155,7 +2154,7 @@ def one_sentence(text, fallback, limit=160):
 # The access list lives OUTSIDE the repository, because it holds outsiders' addresses
 # and the repository is pushed on every save:
 #   {"reviewers": {"ada@example.com": {"name": "Ada", "invited_by": "<writer key>",
-#                                      "pieces": ["articles/01-why-castor/article.md"]}}}
+#                                      "pieces": ["articles/01-welcome/article.md"]}}}
 # It is read again on every request, so removing someone takes effect at once.
 
 REVIEWERS_DEFAULT = "~/.config/descant/reviewers.json"     # the space's config.json may name another
@@ -4080,7 +4079,7 @@ class Handler(SimpleHTTPRequestHandler):
         if action not in ("read", "invite"): return self.reply(400, {"error": "Unknown sharing action."})
         outgoing = {"path": path, "founder": who, "action": action}
         if action == "invite":
-            if path.startswith(SHARE_TEST_PIECE) or not share_allowed(owner, [who]):
+            if space_config.is_test_article(path) or not share_allowed(owner, [who]):
                 return self.reply(403, {"error": "Only the owner can share this article."})
             label, email = body.get("label"), body.get("email")
             if not isinstance(label, str) or not label.strip() or len(label) > 60 or not isinstance(email, str) or len(email) > 254 or not EMAIL_RE.fullmatch(email.strip().lower()):
@@ -4432,7 +4431,6 @@ SHARE_TICK = 2                                  # how often HEAD is looked at
 SHARE = {"url": "", "error": "", "ready": False, "shared": None, "allowed": set(), "held": None, "hosts": set(), "origins": set()}
 SHARE_LOCK = threading.Lock()                   # one cycle at a time
 SHARE_WAKE = threading.Event()
-SHARE_TEST_PIECE = "articles/99-test-piece/"
 SHARE_USER_AGENT = "castor-writing-app/1"
 DESCANT_SOURCE_RE = re.compile(r"^descant:(\d{1,16})$")
 DESCANT_ID_RE = re.compile(r"^c[0-9a-f]{32}$")
@@ -4651,7 +4649,7 @@ def share_payload(shared, granted):
             "owner": owner, "status": head.get("status", ""),
             "phase": head.get("phase", ""), "order": order,
         })
-        if path not in shared or path.startswith(SHARE_TEST_PIECE):
+        if path not in shared or space_config.is_test_article(path):
             continue
         public = share_public_text(markdown)
         if not share_allowed(owner, granted.get(path) or []) or public is None:
@@ -4956,7 +4954,7 @@ def share_cycle():
         if not isinstance(state, dict) or not isinstance(state.get("shared"), list):
             raise ShareError("GET /sync/state answered with something that is not a state")
         shared = {p for p in state["shared"] if isinstance(p, str) and article_path(p)
-                  and not p.startswith(SHARE_TEST_PIECE)}
+                  and not space_config.is_test_article(p)}
         listed = state.get("grantedBy") if isinstance(state.get("grantedBy"), dict) else {}
         granted = {path: [g for g in who if isinstance(g, str)] for path, who in listed.items()
                    if isinstance(path, str) and isinstance(who, list)}

@@ -15,7 +15,7 @@ export async function sharing(req: Request, env: Env, url: URL): Promise<Respons
   if (!ARTICLE_RE.test(path)) return json({error:'Choose an article to share.'},400);
   const article = (await allArticles(env.DB)).find(a => a.path === path);
   if (!article) return json({error:'This article is not available for sharing yet.'},404);
-  const allowed = mayShare(founder, article);
+  const allowed = mayShare(env, founder, article);
   if (data.action === 'invite') {
     if (!allowed) return json({error:'Only the owner can share this article.'},403);
     if (typeof data.label !== 'string' || typeof data.email !== 'string') return json({error:'Enter a name and email address.'},400);

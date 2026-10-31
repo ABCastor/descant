@@ -27,6 +27,10 @@ folder holds:
         agentPolicy      files, relative to the space, that /api/agent/policy hands an agent
                          reviewer (default none)
         noEmDashWriters  writer keys whose articles Publish refuses while they hold an em dash
+        firstArticle     the article a browser with none open yet starts on, such as
+                         "articles/01-welcome/article.md" (default: the first by folder name)
+        testArticle      a synthetic article folder for trying sharing, such as
+                         "articles/zz-test/": never shared or listed for readers (default none)
 
 Environment variables still win: CASTOR_PEOPLE (a people file), CASTOR_SHARE_TOKEN_FILE, CASTOR_REVIEWERS,
 DESCANT_PUBLIC_ORIGIN, and DESCANT_CONFIG_DIR (another folder instead of .descant/).
@@ -131,6 +135,28 @@ def public_origin():
 def value(key, default=None):
     found = config().get(key)
     return default if found in (None, "") else found
+
+
+ARTICLE_PATH = re.compile(r"articles/[A-Za-z0-9][A-Za-z0-9._-]{0,99}/article\.md")
+ARTICLE_FOLDER = re.compile(r"articles/[A-Za-z0-9][A-Za-z0-9._-]{0,99}/")
+
+
+def first_article():
+    """firstArticle: the article a browser with none open yet starts on; "" when unnamed."""
+    named = value("firstArticle")
+    return named if isinstance(named, str) and ARTICLE_PATH.fullmatch(named) and ".." not in named else ""
+
+
+def test_article():
+    """testArticle: the folder, ending in "/", of the space's synthetic sharing test article,
+    which is never shared or listed for readers; "" when the space has none."""
+    named = value("testArticle")
+    return named if isinstance(named, str) and ARTICLE_FOLDER.fullmatch(named) and ".." not in named else ""
+
+
+def is_test_article(path):
+    prefix = test_article()
+    return bool(prefix) and isinstance(path, str) and path.startswith(prefix)
 
 
 def _site(entry):

@@ -24,8 +24,6 @@ REPO_ROOT = APP_DIR.parents[1]
 ENGINE = APP_DIR / "engine"
 WORLDS = APP_DIR / "worlds"
 SAMPLE = ENGINE / "sample" / "sample.md"
-ARTICLE_DIR = "articles/01-why-castor"
-ARTICLE = ARTICLE_DIR + "/article.md"
 
 
 
@@ -342,17 +340,21 @@ def inline_sample_images(markdown, media):
 
 
 
-def first_article():
-    """The first article by folder name, for a writing space without Castor's first article."""
+def live_piece():
+    """The article a browser with none open yet starts on: the space's firstArticle when it is
+    there, else its first article by folder name; "" in a space with no article."""
+    named = space_config.first_article()
+    if named and (REPO_ROOT / named).is_file():
+        return named
     found = sorted(p.relative_to(REPO_ROOT).as_posix() for p in (REPO_ROOT / "articles").glob("*/article.md"))
-    return found[0] if found else ARTICLE
+    return found[0] if found else ""
 
 
 def build_data(world, sample):
     if not sample:
         data = public_reviewer_data(world)
         data['versions'][0]['markdown'] = '# Descant\n\nOpen the writing app on its server to read an article.\n'
-        data['livePiece'] = ARTICLE if (REPO_ROOT / ARTICLE).is_file() else first_article()
+        data['livePiece'] = live_piece()
         founders = space_config.people()
         data['people'] = [{'id': key, 'name': identity.split(' <')[0], 'color': founders.get('_colors', {}).get(key)}
                           for key, identity in founders.items() if isinstance(identity, str)] + [p for p in PEOPLE if p.get('kind') == 'agent']

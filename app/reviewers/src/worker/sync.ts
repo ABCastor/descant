@@ -10,7 +10,7 @@
 
 import { actionSync } from "./actions.ts";
 import { sharing } from './sharing.ts';
-import { ARTICLE_RE, TEST_PIECE, carriesNotes } from "./rules.ts";
+import { ARTICLE_RE, carriesNotes, isTestArticle, testArticle } from "./rules.ts";
 import { newToken, sameText, sha256Hex } from "./session.ts";
 import { sharedPaths, type Env } from "./store.ts";
 import { json } from "./web.ts";
@@ -161,7 +161,8 @@ async function push(req: Request, env: Env): Promise<Response> {
   // were stored with the push that made the state.
   const sharing = await grantedBy(db);
   const sharedNow = Object.keys(sharing).sort();
-  const digest = await sha256Hex(raw + ":" + JSON.stringify(sharing));
+  // The test article is policy the push applies, so a changed TEST_ARTICLE is a real push.
+  const digest = await sha256Hex(raw + ":" + JSON.stringify(sharing) + ":" + testArticle(env));
   const expectedSharing = Object.entries(sharing).flatMap(([path, people]) => people.map(who => [path, who]));
   const marker = await db.prepare(
     `WITH current_sharing AS (
@@ -188,6 +189,8 @@ async function push(req: Request, env: Env): Promise<Response> {
   // First what the repository says now: the founders, the articles and their owners. A grant or a
   // live link that the article's CURRENT owner would not allow (it became another founder's, or it
   // left the repository) goes with it, before anything below decides what is shared.
+  // The space's test article is pruned too: never shared, whatever a grant says.
+  const test = testArticle(env);
   const notAllowed = `SELECT path FROM articles a WHERE a.path = %s AND a.owner NOT IN ('', 'unassigned', 'both') AND a.owner <> %s`;
   // A revoke, grant or invite expiry between the read and this transaction must
   // abort this push rather than retain text on a sharing decision that expired.
@@ -214,10 +217,10 @@ async function push(req: Request, env: Env): Promise<Response> {
     ...articleRows.map(rows => db.prepare(`INSERT INTO articles (path,title,owner,status,phase,ord,markdown,versionSha,versionWhen)
       SELECT json_extract(value,'$.path'),json_extract(value,'$.title'),json_extract(value,'$.owner'),json_extract(value,'$.status'),json_extract(value,'$.phase'),json_extract(value,'$.order'),NULL,NULL,NULL FROM json_each(?) WHERE true
       ON CONFLICT(path) DO UPDATE SET title=excluded.title,owner=excluded.owner,status=excluded.status,phase=excluded.phase,ord=excluded.ord`).bind(rows)),
-    db.prepare(`DELETE FROM grants WHERE path NOT IN (SELECT path FROM articles) OR path LIKE ? OR EXISTS (${notAllowed.replace("%s", "grants.path").replace("%s", "grants.grantedBy")})`)
-      .bind(TEST_PIECE + "%"),
-    db.prepare(`DELETE FROM invite_articles WHERE path NOT IN (SELECT path FROM articles) OR path LIKE ? OR EXISTS (${notAllowed.replace("%s", "invite_articles.path").replace("%s", "(SELECT createdBy FROM invites WHERE id = invite_articles.inviteId)")})`)
-      .bind(TEST_PIECE + "%"),
+    db.prepare(`DELETE FROM grants WHERE path NOT IN (SELECT path FROM articles) OR (? <> '' AND instr(path, ?) = 1) OR EXISTS (${notAllowed.replace("%s", "grants.path").replace("%s", "grants.grantedBy")})`)
+      .bind(test, test),
+    db.prepare(`DELETE FROM invite_articles WHERE path NOT IN (SELECT path FROM articles) OR (? <> '' AND instr(path, ?) = 1) OR EXISTS (${notAllowed.replace("%s", "invite_articles.path").replace("%s", "(SELECT createdBy FROM invites WHERE id = invite_articles.inviteId)")})`)
+      .bind(test, test),
   ];
 
   const known = new Set(articles.map((a) => a.path));
@@ -226,7 +229,7 @@ async function push(req: Request, env: Env): Promise<Response> {
   const incoming = new Map(articles.map(a => [a.path,a]));
   const shared = new Set(sharedNow.filter(p => {
     const article = incoming.get(p);
-    return known.has(p) && !p.startsWith(TEST_PIECE) && article && (sharing[p] || []).some(who =>
+    return known.has(p) && !isTestArticle(env, p) && article && (sharing[p] || []).some(who =>
       !article.owner || ['unassigned','both'].includes(article.owner) || article.owner === who);
   }));
   const { results: ours } = await db.prepare("SELECT id, path FROM threads").all<{ id: number; path: string }>();

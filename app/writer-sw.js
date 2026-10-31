@@ -111,12 +111,18 @@ self.addEventListener('fetch', function (event) {
     }
     if (!response.ok) return response;
     if (!unchanged(observed, current) || !unchanged(observedGrant, await grant(meta))) return problem('The writer session changed while this request was pending. Retry to confirm the writer.', 409);
+    // A whoami the Worker answered itself names the signed-in writer but says nothing about
+    // the writing server: it never lifts a denial that server gave or renews the offline grant.
+    var edge = url.pathname === '/write/api/whoami' && response.headers.get('X-Descant-Identity') === 'edge';
     if (actual && WRITER.test(actual)) {
-      if (account.startsWith('revoked:') && url.pathname === '/write/api/whoami') account = account.slice(8);
+      if (account.startsWith('revoked:') && url.pathname === '/write/api/whoami') {
+        if (edge) return problem('The writer session was denied online. Reopen Descant online to confirm the writer; your unsent writing remains on this device.', 401);
+        account = account.slice(8);
+      }
       // A legacy account-less tombstone cannot safely be rebound in this client.
       if (account && account !== actual) return problem('The signed-in writer changed. Your original unsent writing is preserved. Open the other writer in a new tab.', 409);
       await bind(meta, event.resultingClientId || event.clientId, actual);
-      if (request.mode === 'navigate' || url.pathname === '/write/api/whoami') await confirm(meta, actual);
+      if ((request.mode === 'navigate' || url.pathname === '/write/api/whoami') && !edge) await confirm(meta, actual);
     }
     return response;
     }).catch(function (error) { return problem(error.message); });

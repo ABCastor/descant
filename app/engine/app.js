@@ -4087,7 +4087,12 @@
         queueKnot(false);
         if (Castor.footnotes && Castor.footnotes.layout) Castor.footnotes.layout();
       }
-      function reveal() { if (els.frame) els.frame.setAttribute('data-ready', ''); }
+      function reveal() {
+        if (!els.frame) return;
+        els.frame.setAttribute('data-ready', '');
+        // The moment the article is shown, for anyone timing how fast the page opens.
+        try { if (global.performance && global.performance.mark) global.performance.mark('descant-ready'); } catch (e) { /* no timing */ }
+      }
       /* Recovery has settled. Background frame throttling and font swapping
          must not hide a ready writing sheet. */
       reveal();

@@ -25,7 +25,7 @@ You need Node.js 22 or newer, Python 3 and a Cloudflare account with your domain
 3. **Configure:** copy `wrangler.example.toml` to `wrangler.toml` (git ignores it) and change:
    - `routes` and `APP_URL`: the address readers will open, for example `comments.your-domain.com`;
    - `FROM_ADDRESS` and `allowed_sender_addresses`: an address on your domain that Email Routing can send from;
-   - `WRITERS`: the keys in `.descant/people.json` (the names before the colon), comma separated, for example `"ada"` or `"ada,bo"`. Each key must be 2 to 16 lowercase letters, no digits or hyphens; with no valid key nobody can sign in as a writer;
+   - `WRITERS`: the keys in `.descant/people.json` (the names before the colon), comma separated, for example `"ada"` or `"ada,bo"`. Each key is a lowercase letter followed by up to 23 lowercase letters, digits or hyphens (`ada`, `jean-luc`), and not `both` or `unassigned`; with no valid key nobody can sign in as a writer;
    - leave `WRITER_ORIGIN` commented out. It serves the writing app itself through the comment page, which needs your Descant server on a public HTTPS address; the comment page works without it.
 4. **Database:** `npx wrangler d1 create descant`, paste the id it prints into `database_id`, then `npx wrangler d1 migrations apply descant --remote`.
 5. **Email:** turn on Email Routing for your domain in the Cloudflare dashboard. Cloudflare only delivers to verified destination addresses, so add and verify your own address and each reader's before they can sign in.

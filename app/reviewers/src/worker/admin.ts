@@ -4,7 +4,7 @@
 // grant (rules.ts mayShare); taking access away is open to either founder.
 
 import { RESET_HOURS } from "./auth.ts";
-import { emailProblem, foldEmail, labelProblem, mayShare, TEST_PIECE } from "./rules.ts";
+import { emailProblem, foldEmail, labelProblem, isTestArticle, mayShare } from "./rules.ts";
 import { FOUNDER_COOKIE, cookie, newToken, randomId } from "./session.ts";
 import { allArticles, founders, inviteState, type Article, type Env } from "./store.ts";
 import { day, esc, message, page, redirect } from "./web.ts";
@@ -86,7 +86,7 @@ export async function makeInvitation(env: Env, url: URL, founder: string, label:
   if (lp) problems.push(lp);
   if (ep) problems.push(ep);
   if (!wanted.length) problems.push('Choose at least one article.');
-  for (const p of wanted) if (!mayShare(founder, articles.get(p))) problems.push(`You cannot share ${articles.get(p)?.title ?? p}: it is another founder's, or it cannot be shared.`);
+  for (const p of wanted) if (!mayShare(env, founder, articles.get(p))) problems.push(`You cannot share ${articles.get(p)?.title ?? p}: it is another founder's, or it cannot be shared.`);
   if (!Number.isInteger(uses) || uses < 1 || uses > MAX_USES) problems.push(`A link works from 1 to ${MAX_USES} times.`);
   if (!Number.isInteger(days) || days < 1 || days > MAX_DAYS) problems.push(`A link lasts from 1 to ${MAX_DAYS} days.`);
   if (problems.length) return {problems};
@@ -114,8 +114,8 @@ async function dashboard(env: Env, founder: string, shown?: Shown, problems: str
   const title = (p: string) => esc(titleOf.get(p) ?? p);
   const me = team.find((f) => f.key === founder)?.name.split(" ")[0] || founder;
   const nameOf = (key: string) => esc(team.find((f) => f.key === key)?.name.split(" ")[0] || key);
-  const visible = articles.filter((a) => !a.path.startsWith(TEST_PIECE));
-  const mine = visible.filter((a) => mayShare(founder, a));
+  const visible = articles.filter((a) => !isTestArticle(env, a.path));
+  const mine = visible.filter((a) => mayShare(env, founder, a));
 
   const shownBlock = shown
     ? `<section class="shown" role="status">
@@ -151,7 +151,7 @@ async function dashboard(env: Env, founder: string, shown?: Shown, problems: str
     const readers = grants.results.filter((g) => g.path === a.path).map((g) => esc(people.results.find((p) => p.id === g.personId)?.name ?? "?"));
     const pending = invites.results.filter((i) => inviteState(i, now) === "live" && inviteArticles.results.some((x) => x.inviteId === i.id && x.path === a.path)).map((i) => `${esc(i.label)} (link)`);
     const who = [...readers, ...pending];
-    return `<tr><td>${esc(a.title)}</td><td>${esc(a.owner || "unassigned")}</td><td>${mayShare(founder, a) ? "yes" : "no"}</td><td>${who.length ? who.join(", ") : `<span class="quiet">nobody</span>`}</td></tr>`;
+    return `<tr><td>${esc(a.title)}</td><td>${esc(a.owner || "unassigned")}</td><td>${mayShare(env, founder, a) ? "yes" : "no"}</td><td>${who.length ? who.join(", ") : `<span class="quiet">nobody</span>`}</td></tr>`;
   }).join("");
 
   const choices = mine.length
