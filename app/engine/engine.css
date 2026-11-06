@@ -1120,7 +1120,7 @@ body {
   font-size: var(--note-size, 11.5px);
   color: var(--ink-3, #9b9b93);
 }
-.files-empty, .beside-empty, .drafts-note {
+.files-empty, .beside-empty {
   color: var(--ink-2, #6a6a63);
   font-size: var(--ui-size, 13.5px);
   line-height: 1.5;
@@ -3150,16 +3150,6 @@ mark.is-done > .castor-comment-pin .castor-comment-mark svg { stroke-dasharray: 
 #topbar[data-compact] #more-sheet .word { color: var(--ink-2, #6a6a63); }
 #topbar[data-compact] #more-sheet .word:hover,
 #topbar[data-compact] #more-sheet .word[aria-pressed="true"] { color: var(--ink, #23231f); }
-
-.drafts-note { font-size: .85rem; opacity: .7; line-height: 1.5; }
-.drafts-person { font-size: .9rem; margin: 1.2rem 0 .5rem; }
-.drafts-create, .drafts-row, .drafts-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .6rem 0; }
-.drafts-create input { min-width: 0; flex: 1 1 8rem; font: inherit; padding: .5rem; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: .25rem; }
-.drafts-button { font: inherit; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: .25rem; min-height: 44px; padding: .4rem .65rem; text-align: left; cursor: pointer; }
-.drafts-button:disabled { opacity: .45; cursor: wait; }
-.drafts-row { padding: .5rem 0; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
-.drafts-row > button:first-child { flex: 1 1 100%; border: 0; font-weight: 600; padding-left: 0; }
-.drafts-hidden { display: flex; gap: .5rem; align-items: center; font-size: .85rem; line-height: 1.4; margin: .75rem 0; min-height: 44px; }
 
 .drafts-context { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; padding: .75rem 1rem; font-size: .85rem; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
 .drafts-context[hidden] { display: none; }

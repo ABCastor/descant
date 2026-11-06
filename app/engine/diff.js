@@ -283,7 +283,237 @@
     return result;
   }
 
-  const api = { blocks, words };
+  /* --- versions side by side (round 1035) ---------------------------------------
+     Rows for reading the article (A) beside up to two other versions. Each row
+     holds a run of A's paragraphs and, per version, the paragraphs that answer
+     them: one to one, a split (one A paragraph, two in B), a join (two in A, one
+     in B), a rewrite in the same place, or a paragraph only one side has. */
+
+  function joined(list, indices) {
+    return { type: list[indices[0]].type, text: indices.map((i) => list[i].text).join(' ') };
+  }
+
+  // Widen a pair over a free neighbour while the joined text reads closer.
+  function widen(row, side, list, used, other) {
+    if (row[side === 'a' ? 'x' : 'a'].length > 1) return;
+    const score = (indices) => side === 'a'
+      ? similarity(joined(list, indices), joined(other, row.x))
+      : similarity(joined(other, row.a), joined(list, indices));
+    for (const step of [1, -1]) {
+      for (;;) {
+        const edge = step > 0 ? row[side][row[side].length - 1] + 1 : row[side][0] - 1;
+        if (edge < 0 || edge >= list.length || used.has(edge) || list[edge].type !== list[row[side][0]].type) break;
+        const wider = step > 0 ? row[side].concat(edge) : [edge].concat(row[side]);
+        if (score(wider) <= score(row[side]) + 0.02) break;
+        row[side] = wider;
+        used.add(edge);
+      }
+    }
+  }
+
+  function alignTwo(a, x) {
+    const { pairs } = pairBlocks(a, x);
+    const stayed = stayedInOrder(pairs);
+    const anchors = pairs.filter((pair) => stayed.has(pair.newIndex))
+      .sort((p, q) => p.oldIndex - q.oldIndex)
+      .map((pair) => ({ a: [pair.oldIndex], x: [pair.newIndex] }));
+    const usedA = new Set(anchors.map((row) => row.a[0]));
+    const usedX = new Set(anchors.map((row) => row.x[0]));
+    for (const row of anchors) { widen(row, 'x', x, usedX, a); widen(row, 'a', a, usedA, x); }
+    const kind = (block) => /^h[1-6]$/.test(block.type) ? 'h' : block.type;
+    const rows = [];
+    let lastA = -1, lastX = -1;
+    for (const anchor of anchors.concat({ a: [a.length], x: [x.length], end: true })) {
+      const gapA = [], gapX = [];
+      for (let i = lastA + 1; i < anchor.a[0]; i += 1) gapA.push(i);
+      for (let j = lastX + 1; j < anchor.x[0]; j += 1) gapX.push(j);
+      if (gapA.length && gapX.length) {
+        // The same place, rewritten: pair in order when the shapes match, else one row.
+        if (gapA.length === gapX.length && gapA.every((i, k) => kind(a[i]) === kind(x[gapX[k]]))) {
+          gapA.forEach((i, k) => rows.push({ a: [i], x: [gapX[k]] }));
+        } else rows.push({ a: gapA, x: gapX });
+      } else {
+        gapA.forEach((i) => rows.push({ a: [i], x: [] }));
+        gapX.forEach((j) => rows.push({ a: [], x: [j], at: anchor.a[0] }));
+      }
+      if (anchor.end) break;
+      rows.push(anchor);
+      lastA = anchor.a[anchor.a.length - 1];
+      lastX = anchor.x[anchor.x.length - 1];
+    }
+    return rows;
+  }
+
+  const NOTE = /^\[\^([^\]\s]+)\]:/;
+  // Footnotes pair by their label, wherever they sit; the prose pairs in order.
+  function alignWithNotes(a, x) {
+    const prose = (list) => list.map((b, i) => i).filter((i) => !NOTE.test(list[i].source || ''));
+    const pa = prose(a), px = prose(x);
+    const rows = alignTwo(pa.map((i) => a[i]), px.map((j) => x[j])).map((row) => ({
+      a: row.a.map((k) => pa[k]), x: row.x.map((k) => px[k]),
+      at: row.at == null ? undefined : row.at < pa.length ? pa[row.at] : pa.length ? pa[pa.length - 1] + 1 : 0
+    }));
+    const label = (b) => (NOTE.exec(b.source || '') || [])[1];
+    const notesX = new Map(x.map((b, j) => [label(b), j]).filter(([name]) => name));
+    a.forEach((b, i) => {
+      const name = label(b);
+      if (!name) return;
+      rows.push({ a: [i], x: notesX.has(name) ? [notesX.get(name)] : [] });
+      notesX.delete(name);
+    });
+    notesX.forEach((j) => rows.push({ a: [], x: [j], at: a.length }));
+    return rows;
+  }
+
+  // [{ a: [A indices], cells: [[indices in each other version]], at (rows with no A) }]
+  function align(base, others) {
+    const per = others.map((other) => alignWithNotes(base, other));
+    const together = new Array(base.length).fill(false);
+    // A row holds one run of A: a footnote between two paragraphs B joins goes into their row.
+    per.forEach((rows) => rows.forEach((row) => {
+      if (row.a.length < 2) return;
+      for (let i = Math.min(...row.a) + 1; i <= Math.max(...row.a); i += 1) together[i] = true;
+    }));
+    const empty = () => others.map(() => []);
+    const owner = new Map(), segments = [];
+    base.forEach((block, i) => {
+      if (i && together[i]) segments[segments.length - 1].a.push(i);
+      else segments.push({ a: [i], cells: empty() });
+      owner.set(i, segments[segments.length - 1]);
+    });
+    const inserts = new Map();
+    per.forEach((list, v) => list.forEach((row) => {
+      if (row.a.length) { owner.get(row.a[0]).cells[v].push(...row.x); return; }
+      const inside = owner.get(row.at);
+      if (inside && inside.a[0] < row.at) { inside.cells[v].push(row.x[0]); return; }
+      if (!inserts.has(row.at)) inserts.set(row.at, empty());
+      inserts.get(row.at)[v].push(row.x[0]);
+    }));
+    const rows = [];
+    const place = (at) => {
+      const waiting = inserts.get(at) || [];
+      const depth = Math.max(0, ...waiting.map((list) => list.length));
+      for (let k = 0; k < depth; k += 1) rows.push({ a: [], at, cells: waiting.map((list) => list[k] == null ? [] : [list[k]]) });
+    };
+    segments.forEach((row) => {
+      place(row.a[0]);
+      row.cells.forEach((cell) => cell.sort((p, q) => p - q));
+      rows.push(row);
+    });
+    place(base.length);
+    return rows;
+  }
+
+  /* The article after the chosen takes. `blocks` is the article's parse without
+     its front matter; `results` maps a row index to the version index taken there
+     (absent: the article's own text). `results` is never changed.
+     A taken paragraph brings what it cites and the article lacks:
+     - a footnote the article lacks: that footnote's row comes along (reported in `info.carried`);
+     - a footnote whose label the article uses for another note: it gets its own label, `[^1-b]`;
+     - a reference-link definition only its version has: added at the end;
+     - a link label the article defines with another URL: its own label, `[r-b]`.
+     A retake finds the note or link already here and cites it again. */
+  const LINK_DEF = /^ {0,3}\[([^\]^][^\]]*)\]:[ \t]*\S.*$/gm;
+  const linkKey = (label) => label.trim().replace(/\s+/g, ' ').toLowerCase();
+  const linkDest = (def) => def.slice(def.indexOf(']:') + 2).trim().replace(/\s+/g, ' ');
+  // [text][label], [label][] and [label], but not [^note], [text](url) or [label]:.
+  const LINK_REF = /\[([^\]]*)\]\[([^\]]*)\]|\[([^\]^][^\]]*)\](?![[(:])/g;
+  const noteBody = (text) => text.replace(/^\[\^[^\]\s]+\]:/, '').replace(/\s+/g, ' ').trim();
+  function compose(source, blocks, rows, results, versions, info) {
+    const body = blocks.map((b) => b.sep + b.source).join('');
+    const at = source.indexOf(body);
+    if (at < 0) throw new Error('The article text could not be laid out for comparison.');
+    const head = source.slice(0, at), tail = source.slice(at + body.length);
+    const chosen = Object.assign({}, results), carried = {};
+    const taken = (r) => typeof chosen[r] === 'number';
+    const before = new Map(), rowOfA = new Map();
+    rows.forEach((row, r) => {
+      if (row.a.length) row.a.forEach((i) => rowOfA.set(i, r));
+      else before.set(row.at, (before.get(row.at) || []).concat(r));
+    });
+    const noteOf = (v, label) => versions[v].find((b) => b.source.startsWith('[^' + label + ']:'));
+    for (let round = 0; round < 8; round += 1) {
+      const pieces = [];
+      const emit = (r) => rows[r].cells[chosen[r]].forEach((j) => pieces.push({ text: versions[chosen[r]][j].source, from: chosen[r] }));
+      for (let i = 0; i <= blocks.length; i += 1) {
+        (before.get(i) || []).forEach((r) => { if (taken(r)) emit(r); });
+        if (i === blocks.length) break;
+        const r = rowOfA.get(i);
+        if (r != null && taken(r)) { if (rows[r].a[0] === i) emit(r); }
+        else pieces.push({ text: blocks[i].source, own: i });
+      }
+      const notes = new Map();
+      pieces.forEach((piece) => { const m = /^\[\^([^\]\s]+)\]:/.exec(piece.text); if (m && !notes.has(m[1])) notes.set(m[1], piece.text); });
+      const missing = [], clash = new Map();
+      pieces.forEach((piece) => {
+        if (piece.from == null) return;
+        for (const m of piece.text.matchAll(/\[\^([^\]\s]+)\](?!:)/g)) {
+          const own = noteOf(piece.from, m[1]);
+          if (!notes.has(m[1])) { notes.set(m[1], own ? own.source : ''); missing.push({ label: m[1], v: piece.from }); }
+          else if (own && noteBody(notes.get(m[1])) !== noteBody(own.source)) clash.set(piece.from + ':' + m[1], { v: piece.from, label: m[1], note: own.source });
+        }
+      });
+      let more = false;
+      missing.forEach(({ label, v }) => {
+        const j = versions[v].findIndex((b) => b.source.startsWith('[^' + label + ']:'));
+        const r = rows.findIndex((row, k) => j >= 0 && !taken(k) && !row.a.length && row.cells[v].includes(j));
+        if (r >= 0) { chosen[r] = v; carried[r] = v; more = true; }
+      });
+      if (more) continue;
+      // Clashing labels: the taken text keeps citing its own source under a new label.
+      const extra = [], used = new Set(notes.keys());
+      const renamed = new Map();
+      clash.forEach(({ v, label, note }, key) => {
+        // Taken before: the note is already here under its own label, so cite that one.
+        const same = [...notes].find(([, text]) => text && noteBody(text) === noteBody(note));
+        if (same) { renamed.set(key, same[0]); return; }
+        let name = label + '-' + 'bc'[v], n = 2;
+        while (used.has(name)) name = label + '-' + 'bc'[v] + (n++);
+        used.add(name); renamed.set(key, name);
+        extra.push('[^' + name + ']:' + note.slice(('[^' + label + ']:').length));
+      });
+      pieces.forEach((piece) => {
+        if (piece.from == null) return;
+        piece.text = piece.text.replace(/\[\^([^\]\s]+)\](?!:)/g, (all, label) => renamed.has(piece.from + ':' + label) ? '[^' + renamed.get(piece.from + ':' + label) + ']' : all);
+      });
+      // Reference links a taken paragraph uses: a definition only its version has comes along;
+      // a label the article uses for another URL gets its own label, as notes do.
+      const links = new Map();
+      pieces.forEach((piece) => { for (const m of piece.text.matchAll(LINK_DEF)) if (!links.has(linkKey(m[1]))) links.set(linkKey(m[1]), linkDest(m[0])); });
+      pieces.forEach((piece) => {
+        if (piece.from == null || /^\[\^/.test(piece.text)) return;
+        const rename = new Map();
+        const own = (key) => {
+          for (const b of versions[piece.from]) { const def = [...b.source.matchAll(LINK_DEF)].find((m) => linkKey(m[1]) === key); if (def) return def[0]; }
+          return null;
+        };
+        piece.text = piece.text.replace(LINK_REF, (all, text, ref, short) => {
+          const label = short != null ? short : (ref || text), key = linkKey(label), def = own(key);
+          if (!def) return all;
+          const dest = linkDest(def);
+          if (!links.has(key)) { links.set(key, dest); extra.push(def); return all; }
+          if (links.get(key) === dest) return all;
+          if (!rename.has(key)) {
+            let name = [...links].filter(([, d]) => d === dest).map(([k]) => k)[0];
+            if (name == null) {
+              const stem = label.trim() + '-' + 'bc'[piece.from];
+              let n = 2; name = stem;
+              while (links.has(linkKey(name))) name = stem + (n++);
+              links.set(linkKey(name), dest); extra.push('[' + name + ']: ' + dest);
+            }
+            rename.set(key, name);
+          }
+          return '[' + (short != null ? short : text) + '][' + rename.get(key) + ']';
+        });
+      });
+      if (info) info.carried = carried;
+      const sep = (piece, k) => k === 0 ? (blocks[0] ? blocks[0].sep : '') : piece.own > 0 ? blocks[piece.own].sep : '\n\n';
+      return head + pieces.map((piece, k) => sep(piece, k) + piece.text).join('') + extra.map((text) => '\n\n' + text).join('') + tail;
+    }
+    throw new Error('The footnotes could not be settled.');
+  }
+
+  const api = { blocks, words, align, compose };
   Castor.diff = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

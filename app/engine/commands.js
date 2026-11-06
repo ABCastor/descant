@@ -854,7 +854,7 @@
     { id: 'outline', title: 'Outline' },
     { id: 'comments', title: 'Comments' },
     { id: 'changes', title: 'Changes' },
-    { id: 'drafts', title: 'Drafts' },
+    { id: 'drafts', title: 'Versions' },
     { id: 'workspace', title: 'Workspace' },
     { id: 'links', title: 'Links' },
     { id: 'live', title: 'Live' },

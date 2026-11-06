@@ -922,7 +922,7 @@
       /* Drafts carries no mount here: panels.js owns the one truthful paragraph
          and refuses any replacement that does not declare ready:true, so a second
          copy of that sentence in this file would be dead text that never renders. */
-      Castor.panels.register('drafts', { title: 'Drafts' });
+      Castor.panels.register('drafts', { title: 'Versions' });
     }
     if (Castor.commands && Castor.commands.register) {
       Castor.commands.register({

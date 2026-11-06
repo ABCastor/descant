@@ -30,7 +30,7 @@
   var IDS = ['files', 'outline', 'comments', 'changes', 'drafts', 'workspace', 'links', 'live', 'beside'];
   var TITLES = {
     files: 'Files', outline: 'Outline', comments: 'Comments', changes: 'Changes',
-    drafts: 'Drafts', workspace: 'Workspace', links: 'Links', live: 'Live', beside: 'Beside'
+    drafts: 'Versions', workspace: 'Workspace', links: 'Links', live: 'Live', beside: 'Beside'
   };
   var LEFT_BY_NATURE = { files: true, outline: true };
   function defaultSide(id) { return LEFT_BY_NATURE[id] ? 'left' : 'right'; }

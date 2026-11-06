@@ -97,12 +97,15 @@
       comments: Castor.comments && Castor.comments.list ? Castor.comments.list().filter(function (t) { return !t.done; }).length : 0,
       changes: Castor.changes && Castor.changes.current ? Castor.changes.current().unread : 0
     };
+    if (Castor.versions) counts.drafts = Castor.versions.count();
     Object.keys(counts).forEach(function (id) {
       var w = b.querySelector('[data-panel="' + id + '"]') || doc.querySelector('#app [data-panel="' + id + '"]');
       if (!w) return;
       var count = w.querySelector('.count');
       if (!count) { count = doc.createElement('span'); count.className = 'count'; w.appendChild(count); }
       var value = String(counts[id] || 0); if (count.textContent !== value) count.textContent = value;
+      // Open versions show Versions in every preset, so a rewrite beside the article is never missed.
+      if (id === 'drafts') { if (counts[id]) w.setAttribute('data-open', ''); else w.removeAttribute('data-open'); }
     });
   }
   function proxy(sheet, id, label, source, action, icon) {
@@ -136,7 +139,7 @@
           button.addEventListener('click', function (event) { if (peek) { event.preventDefault(); event.stopImmediatePropagation(); peek.open(); } }, true);
         }
       }
-      if (id !== 'comments') move(button, id === 'comments' || !small && ['outline', 'changes'].indexOf(id) >= 0 ? nav : sheet);
+      if (id !== 'comments') move(button, id === 'comments' || !small && ['outline', 'changes', 'drafts'].indexOf(id) >= 0 ? nav : sheet);
       if (button && Castor.panels) {
         if (Castor.panels.isReady) button.hidden = !Castor.panels.isReady(id);
         if (Castor.panels.isOpen) button.setAttribute('aria-pressed', String(Castor.panels.isOpen(id)));

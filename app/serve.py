@@ -953,6 +953,8 @@ PIECE_COMMITS = 12                              # saves shown in the rail
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 DRAFT_RE = re.compile(r"^articles/[^/]+/drafts/(" + WRITER_PATTERN + r")/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\.md$")
 ARTICLE_RE = re.compile(r"^articles/[^/]+/article\.md$")
+# A take names where its paragraph came from: an article or a version, at a commit.
+TAKEN_RE = re.compile(r"^articles/[A-Za-z0-9._-]+/(?:article\.md|drafts/(?:" + WRITER_PATTERN + r")/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\.md)@[0-9a-f]{7,40}$")
 SAY_LOCK = WRITE_LOCK                     # one loop turn at a time; git is shared
 COMMENTS_LOCK = WRITE_LOCK                # one review-folder commit at a time
 LOCKED_PIECES = frozenset(p for p in os.environ.get("CASTOR_LOCKED", "").split(",") if p.strip())
@@ -1126,18 +1128,67 @@ def draft_header(markdown):
     return match.group(0) if match else ""
 
 
-def draft_entry(path):
-    text = (REPO_ROOT / path).read_text("utf-8")
-    head = share_frontmatter(text)
-    match = re.search(r"(?m)^title: (.+)$", draft_header(text))
-    title = match[1] if match else Path(path).stem
+def draft_field(text, name, default=""):
+    """One plain or JSON-quoted line of a version's front matter."""
+    match = re.search(r"(?m)^" + name + r": (.+)$", draft_header(text))
+    value = match[1].strip() if match else default
     try:
-        title = json.loads(title)
+        value = json.loads(value)
     except ValueError:
         pass
-    return {"path": path, "title": title, "person": DRAFT_RE.fullmatch(path)[1],
+    return value if isinstance(value, str) else default
+
+
+def draft_entry(path, text=None):
+    text = (REPO_ROOT / path).read_text("utf-8") if text is None else text
+    head = share_frontmatter(text)
+    return {"path": path, "title": draft_field(text, "title", Path(path).stem), "person": DRAFT_RE.fullmatch(path)[1],
+            "by": draft_field(text, "by"), "base": draft_field(text, "base"), "date": Path(path).name[:10],
             "hidden": head.get("hidden") == "true", "moved": head.get("moved") == "true",
             "sha": git("log", "-1", "--format=%H", "--", path).stdout.strip()}
+
+
+def versions_away(piece, who, limit=6):
+    """Versions put away from this article, newest first, each with the text it had.
+    Another writer's hidden version stays out, as it does from the open list."""
+    out = git("log", "--diff-filter=D", "--format=%x1e%H%x1f%cI", "--name-only", "--", piece + "/drafts")
+    found, seen = [], set()
+    for record in out.stdout.split("\x1e") if out.returncode == 0 else []:
+        lines = [line for line in record.strip().split("\n") if line]
+        if not lines or "\x1f" not in lines[0]:
+            continue
+        removal, when = lines[0].split("\x1f", 1)
+        for path in lines[1:]:
+            if path in seen or not draft_path(path) or (REPO_ROOT / path).exists() or not path.startswith(piece + "/drafts/"):
+                continue
+            seen.add(path)
+            sha = git("log", "-1", "--format=%H", removal + "^", "--", path).stdout.strip()
+            shown = git_blob(path, commit=sha) if sha else None
+            if shown is None or shown.returncode:
+                continue
+            text = shown.stdout.decode("utf-8")  # exact bytes: CRLF stays CRLF
+            entry = dict(draft_entry(path, text), sha=sha, removed=when, markdown=text)
+            if entry["hidden"] and entry["person"] != who:
+                continue
+            found.append(entry)
+            if len(found) >= limit:
+                return found
+    return found
+
+
+CRLF_VERSION = ("This version has Windows line endings, which this writing space does not keep, so it stays open. "
+                "Ask the agent to save it with plain line endings.")
+
+
+def taken_real(item, article):
+    """A Taken-from: origin that is true: this article, or one of its versions, at a commit that has it."""
+    if not TAKEN_RE.fullmatch(item):
+        return False
+    origin, sha = item.rsplit("@", 1)
+    piece = str(article or "").rsplit("/", 1)[0]
+    if origin != article and not (draft_path(origin) == origin and origin.startswith(piece + "/drafts/")):
+        return False
+    return git("cat-file", "-e", sha + ":" + origin).returncode == 0
 
 
 def draft_current(path, base):
@@ -1145,10 +1196,10 @@ def draft_current(path, base):
     if not SHA_RE.fullmatch(str(base or "")):
         return False
     target = REPO_ROOT / path
-    loaded = git_blob_at(base, path)
+    loaded = git_blob(path, commit=base)
     current = git_blob(path)
     return (target.is_file() and loaded.returncode == current.returncode == 0
-            and loaded.stdout.encode("utf-8") == current.stdout == target.read_bytes())
+            and loaded.stdout == current.stdout == target.read_bytes())
 
 
 def draft_splice(markdown, start, end, text):
@@ -3159,8 +3210,15 @@ class Handler(SimpleHTTPRequestHandler):
                 entry = draft_entry(path)
                 if entry["hidden"] and entry["person"] != who and (query.get("hidden") or [""])[0] != "1":
                     continue
+                raw = target.read_bytes()
+                entry["markdown"] = point_media(raw.decode("utf-8"), served_media(REPO_ROOT / piece))
+                # recorded: the file on disk is its newest commit, so a take can name that commit.
+                entry["recorded"] = bool(entry["sha"]) and git_blob(path).stdout == raw
                 entries.append(entry)
-        return self.reply(200, {"drafts": entries})
+            answer = {"drafts": entries}
+            if (query.get("away") or [""])[0] == "1":
+                answer["away"] = versions_away(piece, who)
+        return self.reply(200, answer)
 
     @file_errors
     def api_drafts_write(self):
@@ -3187,20 +3245,66 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.reply(403, {"error": "That draft path is unavailable."})
                 path = target.relative_to(REPO_ROOT).as_posix()
                 text = "---\ntitle: " + json.dumps(title, ensure_ascii=False) + "\nhidden: false\nmoved: false\n---\n"
+                if body.get("copy") is True:
+                    # A version starts as the article: its body, with who made it and from which commit.
+                    article = (REPO_ROOT / piece / "article.md").read_text("utf-8")
+                    name = re.sub(r"\s*<[^>]*>\s*$", "", AUTHORS.get(who) or who)
+                    text = ("---\ntitle: " + json.dumps(title, ensure_ascii=False) + "\nby: " + json.dumps(name, ensure_ascii=False) +
+                            "\nbase: " + git("log", "-1", "--format=%H", "--", piece + "/article.md").stdout.strip() + "\n---\n" +
+                            article[len(draft_header(article)):])
                 sha = commit_files({target: text.encode("utf-8")}, "Create draft " + target.name, writing_session(who))
                 return self.reply(200, dict(draft_entry(path), ok=True, sha=sha))
             path = draft_path(body.get("path"))
             if not path or not path.startswith(piece + "/drafts/"):
                 return self.reply(403, {"error": "Choose a draft belonging to this article."})
+            if action in ("away", "restore", "record") and DRAFT_RE.fullmatch(path)[1] != who:
+                return self.reply(403, {"error": "Only the version's writer can put it away, bring it back or commit it."})
+            if action == "record":
+                # A version an agent wrote but did not commit: commit that one file, as the page showed it.
+                target = sandbox_path(REPO_ROOT, path)
+                if target is None or not target.is_file():
+                    return self.reply(404, {"error": "That version is not in the drafts folder."})
+                raw = target.read_bytes()
+                if point_media(raw.decode("utf-8"), served_media(REPO_ROOT / piece)) != body.get("markdown"):
+                    return self.reply(409, {"error": "The version changed since it was opened. Open the comparison again."})
+                if b"\r" in raw:
+                    return self.reply(422, {"error": CRLF_VERSION})
+                head = git("log", "-1", "--format=%H", "--", path).stdout.strip()
+                if head and git_blob(path).stdout == raw:
+                    return self.reply(200, dict(draft_entry(path), ok=True, sha=head, recorded=True))
+                sha = commit_files({target: raw}, "Commit version " + target.name + ", written by " + (draft_field(raw.decode("utf-8"), "by") or "an agent"),
+                                   writing_session(who))
+                return self.reply(200, dict(draft_entry(path), ok=True, sha=sha, recorded=True))
+            if action == "restore":
+                if (REPO_ROOT / path).exists():
+                    return self.reply(409, {"error": "That version is already open."})
+                shown = git_blob(path, commit=body.get("sha")) if SHA_RE.fullmatch(str(body.get("sha") or "")) else None
+                if shown is None or shown.returncode:
+                    return self.reply(404, {"error": "That version is not in this article's history."})
+                if b"\r" in shown.stdout:
+                    return self.reply(422, {"error": "This version has Windows line endings, which this writing space does not keep, "
+                                                     "so it cannot come back as a file. Its text stays under From history."})
+                sha = commit_files({REPO_ROOT / path: shown.stdout}, "Bring back version " + Path(path).name, writing_session(who))
+                return self.reply(200, dict(draft_entry(path), ok=True, sha=sha))
             if not draft_current(path, body.get("base")):
                 return self.reply(409, {"error": "The draft changed. Open it again before continuing."})
             target = REPO_ROOT / path
             text = target.read_text("utf-8")
             header = draft_header(text)
+            if action == "away":
+                if b"\r" in target.read_bytes():
+                    return self.reply(422, {"error": CRLF_VERSION})  # it could never be brought back (review 2 N3)
+                # Put away: the file leaves the list in one commit; its text stays one commit back.
+                sha = commit_files({target: None}, "Put away version " + target.name, writing_session(who))
+                return self.reply(200, {"path": path, "ok": True, "sha": sha})
             if action == "hide":
                 if DRAFT_RE.fullmatch(path)[1] != who or type(body.get("hidden")) is not bool:
                     return self.reply(403, {"error": "Only the draft's person can change its visibility."})
-                replacement = re.sub(r"(?m)^hidden: (true|false)$", "hidden: " + str(body["hidden"]).lower(), header)
+                field = "hidden: " + str(body["hidden"]).lower()
+                replacement = re.sub(r"(?m)^hidden: (true|false)$", field, header)
+                if replacement == header and not re.search(r"(?m)^hidden: ", header):
+                    # A version made by Copy the article has no hidden: line yet; add it before the closing ---.
+                    replacement = re.sub(r"(\r?\n)---(\r?\n)?$", lambda m: m.group(1) + field + m.group(1) + "---" + (m.group(2) or ""), header, count=1)
                 sha = commit_files({target: (replacement + text[len(header):]).encode("utf-8")},
                                    ("Hide draft " if body["hidden"] else "Show draft ") + target.name, writing_session(who))
             elif action == "move":
@@ -3604,6 +3708,16 @@ class Handler(SimpleHTTPRequestHandler):
             people = writing_session(body.get("who"))
         except ValueError as error:
             return self.reply(400, {"ok": False, "reason": "invalid-who", "error": str(error)})
+        taken = body.get("taken", [])
+        if not isinstance(taken, list) or len(taken) > 3 or not all(isinstance(item, str) and taken_real(item, path) for item in taken):
+            return self.reply(400, {"ok": False, "reason": "invalid-taken",
+                                    "error": "taken names up to three versions of this article as path@commit"})
+        if taken:
+            # A take never brings a CR into the article (review 2 N1); the page compares LF text.
+            here = REPO_ROOT / path
+            if markdown.count("\r") > (here.read_text("utf-8").count("\r") if here.is_file() else 0):
+                return self.reply(400, {"ok": False, "reason": "taken-line-endings",
+                                        "error": "A take cannot bring Windows line endings into the article."})
 
         if not SAY_LOCK.acquire(timeout=5):
             return self.reply(409, {"ok": False, "reason": "busy",
@@ -3688,6 +3802,7 @@ class Handler(SimpleHTTPRequestHandler):
                                         "stdout": gate.stdout})
 
             author, trailers = session_commit(people)
+            trailers += "".join("\nTaken-from: " + item for item in taken)
             failure = ""
             try:
                 committed = git("commit", *author,
