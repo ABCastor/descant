@@ -2,7 +2,7 @@
 (function (global) {
   'use strict';
   var Castor = global.Castor || (global.Castor = {});
-  var OMIT = ['cw-mirror', 'footnote-ref', 'cw-fnref', 'footnote-definition', 'footnote-margin', 'footnote-inline',
+  var OMIT = ['cw-mirror', 'cw-mk', 'footnote-ref', 'cw-fnref', 'footnote-definition', 'footnote-margin', 'footnote-inline',
     'footnote-back', 'writer-note', 'castor-thread', 'castor-inline', 'castor-comments', 'cw-selmenu', 'cw-picker'];
 
   function currentSource() {
@@ -13,11 +13,13 @@
 
   function textFromNode(node, references) {
     if (node.nodeType === 3) return node.textContent;
+    if (node.hasAttribute && node.hasAttribute('data-castor-ui')) return '';
     var tag = (node.tagName || '').toLowerCase();
     if (/^(button|input|textarea|select|script|style|svg|audio|video|embed|iframe)$/.test(tag)) return '';
     if (node.getAttribute && node.getAttribute('data-type') === 'frontmatter') return '';
     if (node.classList && OMIT.some(function (name) { return node.classList.contains(name); })) return '';
-    if (node.classList && node.classList.contains('cw-edit')) {
+    if (node.classList && node.classList.contains('cw-edit') &&
+        !Array.prototype.some.call(node.childNodes || [], function (child) { return child.nodeType === 1; })) {
       var parsed = Castor.md.parse(node.textContent, { references: references });
       return bodyText(parsed) + '\n\n';
     }
@@ -63,6 +65,24 @@
     return clean(textFromNode(range.cloneContents(), references));
   }
 
+  function selectionHtml(range) {
+    var references = Castor.md.parse(currentSource()).references;
+    var holder = global.document.createElement('div');
+    holder.appendChild(range.cloneContents());
+    // A complete editor host contains source; partial runs already contain
+    // their rich elements and only need their hidden source marks removed.
+    Array.prototype.forEach.call(holder.querySelectorAll('.cw-edit'), function (host) {
+      if (host.children.length) return;
+      var doc = Castor.md.parse(host.textContent, { references: references });
+      host.innerHTML = doc.blocks.filter(function (b) { return b.type !== 'frontmatter' && b.type !== 'footnote-def' && b.type !== 'reference-def'; })
+        .map(function (b) { return b.html; }).join('');
+    });
+    var omit = OMIT.map(function (name) { return '.' + name; }).join(',');
+    Array.prototype.forEach.call(holder.querySelectorAll(omit + ',[data-castor-ui],button,input,textarea,select,script,style,svg,audio,video,embed,iframe,[data-type="frontmatter"]'), function (node) { node.remove(); });
+    Array.prototype.forEach.call(holder.querySelectorAll('[contenteditable]'), function (node) { node.removeAttribute('contenteditable'); });
+    return holder.innerHTML;
+  }
+
   function showFallback(text) {
     var document = global.document, previous = document.activeElement;
     var dialog = document.createElement('dialog'); dialog.className = 'castor-export-dialog';
@@ -95,5 +115,5 @@
     }
   }
 
-  Castor.export = { articleText: articleText, selectionText: selectionText, copyArticle: copyArticle, showFallback: showFallback };
+  Castor.export = { articleText: articleText, selectionText: selectionText, selectionHtml: selectionHtml, copyArticle: copyArticle, showFallback: showFallback };
 })(window);

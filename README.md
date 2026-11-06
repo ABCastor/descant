@@ -36,6 +36,17 @@ git pull
 
 This replaces the app inside your writing space and leaves your articles, their history and your name as they are. Add `--dir` if your space is not in `~/Descant`.
 
+## Markdown and inline HTML
+
+Descant saves plain Markdown. In two cases Markdown cannot keep what you see, so Descant writes a little inline HTML instead:
+
+- **Spaces at the start of a paragraph.** Markdown drops them, or turns an indented paragraph into a code block, so Descant keeps them inside `<span style="white-space:pre">`.
+- **Styles Markdown cannot nest or mark exactly.** Bold, italic, highlight or strikethrough that overlap, or that start or end inside a word next to punctuation, are written as `<strong>`, `<em>`, `<mark>` or `<del>`. Superscript and subscript are always `<sup>` and `<sub>`.
+
+Two smaller uses: an empty `<span></span>` can separate a web address from the text right after it or keep adjacent code spans apart, and plain `<span>` tags keep spaces at the edge of an article link's words. Ordinary bold and italic still use `**` and `*`, code uses backticks, and HTML already in your text is kept when you edit it.
+
+Shift+Enter saves a Markdown line break as two trailing spaces and a newline. You can also save paragraphs split across source lines and headings underlined with `===` or `---`.
+
 ## The handwriting font
 
 Descant's handwritten touches use Rando Sans, which this repository does not include; without it they fall back to another font. To use it, download Rando Sans from https://beaumaher.gumroad.com/l/rando-sans (by Beau Maher, free, SIL Open Font License), save the regular weight as `app/fonts/randosans-500-sharpie.woff2` in your copy of this repository (`~/descant-app` above), then run `./install.sh --update`. Git ignores the file there, so later updates keep it. The comment page below needs it.

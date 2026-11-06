@@ -45,6 +45,31 @@
     var value = C.md.parse(text).frontmatter.tags;
     return Array.isArray(value) ? value.slice() : value ? [String(value)] : [];
   }
+  // Count whole words (or hyphenated phrases), folding simple English plurals.
+  function suggestTags(text, available, chosen) {
+    function stem(word) { return word.replace(/ies$/, 'y').replace(/(ch|sh|ss|x|z)es$/, '$1').replace(/([^s])s$/, '$1'); }
+    function tokens(value) { return (String(value || '').toLowerCase().match(/[a-z0-9]+/g) || []).map(stem); }
+    var parsed = C.md.parse(text), fields = parsed.frontmatter;
+    var body = String(text).replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
+    var sections = [fields.title, fields.subtitle, body].map(tokens);
+    var selected = chosen.map(normalizeTag), seen = [];
+    return available.filter(function (entry) {
+      if (!entry.onSite || typeof entry.tag !== 'string') return false;
+      var tag = normalizeTag(entry.tag);
+      if (selected.indexOf(tag) >= 0 || seen.indexOf(tag) >= 0) return false;
+      seen.push(tag); return true;
+    }).map(function (entry) {
+      var phrase = tokens(entry.tag), count = 0;
+      if (phrase.length) sections.forEach(function (words) {
+        words.forEach(function (_, i) {
+          if (phrase.every(function (word, offset) { return words[i + offset] === word; })) count++;
+        });
+      });
+      return { tag: normalizeTag(entry.tag), count: count };
+    }).filter(function (entry) { return entry.count > 0; }).sort(function (a, b) {
+      return b.count - a.count || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0);
+    }).slice(0, 4).map(function (entry) { return entry.tag; });
+  }
   function tagPicker(box, site, changed, locked) {
     var tags = tagsIn(source()), suggestions = [], liveAvailable = false, generation = 0, active = -1, options = [];
     var group = el('div'); group.className = 'descant-tags'; box.appendChild(group);
@@ -55,11 +80,20 @@
     input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list'); input.setAttribute('aria-controls', 'descant-tag-list');
     input.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-describedby', 'descant-tag-message'); row.appendChild(input);
     var list = el('div'); list.id = 'descant-tag-list'; list.className = 'descant-tag-list'; list.setAttribute('role', 'listbox'); list.setAttribute('aria-label', words.suggestions); list.hidden = true; group.appendChild(list);
+    var suggested = el('div'); suggested.className = 'descant-tag-suggestions'; suggested.setAttribute('role', 'group'); suggested.setAttribute('aria-label', 'Suggested tags'); suggested.hidden = true; group.appendChild(suggested);
     var message = el('p'); message.id = 'descant-tag-message'; message.className = 'descant-tag-message'; message.setAttribute('role', 'status'); message.setAttribute('aria-live', 'polite'); group.appendChild(message);
     function isNew(tag) { return liveAvailable && !suggestions.some(function (s) { return s.tag === tag && s.onSite; }); }
     function mark(node, tag) { if (isNew(tag)) { var n = el('small', words.newTag); n.className = 'descant-tag-new'; node.appendChild(n); } }
     function close() { list.hidden = true; active = -1; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); }
     function renderChips() {
+      suggested.replaceChildren();
+      var ranked = suggestTags(source(), suggestions, tags);
+      suggested.hidden = !ranked.length;
+      if (ranked.length) { var caption = el('span', 'Suggested '); caption.className = 'descant-tag-message'; suggested.appendChild(caption); }
+      ranked.forEach(function (tag) {
+        var chip = button(tag, function () { add(tag); }); chip.className = 'descant-tag-chip'; chip.setAttribute('aria-label', 'Add tag ' + tag);
+        chip.disabled = locked(); suggested.appendChild(chip);
+      });
       chips.replaceChildren();
       tags.forEach(function (tag) {
         var chip = el('span', tag); chip.className = 'descant-tag-chip'; mark(chip, tag);
@@ -119,7 +153,7 @@
       } else if (e.key === 'Tab') close();
     });
     function load() {
-      if (!site.value) { message.textContent = ''; return Promise.resolve(); }
+      if (!site.value) { suggestions = []; close(); renderChips(); message.textContent = ''; return Promise.resolve(); }
       var selected = site.value, held = ++generation; suggestions = []; liveAvailable = false; close(); renderChips();
       message.textContent = words.loading;
       return request('/api/site-tags?site=' + encodeURIComponent(selected)).then(function (data) {
@@ -166,7 +200,7 @@
     var p = piece(), live = p.live;
     if (!live) return 'Not published';
     var prefix = 'Live on ' + live.site;
-    if (!live.article_sha256) return prefix + ', version unknown';
+    if (!canDiff()) return prefix + '. Descant has no record of which version. Update the live version to record it.';
     if (p.article_sha256_now === live.article_sha256 && source() === p.savedMarkdown) return prefix + ', matches what you are reading';
     return prefix + ', changed since ' + date(live.published_at);
   }
@@ -174,7 +208,7 @@
   function statusWords() {
     var p = piece(), live = p.live;
     if (!live) return 'Not published';
-    if (!live.article_sha256) return 'Website version unknown';
+    if (!canDiff()) return 'Live, version not recorded';
     return p.article_sha256_now === live.article_sha256 && source() === p.savedMarkdown ? 'Matches website' : 'Unpublished changes';
   }
   /* A personal installation (someone's own Descant) has no Castor sites to publish to. */
@@ -259,7 +293,7 @@
     var live = piece().live, words = statusWords();
     // One dot, like the green dot that marks where you are in the article tabs:
     // green = the live version is what you are reading, amber = changed since, grey = not live.
-    var code = !live ? 'none' : !live.article_sha256 ? 'unknown' : words === 'Matches website' ? 'match' : 'changed';
+    var code = !live ? 'none' : !canDiff() ? 'unknown' : words === 'Matches website' ? 'match' : 'changed';
     marker.setAttribute('data-state', code);
     var long = el('span', words), short = el('span', code === 'none' ? 'Not live' : code === 'changed' ? 'Changed' : 'Live');
     long.className = 'live-long'; short.className = 'live-short';
@@ -325,7 +359,7 @@
       if (captured !== epoch || who !== founder() || article !== path) return;
       if (!clean() || source() !== original) { steps.replaceChildren(el('p', 'Save first')); return; }
       if (!site.value || picker.pending() || tagsRequired()) { syncSheet(); return; }
-      busy = true; go.disabled = true; site.disabled = true; picker.lock(); paint();
+      busy = true; pendingButton(true, 'Publishing…'); go.disabled = true; site.disabled = true; picker.lock(); paint();
       var selected = site.value, success = null;
       return request(helper + '/health').catch(function () {
         steps.appendChild(el('p', 'Publishing runs from your Mac. Start it with:'));
@@ -369,12 +403,19 @@
       }).catch(function (error) { if (sheet === box) steps.appendChild(el('p', error.message)); })
         .finally(function () { busy = false; go.disabled = false; site.disabled = false; picker.lock(); if (syncSheet) syncSheet(); paint(); });
     });
+    function pendingButton(waiting, label) {
+      go.className = 'descant-primary' + (waiting ? ' castor-pending' : '');
+      if (waiting) go.setAttribute('aria-busy', 'true'); else go.removeAttribute('aria-busy');
+      go.textContent = waiting ? label : 'Publish';
+    }
     var saveStatus = el('p'); saveStatus.className = 'descant-tag-save'; saveStatus.setAttribute('role', 'status'); saveStatus.setAttribute('aria-live', 'polite');
     box.appendChild(saveStatus);
     syncSheet = function () {
       if (sheet !== box || busy) return;
       var waiting = !clean() || source() !== original, required = tagsRequired();
       var configured = health && health.sites && health.sites[site.value] === 'ready';
+      var savingTags = waiting && tagsChanged && ['ready', 'saved', 'unsaved', 'saving'].indexOf(C.saver.state()) >= 0;
+      pendingButton(savingTags, 'Saving tags…');
       go.disabled = !site.value || waiting || required || picker.pending() || checking || healthFailed || !configured;
       availability.textContent = checking ? 'Checking the publishing connection.' : healthFailed ? 'The publishing helper is not running on this Mac. Ask your agent to start it with the command above.'
         : !site.value ? '' : !configured ? 'Publishing is not set up for ' + site.value + '. Ask your agent to connect this site.' : '';
@@ -417,5 +458,5 @@
     }
     paint(); if (!loadedEvidence()) refresh();
   }
-  C.publishState = { withTagsSource: withTagsSource, normalizeTag: normalizeTag, mount: mount, state: state, statusWords: statusWords, reason: reason, open: function () { if (personal()) { if (C.commands && C.commands.run) C.commands.run('publish.setup'); return; } return confirm(); }, comparison: comparison, refresh: refresh };
+  C.publishState = { suggestTags: suggestTags, withTagsSource: withTagsSource, normalizeTag: normalizeTag, mount: mount, state: state, statusWords: statusWords, reason: reason, open: function () { if (personal()) { if (C.commands && C.commands.run) C.commands.run('publish.setup'); return; } return confirm(); }, comparison: comparison, refresh: refresh };
 })(typeof window !== 'undefined' ? window : globalThis);

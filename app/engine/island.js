@@ -94,12 +94,16 @@
   function updateViewportBaseline() {
     var vv = viewport(), scale = vv && vv.scale || 1;
     var width = vv && vv.width ? vv.width * scale : global.innerWidth || S.app && S.app.clientWidth || 0;
-    var height = vv ? vv.height * scale : global.innerHeight;
+    // WebKit keeps the layout viewport full-height while its visual viewport
+    // shrinks for the keyboard, including when rotating with editing focused.
+    // Pair layout dimensions: orientation events can precede layout resize.
+    var layoutHeight = Math.abs(width - global.innerWidth) < 1 ? global.innerHeight || 0 : 0;
+    var height = Math.max(layoutHeight, vv ? vv.height * scale : global.innerHeight || 0);
     var orientation = global.screen && global.screen.orientation;
     var direction = orientation ? String(orientation.angle == null ? orientation.type : orientation.angle)
       : global.orientation == null ? '' : String(global.orientation);
     // Keyboard resize retains the layout width. Rotation and Split View start
-    // a new baseline, including while the native editing host retains focus.
+    // a new full-layout baseline, even with the native keyboard still open.
     if (S.viewportOrientation !== direction ||
         Math.abs(width - S.viewportWidth) > Math.max(24, S.viewportWidth * .05)) {
       S.viewportWidth = width;
@@ -139,10 +143,11 @@
     root.className = 'command-island';
     root.setAttribute('aria-label', 'Writing commands');
     root.dataset.open = '0';
-    var split = toolbarChoice === 'split';
+    var writing = !!(Castor.capsule && touchScreen());
+    var split = !writing && toolbarChoice === 'split';
     var symbols = split || toolbarChoice === 'symbols' || (toolbarChoice !== 'words' && touchScreen());
     if (symbols) root.dataset.toolbar = 'symbols';
-    root.dataset.arrangement = split ? 'split' : 'combined';
+    root.dataset.arrangement = writing ? 'writing' : split ? 'split' : 'combined';
 
     var clip = DOC.createElement('div');
     clip.className = 'command-island-clip';
@@ -175,10 +180,17 @@
       { id: 'redo', label: 'Redo', title: 'Redo' },
       { id: 'hide-keyboard', label: 'Hide keyboard', title: 'Hide keyboard' }
     ].forEach(function (def) {
-      if (split && def.id === 'hide-keyboard') return;
+      if ((split || writing) && def.id === 'hide-keyboard') return;
       var button = createButton(def, symbols);
       actions.appendChild(button); actionButtons.push(button);
     });
+    if (writing) {
+      while (actions.firstChild) row.appendChild(actions.firstChild);
+      var saveSlot = DOC.createElement('span'); saveSlot.id = 'writing-save-slot';
+      actions.appendChild(saveSlot);
+      var done = createButton({ id: 'done', label: 'Done', title: 'Done' }, false);
+      actions.appendChild(done); actionButtons.push(done);
+    }
     root.appendChild(actions);
     if (split) {
       root.appendChild(clip);
@@ -203,7 +215,7 @@
   }
 
   function ensureDesktopHistory() {
-    if (S.desktopActions || !DOC) return;
+    if (S.desktopActions || !DOC || Castor.capsule) return;
     var line = DOC.getElementById('footline');
     var footer = line && line.querySelector('.foot-meta');
     if (!footer) return;
@@ -225,56 +237,13 @@
     if (S.app) S.app.dataset.touchFormat = '0';
   }
 
-  function caretRect() {
-    var caret = DOC.querySelector('.cw-caret:not([hidden])');
-    if (caret) {
-      var cr = caret.getBoundingClientRect();
-      if (cr.height) return cr;
-    }
-    var snapshot = Castor.frameReads ? Castor.frameReads.selection() : null;
-    var sel = snapshot ? snapshot.sel : global.getSelection && global.getSelection();
-    var range = snapshot ? snapshot.range : sel && sel.rangeCount ? sel.getRangeAt(0) : null;
-    if (range) {
-      var r = range.getBoundingClientRect();
-      if (r.height) return r;
-    }
-    return null;
-  }
-
   function place() {
-    if (!S.root || S.root.dataset.open !== '1') return;
-    if (S.root.dataset.docked === '1') return;
-    var frame = (S.frame || DOC.documentElement).getBoundingClientRect();
-    var vv = viewport();
-    var visibleBottom = Math.min(frame.bottom, vv ? (vv.offsetTop + vv.height) : frame.bottom);
-    var footer = DOC.getElementById('footline');
-    var footerBox = footer && footer.getBoundingClientRect();
-    if (footerBox && footerBox.height && footerBox.top >= frame.top) visibleBottom = Math.min(visibleBottom, footerBox.top);
-    var phone = mode() === 'phone';
-    if (phone) {
-      S.root.style.maxWidth = '';
-    } else {
-      var column = S.article && S.article.closest ? S.article.closest('.page-column') : null;
-      var columnRect = column && column.getBoundingClientRect();
-      var rootStyle = Castor.frameReads ? Castor.frameReads.style(S.root) : global.getComputedStyle(S.root);
-      var left = parseFloat(rootStyle.left) || 0;
-      var room = columnRect ? Math.floor(columnRect.left - frame.left - left - 12) : Math.floor(frame.width * .28);
-      S.root.style.maxWidth = Math.max(1, room) + 'px';
+    if (!S.root || !S.app) return;
+    if (Castor.capsule && touchScreen()) {
+      var bottom = S.root.dataset.open === '1' ? S.root.getBoundingClientRect().bottom : 0;
+      var value = Math.round(bottom * 100) / 100 + 'px';
+      if (S.app.style.getPropertyValue('--writing-row-bottom') !== value) S.app.style.setProperty('--writing-row-bottom', value);
     }
-    var h = S.root.offsetHeight || 44;
-    var top = visibleBottom - frame.top - h - 10;
-    var caret = phone && caretRect();
-    if (caret) {
-      var islandTop = frame.top + top, islandBottom = islandTop + h;
-      if (islandBottom > caret.top - 7 && islandTop < caret.bottom + 7) {
-        var above = caret.top - frame.top - h - 10;
-        var below = caret.bottom - frame.top + 10;
-        if (above >= 8) top = above;
-        else if (frame.top + below + h <= visibleBottom - 6) top = below;
-      }
-    }
-    top = Math.max(8, Math.min(top, visibleBottom - frame.top - h - 6));
-    S.root.style.top = Math.round(top) + 'px';
   }
 
   function currentBlock(saved) {
@@ -337,6 +306,12 @@
       var history = e.historyState && e.historyState();
       if (!history || !history[id] || typeof e[id] !== 'function') return false;
       e[id](); refreshControls(); return true;
+    }
+    if (id === 'done') {
+      var active = DOC.activeElement;
+      if (e.hideKeyboard) e.hideKeyboard();
+      else if (active && active.blur) active.blur();
+      refresh(); return true;
     }
     if (id === 'hide-keyboard') {
       var savedKeyboard = keyboardCaret();
@@ -429,7 +404,7 @@
     if (editFocused() && saved) S.keyboardCaret = saved;
     (S.actions || []).concat(S.desktopActions || []).forEach(function (button) {
       var id = button.dataset.command;
-      button.disabled = id === 'hide-keyboard' ? !saved : !state[id];
+      button.disabled = id === 'done' ? false : id === 'hide-keyboard' ? !saved : !state[id];
       if (id === 'hide-keyboard') {
         var up = keyboardUp(), label = up ? 'Hide keyboard' : 'Show keyboard';
         button.setAttribute('title', label);
@@ -440,7 +415,8 @@
       button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
     });
     if (S.row) Array.prototype.forEach.call(S.row.children, function (button) {
-      button.disabled = !e || !!(e.can && !e.can(button.dataset.command));
+      var id = button.dataset.command;
+      button.disabled = id === 'undo' || id === 'redo' ? !state[id] : !e || !!(e.can && !e.can(id));
       button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
     });
   }
@@ -454,17 +430,19 @@
     if (!allowed()) { remove(); refreshControls(); return; }
     var docked = touchScreen();
     if (S.root && S.root.dataset.docked !== (docked ? '1' : '0')) remove();
+    if (S.root && Castor.capsule && docked && S.root.dataset.arrangement !== 'writing') remove();
     ensure();
     if (S.app) S.app.dataset.touchFormat = docked ? '1' : '0';
     var value = policy();
     S.root.dataset.layout = mode() === 'phone' ? 'phone' : 'computer';
-    var show = docked || (!S.dismissed && !focusActive() &&
+    var show = Castor.capsule && docked ? keyboardUp() : docked || (!S.dismissed && !focusActive() &&
       (value === 'always' || (S.focused && keyboardUp())));
     S.root.dataset.open = show ? '1' : '0';
     S.root.setAttribute('aria-hidden', show ? 'false' : 'true');
     refreshHeading();
     refreshControls();
-    if (show) global.requestAnimationFrame(place);
+    if (Castor.touchLayout) Castor.touchLayout.placeSave();
+    if (show || Castor.capsule && docked) global.requestAnimationFrame(place);
   }
 
   function onFocusIn(event) {

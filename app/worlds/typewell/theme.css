@@ -13,7 +13,6 @@
   --ink-2: #5D584E;
   --ink-3: #6F685C;
   --ink-dim: #6d6c67;
-  --focus-wash: color-mix(in srgb, var(--star) 5%, transparent);
   --focus-paragraph: on;
   --focus-fade: 400ms;
   /* Nothing recedes until the writer places the caret or a selection. */
@@ -81,7 +80,6 @@
     --ink-2: #A8A296;
     --ink-3: #938C80;
     --ink-dim: #918f88;
-    --focus-wash: color-mix(in srgb, var(--star) 7%, transparent);
     --accent: #EEE9DE;
     --accent-ink: #000000;
     --accent-text: #A8A296;
@@ -114,7 +112,6 @@
   --ink-2: #A8A296;
   --ink-3: #938C80;
   --ink-dim: #918f88;
-  --focus-wash: color-mix(in srgb, var(--star) 7%, transparent);
   --accent: #EEE9DE;
   --accent-ink: #000000;
   --accent-text: #A8A296;

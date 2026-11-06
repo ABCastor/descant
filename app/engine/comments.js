@@ -23,6 +23,10 @@
     'delete': 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
     restore: 'M9 14 4 9l5-5M4 9h11a5 5 0 0 1 0 10h-4',
     agree: 'M7 11v9H4v-9h3Zm0 0 4-7a2 2 0 0 1 3 2l-1 5h5a2 2 0 0 1 2 2.3l-1.3 6A2 2 0 0 1 16.7 20H7',
+    done: 'M5 12l4 4L19 6',
+    reply: 'M9 7 4 12l5 5M4 12h9a7 7 0 0 1 7 7',
+    link: 'M10 14l4-4M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0M16 8l1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0',
+    authors: 'M16 21v-2a5 5 0 0 0-10 0v2M15 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0M19 10l3 3-3 3',
     inline: 'M4 5h16M4 9h16M7 13h10v6H7z',
     beside: 'M3 5h11M3 9h11M3 13h11M3 17h8M17 5h4v8h-4z'
   };
@@ -41,6 +45,7 @@
 
   // The engine has no shared util module, so each module carries these three.
   function on(name, fn) {
+    if (name === 'editor:mirror' && Castor.editor && Castor.editor.on) { Castor.editor.on(name, fn); return; }
     if (Castor.bus && typeof Castor.bus.on === 'function') { Castor.bus.on(name, fn); return; }
     DOC.addEventListener(name, fn);
   }
@@ -172,6 +177,7 @@
     commentActions: null, actionScope: '', actionJournal: {}, actionReceipts: {}, actionErrors: {}, actionSending: {}, actionEditor: null, actionProjection: {}, actionProjectionActors: {},
     loadedPath: Castor.piecePath ? Castor.piecePath() : '',
     active: null,            // thread id lifted right now
+    revealId: null,          // selected card stays visible through deferred panel layouts
     expanded: {},            // thread id -> true
     candidates: {},          // equally good positions, offered for an explicit choice
     resolved: {},            // thread id -> {blockId, start, end} | null
@@ -1243,11 +1249,8 @@
     }
   }
 
-  // Wrap [start,end) of the block's text in <mark class="commented">. The range can
-  // straddle inline markup (<em>, <a>, <code>), so we walk the text nodes, wrap the
-  // slice of each one that falls inside the range, and let box-decoration-break:clone
-  // make the several marks read as one continuous highlight. Nothing is moved and no
-  // element boundary is crossed, so the inline markup survives untouched.
+  // Marks retain the existing hit targets and pins, never the paint. A single
+  // native range bridges all inline nodes, including visible Markdown markers.
   function wrapRange(node, start, end, threadId, done, className, by, personColor) {
     if (!(end > start)) return false;
     node = passageTextNode(node);
@@ -1297,16 +1300,22 @@
       if (!marks.length) continue;
       var host = marks[marks.length - 1];
       var endpoint = r ? r.blockId + ':' + r.end : thread.id;
-      var slot = endpoints[endpoint] || 0;
-      endpoints[endpoint] = slot + 1;
+      if (endpoints[endpoint]) continue;
+      var siblings = list.filter(function (t) {
+        var at = S.resolved[t.id];
+        return at && r && at.blockId === r.blockId && at.end === r.end;
+      });
+      endpoints[endpoint] = true;
       var pin = el('span', 'castor-comment-pin');
       pin.setAttribute('data-castor-ui', 'comment-mark');
       pin.setAttribute('contenteditable', 'false');
-      pin.style.setProperty('--comment-pin-slot', slot);
       var button = el('button', 'castor-comment-mark');
       button.type = 'button';
       var count = 1 + (thread.replies || []).length;
       var label = COMMENT_LABELS.open + (thread.author || 'Unknown') + ', ' + count + COMMENT_LABELS.messages + (thread.done ? COMMENT_LABELS.done : '');
+      button.setAttribute('data-thread', thread.id);
+      button.setAttribute('data-thread-count', String(siblings.length || 1));
+      if (siblings.length > 1) label += ', ' + siblings.length + ' threads at this passage';
       button.setAttribute('aria-label', label);
       button.setAttribute('data-count', String(count));
       var svg = DOC.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -1328,13 +1337,158 @@
     }
   }
 
+  // Project the mirror onto reading text, retaining the source positions for
+  // painting. Revealing ** must not change which passage a comment belongs to.
+  function commentProjection(block) {
+    var root = passageTextNode(block.el);
+    if (root === block.el) return { id: block.id, el: block.el, text: block.text, raw: block.text,
+      offsets: Array.from({ length: block.text.length }, function (_, i) { return i; }) };
+    var walker = DOC.createTreeWalker(root, global.NodeFilter.SHOW_TEXT, null);
+    var text = '', raw = '', offsets = [], node;
+    while ((node = walker.nextNode())) {
+      var parent = node.parentElement;
+      if (parent && parent.closest('[data-castor-ui]')) continue;
+      var value = node.nodeValue || '', at = raw.length;
+      raw += value;
+      if (parent && parent.closest('.cw-mk')) continue;
+      text += value;
+      for (var i = 0; i < value.length; i++) offsets.push(at + i);
+    }
+    return { id: block.id, el: block.el, text: text, raw: raw, offsets: offsets };
+  }
+
+  function commentReadingAnchor(anchor) {
+    var md = Castor.md, source = anchor.blockText || '';
+    if (!md || !md.parse || /[\uE000\uE001]/.test(source)) return anchor;
+    var place = resolveBlock(anchor, true, [{ id: 'source', text: source }]);
+    if (!place || place.ambiguous) return anchor;
+    var at = place.start;
+    // Parse in the original context: a selection may contain only the closing
+    // ** of a bold phrase. Parsing the quote alone would keep that stray marker.
+    var marked = source.slice(0, at) + '\uE000' + anchor.quote + '\uE001' + source.slice(at + anchor.quote.length);
+    var text = md.parse(marked).blocks.map(function (b) { return b.text; }).join('\n');
+    var start = text.indexOf('\uE000'), end = text.indexOf('\uE001');
+    if (start < 0 || end <= start) return anchor;
+    return { quote: text.slice(start + 1, end), prefix: text.slice(Math.max(0, start - 32), start),
+      suffix: text.slice(end + 1, end + 33), blockText: text.slice(0, start) + text.slice(start + 1, end) + text.slice(end + 1) };
+  }
+
+  var commentPaintKeys = [], commentPaintStyle = null, commentPaintObserver = null, commentPaintPage = null;
+  function paintCommentRanges() {
+    if (!S.page || !DOC.createRange) return;
+    var native = global.CSS && global.CSS.highlights && typeof global.Highlight === 'function';
+    commentPaintKeys.forEach(function (key) { if (native) global.CSS.highlights.delete(key); });
+    commentPaintKeys = [];
+    var old = S.page.querySelectorAll('[data-castor-ui="comment-wash"]');
+    for (var o = 0; o < old.length; o++) old[o].remove();
+    var marks = S.page.querySelectorAll('mark.commented'), groups = new Map(), rules = '';
+    for (var i = 0; i < marks.length; i++) {
+      var id = marks[i].getAttribute('data-thread');
+      if (!groups.has(id)) groups.set(id, []);
+      groups.get(id).push(marks[i]);
+    }
+    groups.forEach(function (parts) {
+      var nodes = [];
+      parts.forEach(function (mark) {
+        var walk = DOC.createTreeWalker(mark, global.NodeFilter.SHOW_TEXT, null), n;
+        while ((n = walk.nextNode())) if (n.nodeValue && !(n.parentElement && n.parentElement.closest('[data-castor-ui]'))) nodes.push(n);
+      });
+      if (!nodes.length) return;
+      var first = nodes[0], last = nodes[nodes.length - 1], range = DOC.createRange();
+      range.setStart(first, 0); range.setEnd(last, last.nodeValue.length);
+      var key = 'castor-comment-' + commentPaintKeys.length, mark = parts[0];
+      commentPaintKeys.push(key);
+      parts.forEach(function (part) { part.setAttribute('data-comment-paint', key); });
+      var by = mark.getAttribute('data-by');
+      var colour = by === 'agent' ? 'var(--comment-agent, #006770)' :
+        cleanHexColor(mark.style.getPropertyValue('--comment-person')) ||
+          (by === 'both' ? 'var(--ink)' : 'var(--comment-human, #C4552A)');
+      var current = parts.some(function (part) { return part.classList.contains('is-lifted') || part.classList.contains('is-paired'); });
+      // Mix onto paper rather than transparent: overlapping comments cannot stack
+      // their alpha and erase text contrast. Every range uses full text ink.
+      var wash = 'color-mix(in srgb,' + colour + ' var(--comment-' + (current ? 'current' : 'rest') + '-tint,' + (current ? '34%' : '24%') + '),var(--paper,#F7F4EC))';
+      rules += '::highlight(' + key + '){background-color:' + wash + ';color:var(--ink)}' +
+        '[data-castor-ui="comment-wash"][data-comment-paint="' + key + '"]{background:' + wash + '}';
+      if (native) {
+        global.CSS.highlights.set(key, new global.Highlight(range));
+      } else {
+        // Old engines get the same single band per line, in block coordinates.
+        // Scrolling then moves text and wash together without a scroll listener.
+        var block = mark.closest('.cw-block') || mark.parentElement;
+        var box = block.getBoundingClientRect(), lines = [];
+        var rects = [];
+        nodes.forEach(function (text) {
+          var textRange = DOC.createRange();
+          textRange.setStart(text, 0); textRange.setEnd(text, text.nodeValue.length);
+          Array.prototype.push.apply(rects, textRange.getClientRects());
+        });
+        rects.forEach(function (r) {
+          if (!r.width || !r.height) return;
+          var line = lines.find(function (l) { return Math.abs(l.top - r.top) < 2 && r.left <= l.right + 1 && r.right >= l.left - 1; });
+          if (line) {
+            line.left = Math.min(line.left, r.left); line.right = Math.max(line.right, r.right);
+            line.top = Math.min(line.top, r.top); line.bottom = Math.max(line.bottom, r.bottom);
+          } else lines.push({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+        });
+        block.style.isolation = 'isolate';
+        lines.forEach(function (line) {
+          var band = el('span');
+          band.setAttribute('data-castor-ui', 'comment-wash');
+          band.setAttribute('data-comment-paint', key); band.setAttribute('aria-hidden', 'true');
+          band.style.cssText = 'position:absolute;pointer-events:none;z-index:-1;border-radius:2px';
+          band.style.left = (line.left - box.left) + 'px'; band.style.top = (line.top - box.top) + 'px';
+          band.style.width = (line.right - line.left) + 'px'; band.style.height = (line.bottom - line.top) + 'px';
+          block.appendChild(band);
+        });
+      }
+    });
+    if (!commentPaintStyle) {
+      commentPaintStyle = el('style'); commentPaintStyle.id = 'castor-comment-paint';
+      DOC.head.appendChild(commentPaintStyle);
+    }
+    if (commentPaintStyle.textContent !== rules) commentPaintStyle.textContent = rules;
+  }
+
+  function observeCommentPaint() {
+    if (!global.MutationObserver || commentPaintPage === S.page) return;
+    if (commentPaintObserver) commentPaintObserver.disconnect();
+    commentPaintPage = S.page;
+    commentPaintObserver = new global.MutationObserver(function (changes) {
+      // Existing click/hover handlers own these classes. Observe them instead of
+      // changing their behavior; no geometry is measured on the native path.
+      if (changes.some(function (change) { return change.target.matches && change.target.matches('mark.commented'); })) paintCommentRanges();
+    });
+    commentPaintObserver.observe(S.page, { subtree: true, attributes: true, attributeFilter: ['class'] });
+  }
+
   function applyMarks(quick, blockId) {
     var target = blockId && blockById(blockId);
     if (blockId && !target) return;
     clearMarks(target && target.el);
-    var list = visibleThreads();
+    var list = visibleThreads(), projections = null;
     for (var i = 0; i < list.length; i++) {
       var t = list[i], r = S.resolved[t.id];
+      // The resolver counts the revealed markers. Retry the same exact-anchor
+      // rules against reading text before declaring a focused passage detached.
+      if (!projections) projections = pageBlocks().map(commentProjection);
+      var rawBlock = r && projections.find(function (p) { return p.id === r.blockId; });
+      var chosen = t.anchor.chosenPlace && rawBlock && r.end > r.start && rawBlock.raw.slice(r.start, r.end) === t.anchor.quote;
+      var hit = !chosen && resolveBlock(t.anchor, true, projections);
+      if (!chosen && !hit && (!rawBlock || rawBlock.raw.slice(r.start, r.end) !== t.anchor.quote)) {
+        hit = resolveBlock(commentReadingAnchor(t.anchor), true, projections);
+      }
+      if (hit && hit.ambiguous) {
+        r = null; S.resolved[t.id] = null;
+        S.candidates[t.id] = hit.candidates.map(function (candidate) {
+          var p = projections.find(function (b) { return b.id === candidate.blockId; });
+          return { blockId: candidate.blockId, start: p.offsets[candidate.start], end: p.offsets[candidate.end - 1] + 1 };
+        });
+      } else if (hit) {
+        var projected = projections.find(function (p) { return p.id === hit.blockId; });
+        r = { blockId: hit.blockId, start: projected.offsets[hit.start], end: projected.offsets[hit.end - 1] + 1 };
+        S.resolved[t.id] = r;
+        S.candidates[t.id] = [];
+      }
       if (!r || r.start < 0 || (blockId && r.blockId !== blockId)) continue;
       var b = target || blockById(r.blockId);
       if (b) wrapRange(b.el, r.start, r.end, t.id, t.done, null, threadBy(t), threadAnchorColor(t));
@@ -1357,6 +1511,8 @@
       var lifted = (target ? target.el : S.page).querySelectorAll('mark.commented[data-thread="' + S.active + '"]');
       for (var j = 0; j < lifted.length; j++) lifted[j].classList.add('is-lifted');
     }
+    paintCommentRanges();
+    observeCommentPaint();
   }
 
   /* ------------------------------------------------------------ the messages */
@@ -1415,21 +1571,33 @@
     return personKind((msg && msg.author) || '', msg && msg.by);
   }
 
+  function avatarInk(color) {
+    var hex = color.slice(1);
+    if (hex.length === 3) hex = hex.replace(/./g, function (c) { return c + c; });
+    var rgb = hex.match(/../g).map(function (c) {
+      var v = parseInt(c, 16) / 255;
+      return v <= .04045 ? v / 12.92 : Math.pow((v + .055) / 1.055, 2.4);
+    });
+    return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722 > .179 ? '#000000' : '#ffffff';
+  }
+
   function provenanceLine(msg, thread, root) {
     var kind = authorKind(msg), name = msg.author || 'Unknown author', person = configuredPerson(msg);
     if (person) name = person.name + (kind === 'agent' ? "'s agent" : '');
     var line = el('div', 'castor-prov');
     var row = el('div', 'castor-prov-author');
-    var credit = el('span', null, (root && thread.done ? '✓ ' : '') + name);
-    credit.setAttribute('data-by', kind);
+    var credit = el('span', 'castor-comment-name', (root && thread.done ? '✓ ' : '') + name);
+    credit.setAttribute('data-by', kind);credit.title=name;
     var pColor = messagePersonColor(msg);
     if (pColor) credit.style.color = 'color-mix(in srgb, var(--ink) 65%, ' + pColor + ')';
     row.appendChild(credit);
-    var dot = el('span', 'castor-person-dot', kind === 'agent' ? 'a' : '');
+    var dot = el('span', 'castor-person-dot',kind==='agent'?'a':'');
+    dot.setAttribute('data-initial', kind === 'agent' ? 'a' : name.charAt(0).toUpperCase());
     dot.setAttribute('aria-hidden', 'true');
     if (kind === 'agent') dot.setAttribute('data-agent', 'true');
     if (pColor) dot.style.backgroundColor = kind === 'agent'
       ? 'color-mix(in srgb, ' + pColor + ' 35%, white)' : pColor;
+    if (pColor && kind !== 'agent') dot.style.color = avatarInk(pColor);
     row.appendChild(dot);
     if (kind === 'agent') {
       var modelName = msg.model || (/^claude/i.test(msg.author || '') ? 'Claude' : null);
@@ -1444,13 +1612,13 @@
       var stamp = String(msg.created), when = new Date(stamp);
       if (/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(stamp) && !isNaN(when.getTime())) {
         var time = el('time', 'castor-comment-time');
-        time.setAttribute('datetime', stamp);
+        time.setAttribute('datetime', stamp);time.title=stamp;
         time.textContent = stamp.length === 10 ? stamp : new Intl.DateTimeFormat('en-GB', {
           day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
         }).format(when);
         var dated = el('span', 'castor-comment-date');
         dated.appendChild(time);
-        line.appendChild(dated);
+        row.insertBefore(dated, row.querySelector('.castor-comment-model'));
       }
     }
     if (msg.basis) {
@@ -1471,6 +1639,7 @@
     box.appendChild(el('div', 'castor-msg-text', msg.actions&&msg.actions.withdrawn?'Comment withdrawn. You can restore your own comment.':msg.text));
     if(msg.actions)box.setAttribute('data-message-ref',msg.actions.messageRef);
     messageActions(box,msg,thread,root);
+    if(!root&&S.replySending&&S.replySending[msg.id]){var sending=el('button','castor-reply-sending','Sending...');sending.type='button';pendingControl(sending,true,'Sending...');box.appendChild(sending);}
     if (msg.offer) box.appendChild(offerNode(msg, thread));
     return box;
   }
@@ -1522,9 +1691,9 @@
     var card = S.canvas && S.canvas.querySelector('.castor-thread[data-thread-id="' + id + '"]');
     if (card) {
       card.classList.toggle('is-paired', !!on);
-      if (on && from === 'page' && S.wrap && card.scrollIntoView) {
+      if (on && from === 'page' && S.wrap) {
         S.selfScroll = true;
-        try { card.scrollIntoView({ block: 'nearest' }); } catch (e) { /* older engines */ }
+        revealPanelCard(card);
         global.setTimeout(function () { S.selfScroll = false; }, 60);
       }
     }
@@ -1627,6 +1796,7 @@
     var selection = global.getSelection && global.getSelection();
     if (selection && !selection.isCollapsed && String(selection).trim()) return;
     open(thread.id);
+    flash(thread);
   }
 
   function threadCard(thread, opts) {
@@ -1673,16 +1843,16 @@
 
     // Every message of the thread is shown; a thread has no collapse of its own (I4).
     var replies = thread.replies || [];
-    card.appendChild(messageNode(thread, thread, true));
+    card.appendChild(messageNode(thread,thread,true));
     for (var i = 0; i < replies.length; i++) card.appendChild(messageNode(replies[i], thread, false));
 
     var acts = el('div', 'castor-acts');
-    var reply = el('button', null, 'Reply');
+    var reply = withIcon(el('button', null, 'Reply'), 'reply');
     reply.type = 'button';
     reply.addEventListener('click', function (e) { e.stopPropagation(); openReply(thread, card); });
     acts.appendChild(reply);
 
-    var link=el('button',null,'Copy link');link.type='button';
+    var link=withIcon(el('button',null,'Copy link'),'link');link.type='button';
     link.addEventListener('click',function(e){e.stopPropagation();copyThreadLink(thread,card);});acts.appendChild(link);
 
     /* The raw status word, when the store has one. Ours is a boolean; the article
@@ -1716,7 +1886,12 @@
   function acknowledgedAction(r,git){var proof=actionReceipt(r.opId,reviewing()?r.scope:undefined);return !!(proof&&sameActionRequest(proof.request,r.request)&&exactActionReceipt(proof.receipt,r.request)&&(!git||proof.receipt.gitDurable===true));}
   function actionPending(scope,path){return actionRecords(scope,path).some(function(r){return r.submitted&&!acknowledgedAction(r,true);});}
   function actionCanRefresh(){return actionPending()&&!unsavedWords(S.threads,S.serverCopies[key()]||[]).length;}
-  function storeActionReceipt(proof){var k=key()+'.action-receipts.'+proof.receipt.opId;S.actionReceipts[k]=proof;try{global.localStorage.setItem(k,JSON.stringify(proof));}catch(e){/* Never remove original requests without durable proof. */}}
+  function storeActionReceipt(proof){var k=key()+'.action-receipts.'+proof.receipt.opId;S.actionReceipts[k]=proof;try{global.localStorage.setItem(k,JSON.stringify(proof));}catch(e){return;}clearAcknowledgedActions();}
+  function clearAcknowledgedActions(){actionRecords().forEach(function(r){var proof;try{proof=JSON.parse(global.localStorage.getItem(r.scope+'.action-receipts.'+r.opId)||'null');}catch(e){return;}if(r.submitted&&proof&&sameActionRequest(proof.request,r.request)&&exactActionReceipt(proof.receipt,r.request)&&proof.receipt.gitDurable)removeActionRecord(r);});}
+  function removeActionRecord(r){delete S.actionJournal[r.key];delete S.actionErrors[r.opId];try{global.localStorage.removeItem(r.key);global.localStorage.removeItem(r.scope+'.action-errors.'+r.opId);}catch(e){/* Retry cleanup on next render. */}}
+  function pendingControl(button,busy,label){button.classList.toggle('castor-pending',!!busy);button.setAttribute('aria-busy',String(!!busy));button.disabled=!!busy;if(busy)button.textContent=label;return button;}
+  function actionBusy(thread,msg,action){return actionRecords().some(function(r){return r.threadId===thread.id&&r.messageRef===(msg&&msg.actions&&msg.actions.messageRef||'')&&r.request.action===action&&S.actionSending[r.opId];});}
+
   // One unfinished edit per message and writer (F4). Records are ordered by their
   // last change, or by the time in their id for those written before it was kept.
   function draftTime(r){if(typeof r.updated==='number')return r.updated;var m=/^(?:a|draft)([0-9a-z]+)-/.exec(r.opId||'');return m?parseInt(m[1],36):0;}
@@ -1732,8 +1907,9 @@
   function preserveActionProjection(raw,scope){var known=(S.actionProjection[scope]||{})[raw.id]||(scope===key()?S.threads.filter(function(t){return t.id===raw.id&&!t.pending;})[0]:null);if(!known)return raw;var actor=actionProjectionActor(),sameReactor=!!actor&&(S.actionProjectionActors[scope]||{})[raw.id]===actor;var incoming=JSON.parse(JSON.stringify(raw));function message(now,old){if(!now||!old||!now.actions||!old.actions||now.actions.messageRef!==old.actions.messageRef)return;if(now.actions.rev<old.actions.rev){now.text=old.text;var permissions=now.actions.permissions,reactions=now.actions.reactions;now.actions=JSON.parse(JSON.stringify(old.actions));now.actions.permissions=permissions;now.actions.reactions=reactions;}if(sameReactor)Object.keys(old.actions.reactions||{}).forEach(function(k){var prior=old.actions.reactions[k],next=now.actions.reactions&&now.actions.reactions[k];if(next&&next.rev<prior.rev)now.actions.reactions[k]=JSON.parse(JSON.stringify(prior));});}message(incoming,known);(incoming.replies||[]).forEach(function(r){message(r,(known.replies||[]).filter(function(k){return k.actions&&r.actions&&k.actions.messageRef===r.actions.messageRef;})[0]);});if(incoming.statusActions&&known.statusActions&&incoming.statusActions.rev<known.statusActions.rev){incoming.done=known.done;incoming.status=known.status;incoming.statusActions.rev=known.statusActions.rev;}return incoming;}
   function canonicalThreads(threads,scope){return threads.map(function(raw){var fresh=normalise(preserveActionProjection(raw,scope));if(fresh.actions||fresh.statusActions)rememberActionProjection(fresh,scope);return fresh;});}
   function applyActionThread(raw,scope){var thread=normalise(preserveActionProjection(raw,scope));rememberActionProjection(thread,scope);var server=(S.serverCopies[scope]||[]).slice(),index=server.findIndex(function(t){return t.id===thread.id;});if(index<0)server.push(thread);else server[index]=thread;S.serverCopies[scope]=server;if(scope===key()&&available())S.threads=mergeServer(server,null,S.threads,scope).threads;}
-  function sendAction(record){if(!record||S.actionSending[record.opId])return;if(!sameActionActor(record.actor)||record.scope!==key()||record.path!==piecePath()){actionNotice(record,'unsaved','This action belongs to another or unknown writer. Its exact words are kept here.');return;}record.submitted=true;if(!journalAction(record))return;var scope=record.scope;S.actionSending[record.opId]=true;actionNotice(record,'pending','Saving this comment action.');closeActionEditor();layout();
-    global.fetch('/api/whoami',{cache:'no-store'}).then(function(response){if(!response.ok)throw new Error('Your identity could not be confirmed.');return response.json();}).then(function(role){var correct=record.actor.kind==='reader'?sameReviewer({id:record.actor.id},reviewerIdentity(role)):role&&role.role==='founder';if(!correct||!sameActionActor(record.actor)||key()!==scope||piecePath()!==record.path)throw new Error('The original writer could not be confirmed.');return global.fetch('/api/comments/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(record.request)});}).then(function(response){return response.json().then(function(payload){if(!sameActionActor(record.actor)||key()!==scope)return;if(!response.ok){if(payload.thread)applyActionThread(payload.thread,scope);var reason=payload.reason==='stale-action'?'The comment changed. Compare your exact pending words with the current comment.':payload.error||payload.reason||'The server refused this action.';var failed=new Error(reason);failed.status=response.status;throw failed;}var receipt=payload.receipt;if(!exactActionReceipt(receipt,record.request))throw new Error('The server did not confirm this exact action.');storeActionReceipt({request:record.request,receipt:receipt});if(payload.thread)applyActionThread(payload.thread,scope);delete S.actionErrors[record.opId];actionNotice(record,receipt.gitDurable?'saved':'pending',receipt.gitDurable?'Comment action saved.':'Saved to the review service. Waiting for its Git copy.');});}).catch(function(error){S.actionErrors[record.opId]=String(error.message||error);try{global.localStorage.setItem(scope+'.action-errors.'+record.opId,S.actionErrors[record.opId]);}catch(e){}if(key()===scope&&sameActionActor(record.actor))actionNotice(record,'unsaved',S.actionErrors[record.opId]+' Your exact input remains on this device.');}).then(function(){delete S.actionSending[record.opId];if(key()===scope)layout();});
+  function sendAction(record, afterAppend){if(!record||S.actionSending[record.opId])return;if(!sameActionActor(record.actor)||record.scope!==key()||record.path!==piecePath()){actionNotice(record,'unsaved','This action belongs to another or unknown writer. Its exact words are kept here.');return;}record.submitted=true;if(!journalAction(record))return;var scope=record.scope;S.actionSending[record.opId]=true;actionNotice(record,'pending','Saving this comment action.');closeActionEditor();layout();
+    var identify=function(){return global.fetch('/api/whoami',{cache:'no-store'});};
+    (afterAppend ? afterAppend.then(identify) : identify()).then(function(response){if(!response.ok)throw new Error('Your identity could not be confirmed.');return response.json();}).then(function(role){var correct=record.actor.kind==='reader'?sameReviewer({id:record.actor.id},reviewerIdentity(role)):role&&role.role==='founder';if(!correct||!sameActionActor(record.actor)||key()!==scope||piecePath()!==record.path)throw new Error('The original writer could not be confirmed.');return global.fetch('/api/comments/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(record.request)});}).then(function(response){return response.json().then(function(payload){if(!sameActionActor(record.actor)||key()!==scope)return;if(!response.ok){if(payload.thread)applyActionThread(payload.thread,scope);var reason=payload.reason==='stale-action'?'The comment changed. Compare your exact pending words with the current comment.':payload.error||payload.reason||'The server refused this action.';var failed=new Error(reason);failed.status=response.status;throw failed;}var receipt=payload.receipt;if(!exactActionReceipt(receipt,record.request))throw new Error('The server did not confirm this exact action.');storeActionReceipt({request:record.request,receipt:receipt});if(payload.thread)applyActionThread(payload.thread,scope);if(record.request.action==='resolve'&&payload.thread&&payload.thread.done)showDoneUndo(payload.thread);delete S.actionErrors[record.opId];actionNotice(record,receipt.gitDurable?'saved':'pending',receipt.gitDurable?'Comment action saved.':'Saved to the review service. Waiting for its Git copy.');});}).catch(function(error){S.actionErrors[record.opId]=String(error.message||error);try{global.localStorage.setItem(scope+'.action-errors.'+record.opId,S.actionErrors[record.opId]);}catch(e){}if(key()===scope&&sameActionActor(record.actor))actionNotice(record,'unsaved',S.actionErrors[record.opId]+' Your exact input remains on this device.');}).then(function(){delete S.actionSending[record.opId];if(key()===scope)layout();});
   }
   function captureActionEditor(editor){
     editor=editor||S.actionEditor;if(!editor)return true;
@@ -1767,14 +1943,14 @@
     var saveEdit=el('button',null,'Save edit');saveEdit.type='button';saveEdit.addEventListener('click',function(e){
       e.stopPropagation();if(S.actionEditor!==editor)return;
       if(!textarea.value.trim()){status.textContent='Write a comment before saving.';return;}
-      if(!captureActionEditor(editor))return;sendAction(editor.record);
+      if(!captureActionEditor(editor))return;sendAction(editor.record, save.pending);
     });node.appendChild(saveEdit);
     var close=el('button',null,'Close edit');close.type='button';close.addEventListener('click',function(e){e.stopPropagation();if(S.actionEditor===editor)closeActionEditor();layout();});node.appendChild(close);
     textarea.addEventListener('input',function(){if(!sameActionActor(editor.record.actor)){if(S.actionEditor===editor)closeActionEditor();else captureActionEditor(editor);layout();return;}captureActionEditor(editor);});
     textarea.addEventListener('blur',function(){captureActionEditor(editor);});
     textarea.addEventListener('compositionend',function(){captureActionEditor(editor);});
     textarea.addEventListener('keydown',function(e){if(e.isComposing||e.keyCode===229)return;if(e.key==='Escape'){e.preventDefault();if(S.actionEditor===editor)closeActionEditor();layout();}});
-    S.actionEditor=editor;editor.persisted=journalAction(record);layout();textarea.focus();if(textarea.setSelectionRange)try{textarea.setSelectionRange(textarea.value.length,textarea.value.length);}catch(e){}
+    S.actionEditor=editor;editor.persisted=journalAction(record);layout();focusPanelCard(thread.id,textarea);if(textarea.setSelectionRange)try{textarea.setSelectionRange(textarea.value.length,textarea.value.length);}catch(e){}scheduleCommentFocus();
   }
   function messageActions(box,msg,thread,root){var c=actionCapability(),a=msg.actions;function button(row,label,run){var b=el('button',null,label);b.type='button';b.addEventListener('click',function(e){e.stopPropagation();run();});row.appendChild(b);return b;}
     // One row: reactions and Done, then the message's own Edit and Delete, all in view (F8).
@@ -1783,20 +1959,23 @@
     var canResolve=c&&root&&thread.statusActions&&thread.statusActions.canResolve&&c.actor.kind==='founder-capability';
     if(c&&((a&&a.permissions.react)||canResolve)){
       var reactions=el('div','castor-comment-reactions');
-      if(a&&a.permissions.react)(c.reactionKeys||[]).filter(function(k){return k==='agree';}).forEach(function(k){var state=a.reactions[k];if(!state)return;var b=withIcon(button(reactions,'Agree'+(state.count?' '+state.count:''),function(){sendAction(newAction(thread,msg,'reaction',{reaction:k,active:!state.active}));}),k);b.setAttribute('aria-pressed',String(state.active));});
+      if(a&&a.permissions.react)(c.reactionKeys||[]).filter(function(k){return k==='agree';}).forEach(function(k){var state=a.reactions[k];if(!state)return;var b=withIcon(button(reactions,(state.active?'Agreed':'Agree')+(state.count?' '+state.count:''),function(){try{global.localStorage.setItem('castor.comments.agree-hint','seen');}catch(e){}sendAction(newAction(thread,msg,'reaction',{reaction:k,active:!state.active}));}),k);b.setAttribute('aria-pressed',String(state.active));b.title=(state.active?'Remove':'Record')+' your Agree reaction. This does not change the article or mark the comment done.';b.setAttribute('aria-label',b.title);pendingControl(b,actionBusy(thread,msg,'reaction'),'Saving...');});
       if(canResolve){
-        var done=button(reactions,'✓ Done',function(){sendAction(newAction(thread,null,thread.done?'reopen':'resolve'));});
+        var done=withIcon(button(reactions,'Done',function(){sendAction(newAction(thread,null,thread.done?'reopen':'resolve'));}),'done');
         done.setAttribute('aria-pressed',String(thread.done));
-        done.title=thread.done?'Reopen this comment':'Mark this comment done';
+        done.title=thread.done?'Reopen this comment':'Move this comment to Done';
+        pendingControl(done,actionBusy(thread,null,thread.done?'reopen':'resolve'),'Saving...');
         done.setAttribute('aria-label',done.title);
         if(reactions.children.length>2)reactions.insertBefore(done,reactions.children[1]);
       }
       actionRow.appendChild(reactions);
     }
-    if(own)actionRow.appendChild(own);
+    if(own){for(var ownIndex=0;ownIndex<own.children.length;ownIndex++){var control=own.children[ownIndex];control.title=control.textContent;control.setAttribute('aria-label',control.textContent);}actionRow.appendChild(own);}
     if(actionRow.children.length)box.appendChild(actionRow);
+    var hintThread=byId(S.active)||visibleThreads().filter(function(t){return S.resolved[t.id]||S.expanded['lost-'+t.id];})[0];
+    if(root&&c&&a&&a.permissions.react&&hintThread&&hintThread.id===thread.id){var seen=false;try{seen=global.localStorage.getItem('castor.comments.agree-hint')==='seen';}catch(e){}if(!seen)box.appendChild(el('p','castor-action-hint','Agree adds a reaction. Words and status stay unchanged.'));}
     var drafts=c&&a?consolidateEditDrafts(thread,msg):[],older=drafts.slice(1);
-    actionRecords().filter(function(r){return r.threadId===thread.id&&r.messageRef===(a&&a.messageRef||'')&&!acknowledgedAction(r,true)&&older.indexOf(r)<0;}).forEach(function(r){if(S.actionEditor&&S.actionEditor.record.opId===r.opId)return;var pending=el('div','castor-comment-pending');pending.appendChild(el('p',null,r.submitted?'Pending '+r.request.action:'Unfinished edit'));if(r.text)pending.appendChild(el('p','castor-comment-pending-text',r.text));var error=S.actionErrors[r.opId];if(!error)try{error=global.localStorage.getItem(r.scope+'.action-errors.'+r.opId);}catch(e){}if(error)pending.appendChild(el('p','castor-action-status',error));if(r.submitted&&acknowledgedAction(r,false)){pending.appendChild(el('p','castor-action-status','Saved to the review service. Waiting for its Git copy.'));var check=button(pending,'Check Git copy',function(){sendAction(r);});check.disabled=!!S.actionSending[r.opId];}else if(r.submitted){var retry=button(pending,'Retry action',function(){sendAction(r);});retry.disabled=!!S.actionSending[r.opId];}if(r.request.action==='edit'&&c&&a&&a.permissions.edit&&!a.withdrawn)button(pending,r.submitted?'Compare and edit':'Resume edit',function(){openActionEditor(thread,msg,r);});box.appendChild(pending);});
+    actionRecords().filter(function(r){return r.threadId===thread.id&&r.messageRef===(a&&a.messageRef||'')&&!acknowledgedAction(r,true)&&older.indexOf(r)<0;}).forEach(function(r){if(S.actionEditor&&S.actionEditor.record.opId===r.opId)return;var pending=el('div','castor-comment-pending');pending.appendChild(el('p',null,r.submitted?'Pending '+r.request.action:'Unfinished edit'));if(r.text)pending.appendChild(el('p','castor-comment-pending-text',r.text));var error=S.actionErrors[r.opId];if(!error)try{error=global.localStorage.getItem(r.scope+'.action-errors.'+r.opId);}catch(e){}if(error)pending.appendChild(el('p','castor-action-status',error));if(r.submitted&&acknowledgedAction(r,false)){pending.appendChild(el('p','castor-action-status','Saved to the review service. Waiting for its Git copy.'));var check=button(pending,'Check Git copy',function(){sendAction(r);});pendingControl(check,S.actionSending[r.opId],'Saving...');}else if(r.submitted){var retry=button(pending,'Retry action',function(){sendAction(r);});pendingControl(retry,S.actionSending[r.opId],r.request.action==='edit'?'Saving...':'Sending...');}if(!S.actionSending[r.opId])button(pending,'Discard',function(){if(typeof global.confirm==='function'&&!global.confirm('Discard this pending action and its saved input?'))return;removeActionRecord(r);layout();});if(r.request.action==='edit'&&c&&a&&a.permissions.edit&&!a.withdrawn)button(pending,r.submitted?'Compare and edit':'Resume edit',function(){openActionEditor(thread,msg,r);});box.appendChild(pending);});
     if(older.length){
       // Earlier distinct versions of this edit stay until he discards them himself.
       var past=el('details','castor-comment-older');past.appendChild(el('summary',null,older.length===1?'1 older version':older.length+' older versions'));
@@ -1804,7 +1983,7 @@
       button(past,'Discard older versions',function(){if(typeof global.confirm==='function'&&!global.confirm('Discard the older versions of this edit? The newest stays.'))return;older.forEach(dropActionDraft);layout();});
       box.appendChild(past);
     }
-    if(root)actionRecords().filter(function(r){return r.threadId===thread.id&&!r.messageRef&&r.submitted&&!acknowledgedAction(r,true);}).forEach(function(r){var pending=el('div','castor-comment-pending');pending.appendChild(el('p',null,'Pending '+r.request.action));if(acknowledgedAction(r,false)){pending.appendChild(el('p',null,'Saved to the review service. Waiting for its Git copy.'));var check=button(pending,'Check Git copy',function(){sendAction(r);});check.disabled=!!S.actionSending[r.opId];}else{var retry=button(pending,'Retry action',function(){sendAction(r);});retry.disabled=!!S.actionSending[r.opId];}box.appendChild(pending);});
+    if(root)actionRecords().filter(function(r){return r.threadId===thread.id&&!r.messageRef&&r.submitted&&!acknowledgedAction(r,true);}).forEach(function(r){var pending=el('div','castor-comment-pending');pending.appendChild(el('p',null,'Pending '+r.request.action));if(acknowledgedAction(r,false)){pending.appendChild(el('p',null,'Saved to the review service. Waiting for its Git copy.'));var check=button(pending,'Check Git copy',function(){sendAction(r);});pendingControl(check,S.actionSending[r.opId],'Saving...');}else{var retry=button(pending,'Retry action',function(){sendAction(r);});pendingControl(retry,S.actionSending[r.opId],r.request.action==='edit'?'Saving...':'Sending...');}box.appendChild(pending);});
     if(S.actionEditor&&S.actionEditor.record.threadId===thread.id&&S.actionEditor.record.messageRef===(a&&a.messageRef)){if(sameActionActor(S.actionEditor.record.actor)&&S.actionEditor.record.scope===key()&&S.actionEditor.record.path===piecePath())box.appendChild(S.actionEditor.node);else closeActionEditor();}
   }
 
@@ -1819,9 +1998,20 @@
     showHeldActionEditorState(editor);S.lostBox.appendChild(editor.node);
   }
 
-  function renderActionRecovery(){if(!S.lostBox)return;actionRecords().filter(function(r){var thread=byId(r.threadId),present=thread&&(!r.messageRef||[thread].concat(thread.replies||[]).some(function(m){return m.actions&&m.actions.messageRef===r.messageRef;}));return !present&&!acknowledgedAction(r,true);}).forEach(function(r){var box=el('section','castor-comment-pending castor-action-recovery');box.appendChild(el('p',null,'Your pending '+r.request.action+' has no available comment. Its exact input is kept on this device.'));if(r.text)box.appendChild(el('p','castor-comment-pending-text',r.text));if(r.submitted&&actionCapability()){var retry=el('button',null,'Retry action');retry.type='button';retry.disabled=!!S.actionSending[r.opId];retry.addEventListener('click',function(e){e.stopPropagation();sendAction(r);});box.appendChild(retry);}S.lostBox.appendChild(box);});}
+  function renderActionRecovery(){if(!S.lostBox)return;clearAcknowledgedActions();actionRecords().filter(function(r){var thread=byId(r.threadId),present=thread&&(!r.messageRef||[thread].concat(thread.replies||[]).some(function(m){return m.actions&&m.actions.messageRef===r.messageRef;}));return !present&&!acknowledgedAction(r,true);}).forEach(function(r){var box=el('section','castor-comment-pending castor-action-recovery');box.appendChild(el('p',null,'Your pending '+r.request.action+' has no available comment. Its exact input is kept on this device.'));if(r.text)box.appendChild(el('p','castor-comment-pending-text',r.text));if(r.submitted&&actionCapability()){var retry=el('button',null,'Retry action');retry.type='button';retry.disabled=!!S.actionSending[r.opId];retry.addEventListener('click',function(e){e.stopPropagation();sendAction(r);});box.appendChild(retry);}S.lostBox.appendChild(box);});}
 
   function renderRecoveredComments() {
+    if (S.lostBox) journalRecords().filter(function (record) { return record.closed; }).forEach(function (record) {
+      var held = el('section', 'castor-comment-pending castor-recovered-comment');
+      held.appendChild(el('p', null, record.thread ? 'Closed reply draft' : 'Closed comment draft'));
+      held.appendChild(el('p', 'castor-action-status', 'Kept on this device. Resume when you want to use these words.'));
+      held.appendChild(el('p', 'castor-comment-pending-text', record.text));
+      var resume = el('button', null, 'Resume draft'); resume.type = 'button';
+      resume.addEventListener('click', function (event) {
+        event.stopPropagation(); closeComposer(); restoreComposer(record); layout(true);
+      });
+      held.appendChild(resume); S.lostBox.appendChild(held);
+    });
     if (!S.lostBox || !available()) return;
     var scope = key(), prefix = scope + '.recovered.', encodedScope = encodeURIComponent(scope), storage, copies = [];
     try {
@@ -1896,12 +2086,13 @@
     switchScope();
     thread = journalThread({ thread: thread.id }) || (record && thread);
     if (!thread) return;
+    if(!record){open(thread.id);card=panelCard(thread.id)||card;}
     var existing = card && card.querySelector('[data-castor-ui="reply"]');
-    if (existing) { existing.querySelector('textarea, .cw-field').focus(); return; }
+    if (existing) { focusPanelCard(thread.id,existing.querySelector('textarea, .cw-field')); return; }
     closeComposer();
     record = record || newComposerRecord(thread.anchor, thread.id);
     var selector = '[data-thread-id="' + thread.id + '"]';
-    card = (S.canvas && S.canvas.querySelector(selector)) || (S.page && S.page.querySelector(selector)) || card;
+    card = panelCard(thread.id) || (S.page && S.page.querySelector(selector)) || card;
     var box = el('div', 'castor-composer');
     box.setAttribute('data-castor-ui', 'reply');
     box.style.marginTop = '8px';
@@ -1909,8 +2100,11 @@
     box.appendChild(ta);
     var hint = el('div', 'castor-hint', 'Enter saves · Esc closes');
     box.appendChild(hint);
+    var send=el('button',null,'Send reply');send.type='button';send.addEventListener('click',function(e){e.stopPropagation();submit();});box.appendChild(send);
+    var cancel=el('button',null,'Cancel');cancel.type='button';cancel.addEventListener('click',function(e){e.stopPropagation();cancelComposer();});box.appendChild(cancel);
     if (card) card.appendChild(box);
     function submit() {
+      if(send.disabled)return false;
       var text = ta.value.trim();
       var journalled = rememberComposer();
       if (!text) { closeComposer(); return false; }
@@ -1923,15 +2117,17 @@
         author: record.author, principal: record.principal, reviewer: record.reviewer, reviewerIdentity: record.reviewerIdentity,
         by: 'human', created: new Date().toISOString(), basis: 'the thread', text: text
       };
-      target.replies.push(reply);
+      var prior=target.replies.findIndex(function(r){return r.id===reply.id;});
+      if(prior<0)target.replies.push(reply);else target.replies[prior]=reply;
       if (!save()) {
         target.replies.splice(target.replies.indexOf(reply), 1);
         if (journalled) hint.textContent = 'Reply was not saved. Your words are kept here.';
         return false;
       }
+      var sending=S.replySending||(S.replySending={});sending[reply.id]=true;
       finishComposer(reply.id);
-      S.expanded[target.id] = true;
-      layout();
+      S.expanded[target.id]=true;layout();
+      (save.pending||Promise.resolve()).then(function(){delete sending[reply.id];layout();});
       return true;
     }
     S.composer = { node: box, textarea: ta, hint: hint, record: record, submit: submit };
@@ -1945,11 +2141,11 @@
         submit();
       } else if (e.key === 'Escape' && !box.querySelector('.castor-at')) {
         e.preventDefault();
-        closeComposer();
+        cancelComposer();
       }
     });
     box.addEventListener('click', function (e) { e.stopPropagation(); });
-    ta.focus();
+    positionPanel();focusPanelCard(thread.id,ta);scheduleCommentFocus();
   }
 
   /* ------------------------------------------------------- rendering: page */
@@ -2029,10 +2225,10 @@
   }
 
   function renderPageThreads() {
-    clearPageUi();
     /* Quiet reading keeps comment bodies out of the prose flow. A declared
        margin can show the same thread without pushing paragraphs apart. */
-    if (quiet() && !marginRouted()) return;
+    if (quiet() && !marginRouted()) { clearPageUi(); return; }
+    var oldSlots = S.page.querySelectorAll('[data-castor-ui="thread-slot"]');
     var list = visibleThreads(), byBlock = {}, order = [];
     for (var i = 0; i < list.length; i++) {
       var r = S.resolved[list[i].id];
@@ -2044,11 +2240,25 @@
     for (var j = 0; j < order.length; j++) {
       var b = blockById(order[j]);
       if (!b) continue;
-      var slot = el('div', 'castor-thread-slot');
-      slot.setAttribute('data-castor-ui', 'thread-slot');
+      var threads = byBlock[order[j]], slot = null;
+      var signature = JSON.stringify([threads, S.expanded, S.actionJournal, S.actionReceipts, S.actionErrors, S.replySending, S.actionSending, S.actionEditor && S.actionEditor.record.opId, routed]);
+      for (var n = 0; n < oldSlots.length; n++) {
+        if (oldSlots[n].getAttribute('data-comment-block') === order[j]) { slot = oldSlots[n]; break; }
+      }
+      if (!slot) {
+        slot = el('div', 'castor-thread-slot');
+        slot.setAttribute('data-castor-ui', 'thread-slot');
+        slot.setAttribute('data-comment-block', order[j]);
+      }
+      // Keep the occupied slot through focus and viewport changes. Removing it
+      // first lets WebKit clamp/anchor the article against a temporarily short page.
+      if (slot._castorThreads !== signature) {
+        slot.textContent = '';
+        for (var k = 0; k < threads.length; k++) slot.appendChild(threadCard(threads[k], { quote: false }));
+        slot._castorThreads = signature;
+      }
       if (routed) slot.setAttribute('data-margin-route', 'comment');
-      var threads = byBlock[order[j]];
-      for (var k = 0; k < threads.length; k++) slot.appendChild(threadCard(threads[k], { quote: false }));
+      else slot.removeAttribute('data-margin-route');
       placed.push({ slot: slot, block: b.el });
     }
     if (routed) placed.forEach(function (p) {
@@ -2059,8 +2269,11 @@
         p.slot.dataset.marginAt = String(p.top);
         p.slot.dataset.marginAnchor = p.block.getAttribute('data-block-id');
       }
-      p.block.parentNode.insertBefore(p.slot, p.block.nextSibling);
+      if (p.block.nextSibling !== p.slot) p.block.parentNode.insertBefore(p.slot, p.block.nextSibling);
     });
+    for (var stale = 0; stale < oldSlots.length; stale++) {
+      if (!placed.some(function (p) { return p.slot === oldSlots[stale]; })) oldSlots[stale].remove();
+    }
   }
 
   /* ------------------------------------------------------ rendering: panel */
@@ -2129,6 +2342,23 @@
   function mountPanel(bodyEl) {
     S.panelEl = bodyEl;
     mountHeadShows(bodyEl);
+    bodyEl.addEventListener('pointerdown', holdCommentFocus);
+    bodyEl.addEventListener('mousedown', holdCommentFocus);
+    bodyEl.addEventListener('focusin', scheduleCommentFocus);
+    bodyEl.addEventListener('focusout', scheduleCommentFocus);
+    bodyEl.addEventListener('input', scheduleCommentFocus);
+    // The panel owns list scrolling, including detached cards and the footer.
+    // Capture intent before a child control can stop the event. Native scroll
+    // events also follow our own reveals, so they must never clear navigation.
+    function browseList(event) {
+      if (event.type === 'keydown' &&
+          (!/^(ArrowUp|ArrowDown|PageUp|PageDown|Home|End| )$/.test(event.key) ||
+           event.target.closest && event.target.closest('input, textarea, select, [contenteditable="true"]'))) return;
+      S.revealId = null;
+    }
+    ['wheel', 'touchstart', 'touchmove', 'pointerdown', 'keydown'].forEach(function (type) {
+      bodyEl.addEventListener(type, browseList, { passive: true, capture: true });
+    });
     bodyEl.textContent = '';
     var root = el('div', 'castor-comments');
 
@@ -2155,6 +2385,7 @@
     root.appendChild(S.wrap);
 
     bodyEl.appendChild(root);
+    bodyEl.appendChild(el('div','comments-agent-slot'));
     schedule();
   }
 
@@ -2187,17 +2418,19 @@
     if (S.filterBox._castorFilterStamp === stamp) return;
     S.filterBox._castorFilterStamp = stamp;
     S.filterBox.textContent = '';
+    var tabs=el('div','castor-status-tabs');tabs.setAttribute('role','group');tabs.setAttribute('aria-label','Comment status');S.filterBox.appendChild(tabs);
     ['open', 'done', 'all', 'withdrawn'].forEach(function (name) {
       var b = el('button', 'castor-word', name === 'open' ? 'Open' : name==='done'?'Done':name==='all'?'All':'Withdrawn');
       b.type = 'button';
       b.setAttribute('aria-pressed', String(S.filter === name));
       b.addEventListener('click', function () { S.filter = name; layout(); });
-      S.filterBox.appendChild(b);
+      tabs.appendChild(b);
     });
 
     var chooser = el('details', 'castor-author-filter');
     chooser.setAttribute('aria-label', 'Filter comments by author');
-    var summary = el('summary', null, S.authorFilter || 'All authors');
+    var summary = withIcon(el('summary'), 'authors');
+    summary.appendChild(el('span','castor-author-label',S.authorFilter || 'All authors'));summary.setAttribute('data-filtered',String(!!S.authorFilter));summary.title=S.authorFilter || 'All authors';summary.setAttribute('aria-label','Filter comments by author: '+(S.authorFilter || 'All authors'));
     chooser.appendChild(summary);
     chooser.addEventListener('keydown', function (event) {
       if (event.key === 'Escape') { event.preventDefault(); chooser.removeAttribute('open'); summary.focus(); }
@@ -2234,7 +2467,7 @@
     chooser.appendChild(menu);
     S.filterBox.appendChild(chooser);
 
-    if (done) S.filterBox.appendChild(el('span', 'castor-count', done + ' done'));
+
   }
 
   function toggle(label, hint, isOn, run) {
@@ -2285,12 +2518,14 @@
     /* Under the filter row whatever its height: one line is 24px, a narrow dock
        wraps it to two. */
     var foot = S.filterBox ? S.filterBox.offsetHeight : 0;
-    S.lostBox.style.top = (foot || 24) + 'px';
+    S.lostBox.style.top = S.panelLayout === 'list' ? '' : (foot || 24) + 'px';
     var lost = visibleThreads().filter(function (t) { return !S.resolved[t.id]; });
     if (!lost.length) return;
     var total = visibleThreads().length;
     if (lost.length >= BURST && !S.burstOpen) {
-      var band = el('div', 'castor-burst');
+      var band = el('details', 'castor-burst');
+      band.appendChild(el('summary', null, lost.length + ' comments without a passage'));
+      band.addEventListener('toggle', schedulePlace);
       band.setAttribute('data-castor-ui', 'burst');
       band.appendChild(el('p', 'castor-burst-line',
         lost.length + ' of ' + total + (total === 1 ? ' comment has' : ' comments have') +
@@ -2372,6 +2607,13 @@
   }
 
   function positionPanel() {
+    // Reserve the native form bar for the entire scrollport, including ordinary
+    // card actions and the agent footer, rather than only the focused field.
+    if (S.panelEl && S.panelEl.parentNode && S.panelEl.parentNode.getBoundingClientRect) {
+      var edge = S.panelEl.parentNode.getBoundingClientRect().bottom;
+      S.panelEl.style.marginBottom = Math.max(0, edge - commentViewport().bottom) + 'px';
+    }
+    positionDoneUndo();
     if (!S.canvas) return;
     var cards = S.canvas.querySelectorAll('.castor-thread');
     S.items = [];
@@ -2385,13 +2627,11 @@
     if (!S.canvas || !S.wrap || !S.page) return;
     if (S.panelLayout === 'list') {
       S.canvas.style.height = '';
+      S.canvas.style.paddingBottom = '';
       placeEmpty();
-      var top = 0;
-      if (S.filterBox) top += S.filterBox.offsetHeight;
-      if (S.lostBox && S.lostBox.offsetHeight) top += S.lostBox.offsetHeight;
-      if (S.emptyBox && !S.emptyBox.hidden) top += S.emptyBox.offsetHeight - (S.emptyOver || 0);
-      if (Math.abs((parseFloat(S.wrap.style.top) || 0) - top) > 0.5) S.wrap.style.top = top + 'px';
+      S.wrap.style.top = '';
       sizeLeaders(0, []);
+      if (S.revealId) revealPanelCard(panelCard(S.revealId));
       return;
     }
     placeEmpty();
@@ -2490,6 +2730,7 @@
     /* The leader belongs to the panel's gutter, so its coordinates stay with the
        scrolling canvas rather than spanning the viewport to the reading page. */
     sizeLeaders(layerH, placed);
+    if (S.revealId) revealPanelCard(panelCard(S.revealId));
   }
 
   function schedulePlace() {
@@ -2537,8 +2778,19 @@
   function renderPanelCards() {
     if (!S.canvas) return;
     var old = S.canvas.querySelectorAll('.castor-thread');
-    for (var i = 0; i < old.length; i++) old[i].remove();
     var list = visibleThreads().filter(function (t) { return !!S.resolved[t.id]; });
+    // Keep equal-endpoint threads together, in the same order as their single pin.
+    var endpoints = {}, order = [];
+    list.forEach(function (t) {
+      var r = S.resolved[t.id], key = r.blockId + ':' + r.end;
+      if (!endpoints[key]) { endpoints[key] = []; order.push(key); }
+      endpoints[key].push(t);
+    });
+    list = [].concat.apply([], order.map(function (key) { return endpoints[key]; }));
+    var signature = JSON.stringify([list, S.expanded, S.actionJournal, S.actionReceipts, S.actionErrors, S.replySending, S.actionSending, S.actionEditor && S.actionEditor.record.opId, S.storageKey]);
+    if (signature === S.panelCardsSignature && old.length === list.length) return;
+    S.panelCardsSignature = signature;
+    for (var i = 0; i < old.length; i++) old[i].remove();
     if (!list.length) return;
     for (var j = 0; j < list.length; j++) S.canvas.appendChild(threadCard(list[j], { quote: false }));
   }
@@ -2603,14 +2855,242 @@
   }
 
   function open(id) {
+    if (S.touchPeek) closeTouchPeek();
     var t = byId(id);
     if (!t) return;
+    var alreadyOpen = Castor.panels && Castor.panels.isOpen && Castor.panels.isOpen('comments');
     closePeek();
-    S.expanded[id] = true;
-    if (t.done && S.filter !== 'done') S.filter = 'done';
-    layout();
+    if(Castor.panels&&Castor.panels.open)Castor.panels.open('comments','right');
+    S.expanded[id] = true;S.expanded['lost-'+id]=true;
+    if(!S.resolved[id])S.burstOpen=true;
+    S.authorFilter='';
+    if(S.filter!=='all')S.filter=t.done?'done':'open';
+    S.active=id;
+    S.revealId=id;
+    layout(true);
     lift(id);
-    flash(t);
+    focusPanelCard(id);
+    if (!alreadyOpen) revealTouchPassage(id);
+  }
+
+  function panelCard(id){var selector='.castor-thread[data-thread-id="'+id+'"]';return S.panelEl&&S.panelEl.querySelector(selector);}
+  function focusPanelCard(id,field){var card=panelCard(id),target=field||card;if(!target)return;if(card)card.setAttribute('tabindex','-1');target.focus({preventScroll:true});if(card)revealPanelCard(card,field);}
+  function commentCaretRect(field) {
+    var selection = global.getSelection && global.getSelection();
+    if (selection && selection.rangeCount) {
+      var range = selection.getRangeAt(0);
+      if (field.contains(range.commonAncestorContainer)) {
+        range = range.cloneRange(); range.collapse(false);
+        var rects = range.getClientRects();
+        if (rects.length && rects[0].height) return rects[0];
+        // WebKit also returns no rect at an element boundary after bold. Walk
+        // adjacent text, skipping hidden Markdown markers and empty elements.
+        function adjacent(backward) {
+          var node = range.startContainer, offset = range.startOffset;
+          while (node && field.contains(node)) {
+            if (node.nodeType === 3) {
+              var length = node.nodeValue.length;
+              if (backward ? offset > 0 : offset < length) {
+                var probe = range.cloneRange(), at = backward ? offset - 1 : offset;
+                probe.setStart(node, at); probe.setEnd(node, at + 1);
+                var boxes = probe.getClientRects();
+                for (var i = backward ? boxes.length - 1 : 0; backward ? i >= 0 : i < boxes.length; i += backward ? -1 : 1) {
+                  if (boxes[i].height) return boxes[i];
+                }
+              }
+            } else if (node.childNodes && (backward ? offset > 0 : offset < node.childNodes.length)) {
+              node = node.childNodes[backward ? offset - 1 : offset];
+              offset = backward ? (node.nodeType === 3 ? node.nodeValue.length : node.childNodes.length) : 0;
+              continue;
+            }
+            if (node === field || !node.parentNode) break;
+            var parent = node.parentNode;
+            offset = Array.prototype.indexOf.call(parent.childNodes, node) + (backward ? 0 : 1);
+            node = parent;
+          }
+          return null;
+        }
+        var nearby = adjacent(true) || adjacent(false);
+        if (nearby) return nearby;
+      }
+    }
+    return field.getBoundingClientRect();
+  }
+
+  function holdCommentFocus(event) {
+    // Cancel only the focus-changing mouse default. Canceling pointerdown can
+    // suppress the subsequent touch click in WebKit.
+    if (event.type === 'pointerdown') return;
+    if (!event.target.closest || !event.target.closest('.castor-comment-editor button, .castor-composer > button, .castor-comment-undo button')) return;
+    if (S.actionEditor && holdsFocus(S.actionEditor.textarea) || S.composer && holdsFocus(S.composer.textarea)) event.preventDefault();
+  }
+
+  // WebKit can retarget the click after a focused field blurs and the sheet
+  // rerenders. Carry a short, stationary touch through pointerup, then consume
+  // its compatibility click. Mouse and keyboard clicks keep their native path.
+  function commentTouchStart(event) {
+    S.commentTouch = null; S.commentTouchClick = null;
+    if (event.pointerType !== 'touch' && event.pointerType !== 'pen' || event.isPrimary === false || event.button > 0) return;
+    var button = event.target.closest && event.target.closest('button');
+    if (!button || button.disabled ||
+        !(S.panelEl && S.panelEl.contains(button) || S.composer && S.composer.node.contains(button))) return;
+    var field = DOC.activeElement;
+    if (!(S.actionEditor && holdsFocus(S.actionEditor.textarea) || S.composer && holdsFocus(S.composer.textarea) ||
+          field && field.closest && field.closest('.cw-edit, textarea, [contenteditable="true"]'))) return;
+    S.commentTouch = { button: button, id: event.pointerId, x: event.clientX, y: event.clientY, rect: button.getBoundingClientRect() };
+    event.preventDefault();
+  }
+  function commentTouchMove(event) {
+    var touch = S.commentTouch;
+    if (touch && touch.id === event.pointerId && Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 8) S.commentTouch = null;
+  }
+  function commentTouchEnd(event) {
+    var touch = S.commentTouch;
+    if (!touch || touch.id !== event.pointerId) return;
+    S.commentTouch = null;
+    if (event.type === 'pointercancel' || touch.button.disabled ||
+        Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 8 ||
+        event.clientX < touch.rect.left || event.clientX > touch.rect.right ||
+        event.clientY < touch.rect.top || event.clientY > touch.rect.bottom) return;
+    event.preventDefault();
+    S.commentTouchClick = { id: touch.id, x: event.clientX, y: event.clientY, time: event.timeStamp };
+    touch.button.click();
+  }
+  function commentTouchClick(event) {
+    var touch = S.commentTouchClick;
+    if (!touch || event.isTrusted === false || !event.detail) return;
+    if (event.timeStamp - touch.time > 800) { S.commentTouchClick = null; return; }
+    if (event.pointerId !== touch.id && Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 8) return;
+    S.commentTouchClick = null;
+    event.preventDefault(); event.stopImmediatePropagation();
+  }
+
+  function scheduleCommentFocus() {
+    if (S.commentFocusRaf) return;
+    S.commentFocusRaf = global.requestAnimationFrame(function () {
+      S.commentFocusRaf = 0;
+      var edit = S.actionEditor, composer = S.composer;
+      var field = edit && holdsFocus(edit.textarea) ? edit.textarea :
+        composer && holdsFocus(composer.textarea) ? composer.textarea : null;
+      positionPanel();
+      if (!field) return;
+      if (composer && field === composer.textarea && composer.node.classList.contains('is-floating')) {
+        placeComposer();
+        revealPanelCard(composer.node, field);
+        return;
+      }
+      var id = edit && field === edit.textarea ? edit.record.threadId : composer.record.thread;
+      var card = panelCard(id);
+      if (card) revealPanelCard(card, field);
+      else if (composer) revealPanelCard(composer.node, field);
+    });
+  }
+
+  function commentViewport() {
+    var vv = global.visualViewport, app = DOC.getElementById('app');
+    // Embedded mounts without the app's keyboard state retain a layout-height
+    // fallback. In the app, a window resize is not a software keyboard.
+    if (S.commentViewportWidth !== global.innerWidth) {
+      S.commentViewportWidth = global.innerWidth;
+      S.commentViewportHeight = 0;
+    }
+    S.commentViewportHeight = Math.max(S.commentViewportHeight || 0, global.innerHeight || 0, vv ? vv.height : 0);
+    var bottom = vv ? vv.height + (vv.offsetTop || 0) : global.innerHeight || Infinity;
+    // iOS can count its native form bar as visible. Share this reservation
+    // between the panel, field/action reveal, floating composer and Undo.
+    var touch = !global.matchMedia || global.matchMedia('(pointer: coarse)').matches;
+    var layoutHeight = app ? global.innerHeight : S.commentViewportHeight;
+    var keyboard = touch && vv && vv.height < layoutHeight - 120 ||
+      app && app.getAttribute('data-keyboard') === 'up';
+    return { top: vv ? vv.offsetTop || 0 : 0, bottom: bottom - (keyboard ? 72 : 0) };
+  }
+
+  function revealPanelCard(card,field){
+    if (!card) return;
+    var scroll=card.classList&&card.classList.contains('is-floating')?card:
+      S.panelLayout==='list'&&S.panelEl&&S.panelEl.scrollTo&&S.panelEl.contains(card)?S.panelEl:
+      S.wrap&&S.wrap.contains(card)?S.wrap:S.lostBox;
+    if(!scroll||!scroll.getBoundingClientRect)return;
+    var box=scroll.getBoundingClientRect(),at=card.getBoundingClientRect();
+    if (!field && S.actionEditor && holdsFocus(S.actionEditor.textarea) && card.contains(S.actionEditor.node)) field = S.actionEditor.textarea;
+    if (!field && S.composer && card.contains(S.composer.node)) field = S.composer.textarea;
+    if (!box.height) return;
+    if (scroll === S.wrap && S.canvas) S.canvas.style.paddingBottom = box.height + 'px';
+    S.selfScroll = true;
+    if (field) {
+      var input = commentCaretRect(field), viewport = commentViewport();
+      var top = Math.max(box.top, viewport.top) + 8, bottom = Math.min(box.bottom, viewport.bottom) - 8;
+      var end = input.bottom, editor = field.closest && field.closest('.castor-comment-editor, .castor-composer');
+      // Keep the action words beside the caret when that whole interval fits.
+      if (editor) Array.prototype.forEach.call(editor.querySelectorAll('button'), function (button) {
+        var edge = button.getBoundingClientRect().bottom;
+        if (edge - input.top <= bottom - top) end = Math.max(end, edge);
+      });
+      var delta = input.top < top ? input.top - top : end > bottom ? Math.min(end - bottom, input.top - top) : 0;
+      if (Math.abs(delta) > 1) {
+        var reduce = global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (scroll.scrollTo) scroll.scrollTo({ top: scroll.scrollTop + delta, behavior: reduce ? 'instant' : 'smooth' });
+        else scroll.scrollTop += delta;
+      }
+    } else scroll.scrollTop += at.top - box.top;
+    S.selfScroll = false;
+  }
+
+  function touchSheet() {
+    var panels = Castor.panels;
+    if (!panels || !panels.state) return false;
+    return panels.state().mode !== 'desktop';
+  }
+
+  function dismissTouchComments() {
+    if (touchSheet() && Castor.panels.isOpen('comments')) Castor.panels.close('comments');
+  }
+
+  function cancelPassageReveal(event) {
+    var scroll = S.page && ((S.page.closest && S.page.closest('.page-scroll')) || (S.page.querySelector && S.page.querySelector('.page-scroll')));
+    if (event && (!scroll || !(event.target === scroll || scroll.contains && scroll.contains(event.target)))) return;
+    global.clearTimeout(S.passageTimer);
+    S.passageTimer = 0;
+  }
+
+  function revealTouchPassage(id) {
+    if (!touchSheet()) return;
+    global.clearTimeout(S.passageTimer);
+    // Panel transitions end before the layout event at 250ms. Read the settled
+    // sheet once, then scroll only the article, once.
+    S.passageTimer = global.setTimeout(function () {
+      if (S.active !== id || !Castor.panels.isOpen('comments')) return;
+      var target = passageEl(id), sheet = S.panelEl && S.panelEl.closest('.dock');
+      var scroll = S.page && (S.page.closest('.page-scroll') || S.page.querySelector('.page-scroll'));
+      if (!target || !sheet || !scroll) return;
+      var at = target.getBoundingClientRect();
+      var bottom = sheet.getBoundingClientRect().top - 16;
+      var topbar = DOC.getElementById('topbar');
+      var top = topbar ? topbar.getBoundingClientRect().bottom + 16 : 68;
+      var delta = at.bottom > bottom ? at.bottom - bottom : at.top < top ? at.top - top : 0;
+      if (delta) scroll.scrollBy({ top: delta, behavior: global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+    }, 280);
+  }
+  function positionDoneUndo() {
+    var notice = S.panelEl && S.panelEl.querySelector('.castor-comment-undo');
+    if (!notice) return;
+    var root = notice.parentNode.getBoundingClientRect();
+    var bottom = Math.min(root.bottom, commentViewport().bottom);
+    var bar = DOC.getElementById('footline');
+    if (bar) {
+      var edge = bar.getBoundingClientRect();
+      if (edge.height && edge.top < bottom) bottom = edge.top;
+    }
+    notice.style.bottom = Math.max(8, root.bottom - bottom + 8) + 'px';
+  }
+
+  function showDoneUndo(thread){
+    if(!S.filterBox)return;
+    var old=S.panelEl.querySelector('.castor-comment-undo');if(old)old.remove();
+    var notice=el('div','castor-comment-undo');notice.setAttribute('role','status');notice.appendChild(el('span',null,'Moved to Done.'));
+    var undo=el('button',null,'Undo');undo.type='button';undo.addEventListener('click',function(){var current=byId(thread.id);if(!current||!current.done)return;sendAction(newAction(current,null,'reopen'));notice.remove();});notice.appendChild(undo);S.filterBox.parentNode.appendChild(notice);
+    positionDoneUndo();
+    global.setTimeout(function(){notice.remove();},7000);
   }
 
   function offerCandidates(parent, thread) {
@@ -2773,6 +3253,7 @@
         if (record && record.key === k && record.path === piecePath() && typeof record.text === 'string') S.composerJournal[k] = record;
       }
     } catch (e) { /* the current page still holds the latest input */ }
+    Object.keys(S.composerJournal).forEach(function(k){var r=S.composerJournal[k];if(matches(k)&&r.path===piecePath()&&!r.text.trim())removeJournal(r);});
     return Object.keys(S.composerJournal).filter(function (k) {
       return matches(k) && S.composerJournal[k].path === piecePath();
     }).map(function (k) { return S.composerJournal[k]; }).filter(function (record) {
@@ -2790,7 +3271,7 @@
     if (!composerRecoveryAllowed(c.record)) {
       // A role switch can precede the next layout or input event. Preserve the
       // original journal unchanged; changed input has no trustworthy writer.
-      if (c.textarea.value !== c.record.text) {
+      if (c.textarea.value.trim() && c.textarea.value !== c.record.text) {
         var held = newComposerRecord(c.record.anchor, c.record.thread);
         held.text = c.textarea.value;
         held.author = ''; held.principal = ''; held.reviewer = undefined;
@@ -2807,6 +3288,7 @@
       return false;
     }
     c.record.text = c.textarea.value;
+    if (!c.record.text.trim()) { removeJournal(c.record); return true; }
     S.composerJournal[c.record.key] = c.record;
     if (reviewing() && Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:draft', { path: c.record.path });
     try {
@@ -2822,13 +3304,24 @@
     var c = S.composer;
     c.textarea.value = c.record.text;
     delete S.closedComposers[c.record.key];
-    c.textarea.addEventListener('input', rememberComposer);
+    c.textarea.addEventListener('input', function () { rememberComposer(); scheduleCommentFocus(); });
+    c.textarea.addEventListener('focusin', scheduleCommentFocus);
+    c.textarea.addEventListener('focusout', scheduleCommentFocus);
   }
   function closeComposer() {
     rememberComposer();
     if (S.composer && S.composer.record) S.closedComposers[S.composer.record.key] = true;
     if (S.composer && S.composer.node) S.composer.node.remove();
     S.composer = null;
+  }
+  function cancelComposer() {
+    var c = S.composer;
+    if (!c) return;
+    c.record.closed = true;
+    // If storage refuses the close, keep the words and failure visible.
+    if (!rememberComposer()) return;
+    closeComposer();
+    layout(true);
   }
   function removeJournal(record) {
     delete S.composerJournal[record.key];
@@ -2851,8 +3344,7 @@
     var r = resolveBlock(c.record.anchor), b = r && blockById(r.blockId);
     var thread = c.record.thread && journalThread(c.record);
     var selector = thread && '[data-thread-id="' + thread.id + '"]';
-    var card = selector && ((S.canvas && S.canvas.querySelector(selector)) || S.page.querySelector(selector) ||
-      (S.lostBox && S.lostBox.querySelector(selector)));
+    var card = selector && (panelCard(thread.id) || S.page.querySelector(selector));
     if (card) {
       c.node.classList.remove('is-floating');
       if (c.node.parentNode !== card) card.appendChild(c.node);
@@ -2868,18 +3360,24 @@
         c.node.style.left = Math.round(Math.max(12, Math.min(rect.left, (global.innerWidth || 1024) - (c.node.offsetWidth || 320) - 12))) + 'px';
         c.node.style.top = Math.round(Math.max(12, Math.min(rect.bottom + 10, (global.innerHeight || 768) - (c.node.offsetHeight || 120) - 12))) + 'px';
       }
+      var viewport = commentViewport(), topbar = DOC.getElementById('topbar');
+      var top = Math.max(viewport.top, topbar ? topbar.getBoundingClientRect().bottom : 0) + 8;
+      c.node.style.maxHeight = Math.max(44, viewport.bottom - top - 8) + 'px';
+      c.node.style.overflowY = 'auto';
+      var at = c.node.getBoundingClientRect();
+      c.node.style.top = Math.max(top, Math.min(at.top, viewport.bottom - at.height - 8)) + 'px';
     }
-    if (focused) c.textarea.focus();
+    if (focused) c.textarea.focus({preventScroll:true});
   }
-  function restoreComposer() {
+  function restoreComposer(wanted) {
     if (S.composer || !available()) return;
-    var records = journalRecords();
+    var records = wanted ? [wanted] : journalRecords();
     for (var i = 0; i < records.length; i++) {
       var record = records[i], thread = record.thread && journalThread(record);
-      if (!record.text || S.closedComposers[record.key]) continue;
+      if (!record.text || !wanted && (record.closed || S.closedComposers[record.key])) continue;
       // An unfinished recovery is a new tab's composer, not a shared mutable journal.
       var fresh = newComposerRecord(record.anchor, record.thread);
-      fresh = Object.assign({}, record, { id: fresh.id, key: fresh.key });
+      fresh = Object.assign({}, record, { id: fresh.id, key: fresh.key, closed: false });
       if (record.thread) {
         openReply(thread || { id: record.thread, anchor: record.anchor }, null, fresh);
       } else compose(record.anchor, fresh);
@@ -2944,6 +3442,10 @@
       finishComposer(stored.id); layout();
       return true;
     }
+    var post = el('button', null, 'Post comment'); post.type = 'button';
+    post.addEventListener('click', function (event) { event.stopPropagation(); submit(); }); box.appendChild(post);
+    var cancel = el('button', null, 'Cancel'); cancel.type = 'button';
+    cancel.addEventListener('click', function (event) { event.stopPropagation(); cancelComposer(); }); box.appendChild(cancel);
     S.composer = { node: slot, anchor: anchor, textarea: ta, hint: hint, record: record, submit: submit };
 
     if (!reviewing() && !ta.castorEditor) wireAt(ta, box);   // the editor has its own @name picker
@@ -2955,10 +3457,11 @@
         submit();
       } else if (e.key === 'Escape' && !box.querySelector('.castor-at')) {
         e.preventDefault();
-        closeComposer();
+        cancelComposer();
       }
     });
-    ta.focus();
+    ta.focus({ preventScroll: true });
+    scheduleCommentFocus();
     return slot;
   }
 
@@ -3061,7 +3564,7 @@
     S.raf = global.requestAnimationFrame(function () { S.raf = 0; layout(); });
   }
 
-  function layout() {
+  function layout(skipRestore) {
     if (Castor.agentTray) Castor.agentTray.render();
     if (!S.page) return;
     closePeek();
@@ -3069,9 +3572,10 @@
     if (S.journalPath !== piecePath()) { S.closedComposers = {}; S.journalPath = piecePath(); }
     if (S.composer && S.composer.record && S.composer.record.path !== piecePath()) closeComposer();
     var composerFocus = S.composer && holdsFocus(S.composer.textarea);
+    var composerCaret = composerFocus && S.composer.textarea.castorEditor && S.composer.textarea.castorEditor.getCaret();
     var actionFocus=S.actionEditor&&holdsFocus(S.actionEditor.textarea);
     var panelOpen = !Castor.panels || !Castor.panels.isOpen || Castor.panels.isOpen('comments');
-    resolveAll(!panelOpen);
+    resolveAll(!panelOpen && quiet());
     applyMarks(!panelOpen);
     if (!panelOpen) scheduleFullMarks();
     renderPageThreads();
@@ -3087,11 +3591,15 @@
     }
     if (!panelOpen) placeComposer();
     renderHeldActionEditor();
-    if (composerFocus && S.composer) S.composer.textarea.focus();
-    if(actionFocus&&S.actionEditor)S.actionEditor.textarea.focus();
-    restoreComposer();
+    if (composerFocus && S.composer && !holdsFocus(S.composer.textarea)) {
+      var field = S.composer.textarea;
+      if (!composerCaret || !field.castorEditor.restoreCaret(composerCaret)) field.focus({preventScroll:true});
+    }
+    if(actionFocus&&S.actionEditor)S.actionEditor.textarea.focus({preventScroll:true});
+    if(!skipRestore)restoreComposer();
     if (Castor.panels && Castor.panels.routeMargins) Castor.panels.routeMargins();
     syncBonds();
+    if (S.touchPeek) syncTouchPeek();
   }
 
   function list() { return S.threads.slice(); }
@@ -3133,8 +3641,10 @@
     head.appendChild(el('span', 'castor-peek-more', count === 1 ? '1 reply' : count + ' replies'));
     box.appendChild(head);
     box.appendChild(el('p', 'castor-peek-text', thread.text || ''));
-    box.appendChild(el('div', 'castor-peek-hint', 'Open the comment to reply.'));
+    var reply=withIcon(el('button','castor-peek-reply','Reply'),'reply');reply.type='button';reply.addEventListener('click',function(e){e.stopPropagation();openReply(thread);});box.appendChild(reply);
 
+    box.addEventListener('pointerenter',function(){if(S.peekTimer){global.clearTimeout(S.peekTimer);S.peekTimer=0;}});
+    box.addEventListener('pointerleave',pageLeave);
     DOC.body.appendChild(box);
     var r = mark.getBoundingClientRect();
     var w = box.offsetWidth, h = box.offsetHeight;
@@ -3172,9 +3682,13 @@
   function markAt(e) {
     var mark = e.target.closest && e.target.closest('mark.commented');
     if (mark) return mark;
-    var block = e.target.closest && e.target.closest('.cw-focused');
-    if (!block || typeof e.clientX !== 'number') return null;
-    var marks = block.querySelectorAll('.cw-mirror mark.commented'), hit = null;
+    var block = e.target.closest && e.target.closest('.cw-block');
+    if (typeof e.clientX !== 'number' || !S.page) return null;
+    if (!block && e.target.isConnected !== false) return null;
+    // Repainting a reading paragraph can detach touchend's original target.
+    // Its event path still reaches us: hit the current painted marks instead.
+    if (!block || !block.isConnected) block = S.page;
+    var marks = block.querySelectorAll('mark.commented'), hit = null;
     for (var i = 0; i < marks.length; i++) {
       var rects = marks[i].getClientRects();
       for (var j = 0; j < rects.length; j++) {
@@ -3186,7 +3700,7 @@
   }
 
   function pageHover(e) {
-    if (e.pointerType === 'touch') return;
+    if (e.pointerType === 'touch' || S.touchPeek) return;
     var mark = markAt(e);
     if (!mark) { closePeek(); return; }
     if (S.peekMark === mark) return;
@@ -3200,14 +3714,114 @@
   }
 
   function pageLeave(e) {
+    if(S.peek&&e.relatedTarget&&S.peek.node.contains(e.relatedTarget))return;
     if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('.cw-focused') && S.peekMark && S.peekMark.closest('.cw-focused')) return;
     var next = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('mark.commented');
     if (next && next === S.peekMark) return;
+    if(S.peek){if(S.peekTimer)global.clearTimeout(S.peekTimer);S.peekTimer=global.setTimeout(closePeek,180);}else closePeek();
+  }
+
+  function closeTouchPeek() {
+    S.touchPeek = null;
+    if (Castor.capsule && Castor.capsule.commentPeek) Castor.capsule.commentPeek(null);
+  }
+
+  function touchPeekCaret() {
+    var selection = global.getSelection && global.getSelection();
+    if (!selection || !selection.rangeCount || !selection.isCollapsed) return null;
+    var range = selection.getRangeAt(0), node = range.startContainer;
+    var host = node.nodeType === 1 ? node : node.parentElement;
+    if (!host || !host.closest || !host.closest('.cw-edit') || !S.page.contains(host)) return null;
+    return commentCaretRect(host.closest('.cw-edit'));
+  }
+
+  function positionTouchPeek() {
+    if (!S.touchPeek) return;
+    // Layout/refetch can replace threads without moving the article caret.
+    var ids = S.touchPeek.ids, threads = visibleThreads();
+    ids = ids.filter(function (id) { return threads.some(function (thread) { return thread.id === id; }); });
+    if (!ids.length) { closeTouchPeek(); return; }
+    var thread = threads.filter(function (thread) { return thread.id === ids[0]; })[0];
+    S.touchPeek.ids = ids;
+    S.touchPeek.author = thread.author || 'Someone';
+    S.touchPeek.words = String(thread.text || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+    S.touchPeek.open = function () {
+      positionTouchPeek();
+      if (!S.touchPeek) return;
+      var id = S.touchPeek.ids[0];
+      closeTouchPeek(); open(id);
+    };
+    if (Castor.capsule && Castor.capsule.commentPeek)
+      S.touchPeek.node = Castor.capsule.commentPeek(S.touchPeek);
+  }
+
+  function syncTouchPeek() {
+    if (!S.touchPeekEnabled) return;
+    var caret = touchPeekCaret(), marks = [], point;
+    if (caret) {
+      point = { clientX: caret.left, clientY: (caret.top + caret.bottom) / 2 };
+      Array.prototype.forEach.call(S.page.querySelectorAll('mark.commented'), function (mark) {
+        Array.prototype.some.call(mark.getClientRects(), function (rect) {
+          if (point.clientX >= rect.left - 1 && point.clientX <= rect.right + 1 && point.clientY >= rect.top - 2 && point.clientY <= rect.bottom + 2) { marks.push(mark); return true; }
+          return false;
+        });
+      });
+    }
+    if (!marks.length) closeTouchPeek();
+    else showTouchPeek(marks[0], point);
+  }
+
+  function showTouchPeek(mark, event) {
+    var id = mark.getAttribute('data-thread'), thread = threadById(id);
+    if (!thread) return;
     closePeek();
+    var ids = [id];
+    Array.prototype.forEach.call(S.page.querySelectorAll('mark.commented'), function (other) {
+      var otherId = other.getAttribute('data-thread');
+      if (ids.indexOf(otherId) >= 0) return;
+      Array.prototype.forEach.call(other.getClientRects(), function (rect) {
+        if (event.clientX >= rect.left - 1 && event.clientX <= rect.right + 1 && event.clientY >= rect.top - 2 && event.clientY <= rect.bottom + 2) ids.push(otherId);
+      });
+    });
+    S.touchPeek = { ids: ids };
+    positionTouchPeek();
+  }
+
+  // Submitting a reply rebuilds its card. An edit button must receive its click
+  // before that can remove the pointerdown target and cancel native activation.
+  function saveOutsideComposer(event) {
+    var editButton = event.target.closest && event.target.closest('.castor-comment-editor button');
+    if ((event.type === 'click') !== !!editButton) return;
+    if (S.composer && !(S.composer.record && S.composer.record.closed) &&
+        !S.composer.node.contains(event.target) &&
+        !(event.target.closest && event.target.closest('.castor-comment-undo'))) S.composer.submit();
+  }
+
+  function tapPassage(e) {
+    S.touchPeekEnabled = true;
+    S.passageTouchUntil = Date.now() + 800;
+    var mark = markAt(e);
+    if (!mark) {
+      if (S.touchPeek) closeTouchPeek();
+      if (Castor.panels && Castor.panels.close) dismissTouchComments();
+      return false;
+    }
+    var pin = e.target.closest && e.target.closest('.castor-comment-mark');
+    if (pin) {
+      if (e.preventDefault) e.preventDefault();
+      closeTouchPeek(); closePeek(); open(mark.getAttribute('data-thread'));
+      return true;
+    }
+    if (Castor.panels && Castor.panels.close) dismissTouchComments();
+    showTouchPeek(mark, e);
+    return false;
   }
 
   function pageClicked(e) {
-    var mark = e.target.closest && e.target.closest('mark.commented');
+    var pin = e.target.closest && e.target.closest('.castor-comment-mark');
+    if (!pin && Date.now() < (S.passageTouchUntil || 0)) return;
+    closeTouchPeek();
+    var mark = markAt(e);
     if (mark) {
       closePeek();
       /* In quiet reading the panel is the only place the thread exists, so opening
@@ -3252,9 +3866,13 @@
   function mount(ctx, data) {
     if (Castor.bus && Castor.bus.on && !S.whoListening) {
       S.whoListening = true;
-      DOC.addEventListener('pointerdown', function (event) {
-        if (S.composer && !S.composer.node.contains(event.target)) S.composer.submit();
-      }, true);
+      DOC.addEventListener('pointerdown', commentTouchStart, true);
+      DOC.addEventListener('pointermove', commentTouchMove, true);
+      DOC.addEventListener('pointerup', commentTouchEnd, true);
+      DOC.addEventListener('pointercancel', commentTouchEnd, true);
+      DOC.addEventListener('click', commentTouchClick, true);
+      DOC.addEventListener('pointerdown', saveOutsideComposer, true);
+      DOC.addEventListener('click', saveOutsideComposer, true);
       Castor.bus.on('who:set', function () { closeActionEditor();save();load(true); });
       if (global.addEventListener) {
         global.addEventListener('focus', refresh);
@@ -3291,8 +3909,9 @@
 
     on('editor:mirror', function (event) {
       if (!S.threads.length && !S.workspace.length) return;
-      resolveAll(true, event.blockId);
+      resolveAll(quiet(), event.blockId);
       applyMarks(true, event.blockId);
+      global.requestAnimationFrame(syncTouchPeek);
     });
     // A repainted block comes back without its marks (I3: they vanished until the
     // paragraph was clicked again). One block is marked at once; a whole page waits
@@ -3300,8 +3919,9 @@
     on('editor:paint', function (event) {
       if (!S.threads.length && !S.workspace.length) return;
       if (!event || !event.blockId) { schedule(); return; }
-      resolveAll(true, event.blockId);
+      resolveAll(quiet(), event.blockId);
       applyMarks(true, event.blockId);
+      global.requestAnimationFrame(syncTouchPeek);
     });
     on('doc:change', schedule);
     on('layout', schedule);
@@ -3309,7 +3929,9 @@
     on('piece:open', function () {
       closeComposer();
       closePeek();
-      S.active = null;
+      closeTouchPeek();
+      cancelPassageReveal();
+      S.active = null; S.revealId = null;
       S.expanded = {};
       S.loadedPath = piecePath();S.commentActions=null;S.actionScope='';S.authorFilter='';closeActionEditor();
       S.resolutionCache = {};
@@ -3326,13 +3948,26 @@
       schedule();
     });
     global.addEventListener('resize', schedule);
+    // Same explicit gestures that cancel the article editor's caret reveal.
+    // A scroll event alone can be caused by the keyboard or our own reveal.
+    global.addEventListener('touchmove', cancelPassageReveal, { passive: true, capture: true });
+    global.addEventListener('wheel', cancelPassageReveal, { passive: true, capture: true });
+    if (global.visualViewport) {
+      global.visualViewport.addEventListener('resize', scheduleCommentFocus);
+      global.visualViewport.addEventListener('resize', positionTouchPeek);
+      global.visualViewport.addEventListener('scroll', positionTouchPeek);
+    }
+    on('layout', scheduleCommentFocus);
+    on('layout', positionTouchPeek);
     /* capture, so a scroll of the page column reaches us. A scroll of the BAND
        itself is the reader looking down the panel: re-placing there would snap
        it straight back under their finger. */
     global.addEventListener('scroll', function (e) {
       if (S.selfScroll) return;
       var t = e.target;
+      if (S.panelEl && t && (t === S.panelEl || S.panelEl.contains(t))) return;
       if (S.wrap && t && t.nodeType === 1 && (t === S.wrap || S.wrap.contains(t))) return;
+      if(S.lostBox&&t&&(t===S.lostBox||S.lostBox.contains(t)))return;
       schedulePlace();
     }, true);
     if (S.page) {
@@ -3342,14 +3977,26 @@
         if (event.target.closest && event.target.closest('.cw-focused')) pageHover(event);
       });
       S.page.addEventListener('pointerout', pageLeave);
-      S.page.addEventListener('pointerleave', closePeek);
+      S.page.addEventListener('pointerleave', pageLeave);
       S.page.addEventListener('focusin', function (event) {
         if (event.target.closest && event.target.closest('.castor-comment-mark')) pageHover(event);
       });
-      S.page.addEventListener('focusout', closePeek);
+      S.page.addEventListener('focusout', pageLeave);
     }
-    DOC.addEventListener('keydown', closePeek, true);
+    DOC.addEventListener('keydown',function(e){if(e.key==='Escape'||!S.peek||!S.peek.node.contains(e.target))closePeek();},true);
     DOC.addEventListener('beforeinput', closePeek, true);
+    DOC.addEventListener('input', function () { global.requestAnimationFrame(syncTouchPeek); }, true);
+    DOC.addEventListener('selectionchange', function () {
+      global.requestAnimationFrame(syncTouchPeek);
+    });
+    DOC.addEventListener('pointerdown', function (event) {
+      if (event.pointerType === 'mouse') { S.touchPeekEnabled = false; closeTouchPeek(); }
+      if (event.pointerType !== 'mouse' && S.page && S.page.contains(event.target)) S.touchPeekEnabled = true;
+      // Reconcile after native placement even when a retap leaves selection unchanged.
+      global.requestAnimationFrame(syncTouchPeek);
+    }, true);
+    DOC.addEventListener('keydown', function (event) { if (event.key === 'Escape') closeTouchPeek(); }, true);
+    global.addEventListener('scroll', positionTouchPeek, true);
     global.addEventListener('scroll', closePeek, true);
     try {
       var saved = localStorage.getItem('castor.' + S.world + '.comments.reading');
@@ -3427,6 +4074,7 @@
     layout: layout,
     list: list,
     open: open,
+    tapPassage: tapPassage,
     compose: compose,
     anchorFromSelection: anchorFromSelection,
     setFilter: function (f) { S.filter = ['open','done','all','withdrawn'].indexOf(f)>=0 ? f : 'open'; layout(); },

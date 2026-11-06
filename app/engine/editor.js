@@ -1,9 +1,8 @@
 /* Castor engine · editor.js — Markdown without seeing it.
  *
- * Unfocused blocks are md.js HTML. A focused block is deliberately simpler:
- * one browser-owned text node containing its exact Markdown, plus an inert
- * mirror which paints dim markers and formatting. Input never rebuilds the
- * contenteditable, so the visible caret and the insertion point cannot split.
+ * Focused and reading blocks use the same renderer and glyph metrics. Source
+ * markers remain in hidden runs. Native input owns the formatted subtree until
+ * its structure changes; composition is never rebuilt while it is active.
  *
  * No libraries. Vanilla ES2020. One global: Castor.
  */
@@ -85,152 +84,6 @@
   var idSeq = 0;
   function mintId() { return (isArticle ? 'e' : role + '-e') + (++idSeq); }
 
-  // The mirror paints source text, never caret state.
-  var PAIRS_INLINE = [
-    { d: '**', tag: 'strong' },
-    { d: '__', tag: 'strong' },
-    { d: '==', tag: 'mark' },
-    { d: '~~', tag: 's' },
-    { d: '*', tag: 'em' },
-    { d: '_', tag: 'em' }
-  ];
-
-  function renderInline(src) {
-    function mk(s, e, cls) { // a marker run
-      return '<span class="cw-mk' + (cls ? ' ' + cls : '') + '">' + esc(src.slice(s, e)) + '</span>';
-    }
-    function tx(s, e, cls) { // a run of content characters
-      if (e <= s) return '';
-      return '<span class="cw-tx' + (cls ? ' ' + cls : '') + '">' + esc(src.slice(s, e)) + '</span>';
-    }
-    function walk(from, to) {
-      var out = '', i = from, plain = from;
-      function flush(at) { if (at > plain) out += tx(plain, at); plain = at; }
-      while (i < to) {
-        var c = src.charAt(i), j, k, m, rest;
-        // backslash escape: the slash is a marker, the next char is literal
-        if (c === '\\' && i + 1 < to) {
-          flush(i); out += mk(i, i + 1) + tx(i + 1, i + 2); i += 2; plain = i; continue;
-        }
-        // `code span` — literal inside, no further parsing
-        if (c === '`') {
-          j = src.indexOf('`', i + 1);
-          if (j >= 0 && j < to) {
-            flush(i);
-            out += '<code class="cw-code">' + mk(i, i + 1) + tx(i + 1, j) + mk(j, j + 1) + '</code>';
-            i = j + 1; plain = i; continue;
-          }
-        }
-        // ![[embed]] and ![[embed|400]]
-        if (c === '!' && src.substr(i + 1, 2) === '[[') {
-          j = src.indexOf(']]', i + 3);
-          if (j >= 0 && j + 2 <= to) {
-            flush(i);
-            out += '<span class="cw-embed">' + mk(i, i + 3) + tx(i + 3, j, 'cw-target') + mk(j, j + 2) + '</span>';
-            i = j + 2; plain = i; continue;
-          }
-        }
-        // [[wiki]], [[wiki|shown]], [[wiki#heading]]
-        if (c === '[' && src.charAt(i + 1) === '[') {
-          j = src.indexOf(']]', i + 2);
-          if (j >= 0 && j + 2 <= to) {
-            flush(i);
-            var inner = src.slice(i + 2, j);
-            var bar = inner.indexOf('|');
-            out += '<a class="wikilink cw-wiki" data-target="' + esc(bar >= 0 ? inner.slice(0, bar) : inner) + '">';
-            if (bar >= 0) {
-              // the target and the pipe are markers; the shown label is content
-              out += mk(i, i + 2 + bar + 1) + tx(i + 2 + bar + 1, j) + mk(j, j + 2);
-            } else {
-              out += mk(i, i + 2) + tx(i + 2, j) + mk(j, j + 2);
-            }
-            out += '</a>';
-            i = j + 2; plain = i; continue;
-          }
-        }
-        // [^footnote] reference
-        if (c === '[' && src.charAt(i + 1) === '^') {
-          j = src.indexOf(']', i + 2);
-          if (j >= 0 && j < to) {
-            flush(i);
-            out += '<sup class="cw-fnref" data-footnote="' + esc(src.slice(i + 2, j)) + '" data-source-end="' + (j + 1) + '">' + mk(i, i + 2) + tx(i + 2, j) + mk(j, j + 1) + '</sup>';
-            i = j + 1; plain = i; continue;
-          }
-        }
-        // ![alt](src) image, then [text](url) link
-        if ((c === '!' && src.charAt(i + 1) === '[') || c === '[') {
-          var isImg = c === '!';
-          var open = isImg ? i + 2 : i + 1;
-          var close = matchBracket(open, to);
-          if (close > 0 && src.charAt(close + 1) === '(') {
-            var paren = src.indexOf(')', close + 2);
-            if (paren > 0 && paren < to) {
-              flush(i);
-              var tag = isImg ? 'span class="cw-img"' : 'a class="cw-link"';
-              var end = isImg ? 'span' : 'a';
-              out += '<' + tag + '>' + mk(i, open) + tx(open, close) + mk(close, paren + 1) + '</' + end + '>';
-              i = paren + 1; plain = i; continue;
-            }
-          }
-        }
-        // emphasis family. Longest delimiter first (** before *).
-        for (k = 0; k < PAIRS_INLINE.length; k++) {
-          var p = PAIRS_INLINE[k], d = p.d;
-          if (src.substr(i, d.length) !== d) continue;
-          if (!canOpen(i, d)) continue;
-          var closeAt = findClose(i + d.length, d, to);
-          if (closeAt < 0) continue;
-          flush(i);
-          out += '<' + p.tag + '>' + mk(i, i + d.length) + walk(i + d.length, closeAt) + mk(closeAt, closeAt + d.length) + '</' + p.tag + '>';
-          i = closeAt + d.length; plain = i;
-          break;
-        }
-        if (k < PAIRS_INLINE.length) continue;
-        // #tag — only at a line start or after whitespace, never `#` mid-word
-        if (c === '#' && (i === from || /\s/.test(src.charAt(i - 1)))) {
-          rest = /^#[A-Za-z0-9_À-ɏ/-]+/.exec(src.slice(i, to));
-          if (rest) { flush(i); out += tx(i, i + rest[0].length, 'cw-tag'); i += rest[0].length; plain = i; continue; }
-        }
-        i++;
-      }
-      flush(to);
-      return out;
-    }
-    // A `*`/`_`/`**` run only opens when it is not glued to a word on its left
-    // and has something other than a space on its right. This is why the
-    // fixture's `snake*case*here` stays plain text: `*` is preceded by `e`.
-    function canOpen(i, d) {
-      var before = i > 0 ? src.charAt(i - 1) : '';
-      var after = src.charAt(i + d.length);
-      if (!after || /\s/.test(after)) return false;
-      if (isAlnum(before)) return false;
-      return true;
-    }
-    function findClose(from, d, to) {
-      var i = from;
-      while (i < to) {
-        var at = src.indexOf(d, i);
-        if (at < 0 || at + d.length > to) return -1;
-        var before = src.charAt(at - 1);
-        var after = src.charAt(at + d.length);
-        if (at > from && !/\s/.test(before) && !isAlnum(after)) return at;
-        i = at + 1;
-      }
-      return -1;
-    }
-    function matchBracket(from, to) {
-      var depth = 1, i = from;
-      while (i < to) {
-        var c = src.charAt(i);
-        if (c === '\\') { i += 2; continue; }
-        if (c === '[') depth++;
-        else if (c === ']') { depth--; if (!depth) return i; }
-        i++;
-      }
-      return -1;
-    }
-    return { html: walk(0, src.length) };
-  }
   var MULTILINE = { list: 1, code: 1, table: 1, quote: 1, callout: 1, 'footnote-def': 1, frontmatter: 1 };
 
   // A bare hash run is an empty heading while writing. `#aphorism` is a tag,
@@ -244,17 +97,20 @@
     if (/^\s*>\s*\[!/.test(first)) return 'callout';
     if (/^\s*>/.test(first)) return 'quote';
     if (/^\s*([-*+]|\d+[.)])\s/.test(first)) return 'list';
-    if (/^\s*\|/.test(first)) return 'table';
+    if (/^(?: {4}| {0,3}\t)/.test(first)) return 'code';
+    if (lines.length > 1 && /^ {0,3}[|: \t-]+$/.test(lines[1]) && MD().parse(src).blocks[0]?.type === 'table') return 'table';
     if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(src.trim())) return 'hr';
     if (/^\[\^[^\]]+\]:/.test(first)) return 'footnote-def';
     if (/^!\[\[[^\]]+\]\]\s*$/.test(src.trim())) return 'embed';
+    if (/\n {0,3}=+[ \t]*$/.test(src)) return 'h1';
+    if (/\n {0,3}-+[ \t]*$/.test(src)) return 'h2';
     return 'p';
   }
 
   // Length of the markdown marker at the head of a source line (heading hashes,
   // list bullet, quote arrows, task box). Rendered dim, kept in the source.
   function markerLen(line) {
-    var m = /^(#{1,6})(?:[ \t]+|$)/.exec(line);
+    var m = /^(#{1,6})(?:[ \t]|$)/.exec(line);
     if (m) return m[0].length;
     m = /^(\s*)((?:>\s?)+)(\[![a-z]+\]\s*)?/i.exec(line);
     if (m && m[2]) return m[0].length;
@@ -267,36 +123,38 @@
 
   function headingLevel(type) { return /^h[1-6]$/.test(type) ? +type.slice(1) : 0; }
 
-  function lineHtml(line) {
-    var mlen = markerLen(line);
-    var out = '';
-    if (mlen) out += '<span class="cw-mk cw-mk-block">' + esc(line.slice(0, mlen)) + '</span>';
-    return out + renderInline(line.slice(mlen)).html;
+  function renderInline(source) { return { html: MD().renderInline(source, { editSource: true }) }; }
+  // Resolve from the current source, including edits made before the delayed
+  // reparse. Focus and serialization must share the same reference authority.
+  var referenceContextSource = null, referenceContext = {};
+  function currentReferences() {
+    var source = getSource();
+    if (source !== referenceContextSource) {
+      referenceContext = source.indexOf(']:') < 0 ? {} : MD().parse(source).references || {};
+      referenceContextSource = source;
+    }
+    doc.references = referenceContext;
+    return referenceContext;
   }
-
   function liveHtml(block) {
-    var src = block.source, type = block.type, lvl = headingLevel(type);
-    if (type === 'code') {
-      return '<pre class="cw-live"><code>' + linesHtml(src, true) + '</code></pre>';
-    }
-    if (MULTILINE[type]) {
-      var tag = (type === 'quote' || type === 'callout') ? 'blockquote' : 'div';
-      var cls = 'cw-live cw-lines cw-t-' + type;
-      return '<' + tag + ' class="' + cls + '">' + linesHtml(src, false) + '</' + tag + '>';
-    }
-    var t = lvl ? 'h' + lvl : 'p';
-    var html = lineHtml(src);
-    return '<' + t + ' class="cw-live">' + (html || '<br>') + '</' + t + '>';
+    var parsed = MD().parse(block.source, { editSource: true, showWriterNotes: opts.showWriterNotes !== false,
+      footnoteNumbers: doc && doc.footnoteNumbers, footnotes: doc && doc.footnotes, references: currentReferences() });
+    return (parsed.blocks.map(function (b) { return b.html; }).join('') || '<p><br></p>').replace(/ data-block-id="[^"]*"/g, '');
   }
 
-  function linesHtml(src, raw) {
-    var lines = src.split('\n'), out = '';
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      var html = raw ? (line ? '<span class="cw-tx">' + esc(line) + '</span>' : '<br>') : lineHtml(line);
-      out += '<div class="cw-line">' + (html || '<br>') + '</div>';
-    }
-    return out;
+  function editingHtml(html, source) {
+    // Rendering is never a source transformation. Check the actual DOM projection
+    // before installing it, including unknown block types and generated labels.
+    var probe = document.createElement('div'); probe.innerHTML = html;
+    if (source != null && probe.textContent !== source) return esc(source);
+    // The reader decorates definitions by id. Its return links belong to the
+    // mirror, never to the editable source projection.
+    html = html.replace(/(<aside\b[^>]*class="footnote-definition"[^>]*?) id="fn-[^"]*"/g, '$1');
+    // A plain paragraph needs no formatting nodes. Keep its native text node
+    // across keystrokes; the mirror still owns the reader's paragraph box.
+    if (html === '<p><br></p>') return '';
+    var plain = /^<p>([^<]*)<\/p>$/.exec(html);
+    return plain ? plain[1] : html;
   }
 
   function MD() {
@@ -304,29 +162,97 @@
     return Castor.md;
   }
 
-  // A focused host is intentionally boring: exactly one text node. Offsets are
-  // therefore browser offsets, not a reconstruction through formatted spans.
+  // Plain hosts use one text node; formatted hosts retain source runs and map
+  // native text and element-boundary positions to Markdown offsets.
   function editOf(id) {
     var el = elOf(id);
     return el && el.querySelector('.cw-edit');
   }
   function textOf(host) {
-    return host && host.childNodes.length === 1 && host.firstChild.nodeType === 3 ? host.firstChild : null;
+    return host && host.childNodes.length === 1 && host.childNodes[0].nodeType === 3 ? host.childNodes[0] : null;
+  }
+  function sourceNodes(host) {
+    if (!host) return [];
+    var single = textOf(host);
+    if (single) return [{ node: single, at: 0, len: single.data.length }];
+    if (host.nodeType === 3) return [{ node: host, at: 0, len: host.data.length }];
+    var all = [];
+    (function visit(n) { Array.prototype.forEach.call(n.childNodes || [], function (child) { if (child.nodeType === 3) all.push(child); else visit(child); }); })(host);
+    var node, out = [], at = 0;
+    for (var j = 0; j < all.length; j++) {
+      node = all[j];
+      var ui = node.parentElement && node.parentElement.closest('[data-castor-ui]');
+      if (ui && host.contains(ui)) continue;
+      out.push({ node: node, at: at, len: node.nodeValue.length }); at += node.nodeValue.length;
+    }
+    return out;
+  }
+  function hiddenSource(node) {
+    return !!(node && node.parentElement && node.parentElement.closest('.cw-mk,.cw-atom'));
+  }
+  function interactionRuns(host) {
+    return sourceNodes(host).filter(function (n) {
+      var atom = n.node.parentElement && n.node.parentElement.closest('.cw-atom');
+      if (atom) { n.atomic = true; return true; }
+      return !hiddenSource(n.node);
+    });
+  }
+  function sourcePoint(host, offset, forward) {
+    var nodes = sourceNodes(host), candidate = null, boundary = null;
+    (function visit(parent, at) {
+      Array.prototype.forEach.call(parent.childNodes || [], function (child, index) {
+        var length = child.nodeType === 3 ? child.nodeValue.length : child.textContent == null ? sourceNodes(child).reduce(function (sum, n) { return sum + n.len; }, 0) : child.textContent.length;
+        var end = at + length;
+        if (child.nodeType === 1 && !hiddenSource(child) &&
+            (/^(STRONG|EM|MARK|DEL|CODE|A|SUP|SUB|SPAN)$/.test(child.tagName) || /(?:^| )cw-atom(?: |$)/.test(child.className))) {
+          if (offset === at || offset === end) {
+            if (!boundary) boundary = { node: parent, offset: index + (offset === end ? 1 : 0) };
+          }
+        }
+        if (child.nodeType === 1 && !boundary) visit(child, at);
+        at = end;
+      });
+    })(host, 0);
+    if (boundary) return boundary;
+    if (offset === nodes.reduce(function (sum, n) { return sum + n.len; }, 0)) return { node: host, offset: host.childNodes.length };
+    // A toolbar-created empty pair has no visible text node yet. Its interior
+    // is the element boundary between the opening and closing hidden runs.
+    for (var j = 0; j + 1 < nodes.length; j++) {
+      var left = nodes[j], right = nodes[j + 1], parent = left.node.parentElement && left.node.parentElement.parentElement;
+      if (left.at + left.len === offset && right.at === offset && hiddenSource(left.node) && hiddenSource(right.node) &&
+          parent && parent === right.node.parentElement.parentElement && /^(STRONG|EM|MARK|DEL|CODE)$/.test(parent.tagName)) {
+        return { node: parent, offset: Array.prototype.indexOf.call(parent.childNodes, right.node.parentElement) };
+      }
+    }
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (hiddenSource(n.node)) continue;
+      if (offset >= n.at && offset <= n.at + n.len) {
+        candidate = { node: n.node, offset: offset - n.at };
+        return candidate;
+      }
+      if (n.at > offset) return forward || !candidate ? { node: n.node, offset: 0 } : candidate;
+      candidate = { node: n.node, offset: n.len };
+    }
+    return candidate || { node: host, offset: 0 };
   }
   function domOffset(host, node, offset) {
-    var text = textOf(host);
-    // An empty native host may hold a caret on itself or its placeholder <br>.
-    if (!text) return host && host.textContent === '' && (node === host || host.contains(node)) ? 0 : null;
-    if (!host.contains(node)) return null;
-    if (node === text) return clamp(offset, 0, text.data.length);
-    if (node === host) return offset > 0 ? text.data.length : 0;
-    var r = document.createRange();
-    try { r.selectNodeContents(host); r.setEnd(node, offset); return r.toString().length; }
-    catch (e) { return null; }
+    if (!host || node !== host && !host.contains(node)) return null;
+    var nodes = sourceNodes(host), at = 0;
+    if (node.nodeType === 3) {
+      for (var i = 0; i < nodes.length; i++) if (nodes[i].node === node) return nodes[i].at + clamp(offset, 0, nodes[i].len);
+      return null;
+    }
+    var children = node.childNodes || [];
+    for (var k = 0; k < Math.min(offset, children.length); k++) at += children[k].textContent.length;
+    if (node === host) return at;
+    for (var n = node; n && n !== host; n = n.parentNode) {
+      for (var prev = n.previousSibling; prev; prev = prev.previousSibling) at += prev.textContent.length;
+    }
+    return at;
   }
 
-  var OPENERS = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '*': '*', '_': '_', '`': '`' };
-  var CLOSERS = { ')': 1, ']': 1, '}': 1, '"': 1, "'": 1, '*': 1, '_': 1, '`': 1, '=': 1, '~': 1 };
+
 
   var page = null;               // the page element
   var opts = {};
@@ -342,16 +268,18 @@
   var lastUndoCaret = null;
   var lastNativeCaret = null;
   var keyboardCaret = null;
+  var literalRun = null;         // escapes generated by the current literal edit run
   var pending = [];              // auto-inserted closers awaiting a step-over
-  var stepOver = null;           // the closer the last keystroke stepped over
+  var typingStyles = null;       // collapsed command intent, anchored to its next caret
   var selMenu = null, selAnchor = null;
   var activePicker = null;       // {kind, start, len, handle}
   var reparseTimer = null, composing = false, compositionId = null, compositionState = null, mounted = false;
-  var caretEl = null, caretLayer = null, selectionLayer = null, washLayer = null, overlayRaf = 0;
+  var caretEl = null, caretLayer = null, selectionLayer = null, overlayRaf = 0;
   var handles = null, draggingHandle = null, lastCaret = null;
   var CARET_TYPE_MS = 90, CARET_JUMP_MS = 140, CARET_GLIDE_CAP_MS = 160;
   var caretRaf = 0, caretMotion = null, caretVisual = null;
   var caretReducedMotion = global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)');
+  var suppressClickUntil = 0;
   var touchInput = false, touchMoved = false, touchStart = null, everFocused = false;
   var lastEnter = null;
   var typewriterRaf = 0, typewriterOwnUntil = 0, typewriterLast = null, lastFocusPara = null;
@@ -382,9 +310,7 @@
       '.cw-edit::selection{background:transparent;color:transparent;-webkit-text-fill-color:transparent}',
       '.cw-mirror{position:relative;z-index:1;pointer-events:none;user-select:none}',
       '.cw-mirror .cw-live{margin:0}',
-      '.cw-mirror strong{font-weight:inherit;text-shadow:.018em 0 currentColor,-.018em 0 currentColor}',
-      '.cw-mirror em{font-style:oblique 8deg}.cw-mirror mark{padding:0}.cw-mirror code,.cw-mirror .cw-code,.cw-mirror .cw-fnref{font:inherit;vertical-align:baseline}',
-      '.cw-mk{opacity:.32;font-weight:400;font-style:normal}',
+      '.cw-mk{display:none}.cw-atom[data-label]::after{content:attr(data-label)}',
       // A source that ends in a newline gets NO line box from `pre-wrap`: the
       // soft break the writer just made is invisible and its caret has no rect.
       // A zero-width pseudo-element after both layers gives that last line its
@@ -405,8 +331,6 @@
       '.cw-caret[hidden]{display:none}',
       '.cw-selection-layer{position:fixed;inset:0;z-index:78;pointer-events:none}',
       '.cw-selection-rect{position:absolute;left:0;top:0;transform-origin:0 0;background:var(--sel,rgba(80,120,200,.24))}',
-      '.cw-wash-layer{position:fixed;inset:0;z-index:2;pointer-events:none}',
-      '.cw-focus-wash{position:absolute;left:0;top:0;width:1px;height:1px;transform-origin:0 0}',
       '.cw-sel-handle{position:fixed;left:0;top:0;z-index:79;pointer-events:auto;touch-action:none}',
       '.cw-sel-handle[hidden]{display:none}',
       '.cw-flash{background:var(--sel,rgba(255,214,102,.45));border-radius:2px}',
@@ -629,7 +553,7 @@
     edit.setAttribute('contenteditable', (opts && opts.readOnly) ? 'false' : 'true');
     edit.setAttribute('role', 'textbox');
     edit.setAttribute('aria-multiline', 'true');
-    edit.setAttribute('aria-label', 'Markdown block');
+    edit.setAttribute('aria-label', 'Writing block');
     // The visible text is the mirror; the host's own text is transparent, so a
     // spell underline would be drawn under characters nobody can see, and an
     // autocorrect would rewrite Markdown markers behind the writer's back.
@@ -638,8 +562,10 @@
     edit.setAttribute('autocomplete', 'off');
     edit.setAttribute('data-enable-grammarly', 'false');
     edit.spellcheck = !!opts.spellcheck;
-    // This node is never replaced while focused. Native typing and IME own it.
-    edit.appendChild(document.createTextNode(b.source));
+    // The host stays mounted. Its subtree is never rebuilt during composition.
+    edit.innerHTML = editingHtml(liveHtml(b), b.source);
+    edit.cwReferenceKey = JSON.stringify(doc.references || {});
+    if (!edit.firstChild) edit.appendChild(document.createTextNode(''));
     stack.appendChild(mirror); stack.appendChild(edit); wrap.appendChild(stack);
     updateMirror(wrap, b);
   }
@@ -650,7 +576,25 @@
     wrap.setAttribute('data-type', b.type);
     var mirror = wrap.querySelector('.cw-mirror');
     if (mirror) {
-      mirror.innerHTML = liveHtml(b);
+      var html = liveHtml(b), host = wrap.querySelector('.cw-edit');
+      if (host && host.childNodes && !composing) {
+        var next = document.createElement('div'); next.innerHTML = editingHtml(html, b.source);
+        // A plain insertion only changes text. Keep WebKit's live nodes and IME
+        // session; rebuild only after a formatting boundary changed.
+        function structure(root) {
+          return Array.prototype.map.call(root.childNodes, function shape(n) {
+            return n.nodeType === 3 ? '#' : n.nodeName + ':' + (n.className || '') + ':' +
+              (n.getAttribute('href') || '') + '[' + Array.prototype.map.call(n.childNodes, shape).join('') + ']';
+          }).join('');
+        }
+        if (host.textContent !== b.source || structure(host) !== structure(next)) {
+          var held = caretSource(); host.innerHTML = editingHtml(html, b.source);
+          if (!host.firstChild) host.appendChild(document.createTextNode(''));
+          if (held) setCaret(b.id, held.start, held.end, true);
+        }
+      }
+      if (host) host.cwReferenceKey = JSON.stringify(doc.references || {});
+      mirror.innerHTML = html;
       // Decorations belong to this paint, not the delayed document reparse.
       if (bus && bus.emit) bus.emit('editor:mirror', { blockId: b.id });
     }
@@ -663,8 +607,8 @@
   function paint(wrap, b) {
     if (b.id === focusId) {
       wrap.innerHTML = '';
-      focusedContents(wrap, b);
       wrap.classList.add('cw-focused');
+      focusedContents(wrap, b);
     } else {
       wrap.classList.remove('cw-focused');
       var html = rendered[b.id] != null ? rendered[b.id] : MD().blockToHtml(b);
@@ -758,16 +702,20 @@
     lastNativeCaret = c ? { blockId: focusId, source: b.source, start: c.start, end: c.end } : null;
   }
 
-  function setCaret(id, start, end) {
-    var el = editOf(id), text = textOf(el); if (!el || !text) return;
+  function setCaret(id, start, end, keepTypingStyle) {
+    var el = editOf(id); if (!el) return;
+    if (!keepTypingStyle && typingStyles && (typingStyles.blockId !== id || typingStyles.at !== start || end != null && end !== start)) typingStyles = null;
     var b = blockOf(id); if (!b) return;
     start = clamp(start, 0, b.source.length);
     end = clamp(end == null ? start : end, 0, b.source.length);
     var sel = global.getSelection();
     var r = document.createRange();
     try {
-      r.setStart(text, start);
-      r.setEnd(text, end);
+      var single = textOf(el);
+      var a = single ? { node: single, offset: start } : sourcePoint(el, start, true);
+      var z = single ? { node: single, offset: end } : sourcePoint(el, end, start === end);
+      r.setStart(a.node, a.offset);
+      r.setEnd(z.node, z.offset);
     } catch (err) {
       r.selectNodeContents(el); r.collapse(false);
     }
@@ -779,12 +727,6 @@
   }
 
   function ensureOverlays() {
-    if (!washLayer) {
-      washLayer = document.createElement('div');
-      washLayer.className = 'cw-wash-layer';
-      washLayer.setAttribute('aria-hidden', 'true');
-      document.body.appendChild(washLayer);
-    }
     if (!selectionLayer) {
       selectionLayer = document.createElement('div');
       selectionLayer.className = 'cw-selection-layer';
@@ -849,7 +791,7 @@
     var clip = bounds ? 'polygon(' + bounds.left + 'px ' + bounds.top + 'px,' +
       bounds.right + 'px ' + bounds.top + 'px,' + bounds.right + 'px ' + bounds.bottom + 'px,' +
       bounds.left + 'px ' + bounds.bottom + 'px)' : 'polygon(0px 0px,0px 0px,0px 0px)';
-    [washLayer, selectionLayer, caretLayer].forEach(function (layer) { layer.style.clipPath = clip; });
+    [selectionLayer, caretLayer].forEach(function (layer) { layer.style.clipPath = clip; });
   }
   function mergeLineRects(rects) {
     var out = [];
@@ -863,19 +805,25 @@
     });
     return out;
   }
-  function rectsBetween(text, a, b) {
-    var r = document.createRange();
-    try { r.setStart(text, a); r.setEnd(text, b); }
-    catch (e) { return []; }
-    return Array.prototype.slice.call(r.getClientRects()).filter(function (x) { return x.height > 0; });
+  function rectsBetween(host, a, b) {
+    var nodes = sourceNodes(host), rects = [];
+    nodes.forEach(function (n) {
+      if (hiddenSource(n.node) || n.at >= b || n.at + n.len <= a) return;
+      var r = document.createRange();
+      try { r.setStart(n.node, Math.max(0, a - n.at)); r.setEnd(n.node, Math.min(n.len, b - n.at)); }
+      catch (e) { return; }
+      Array.prototype.forEach.call(r.getClientRects(), function (x) { if (x.height > 0 && x.width > 0) rects.push(x); });
+    });
+    return rects;
   }
 
   function caretGeometry(host, offset, forward) {
-    var text = textOf(host); if (!text) return null;
+    if (!host) return null;
+    var text = host;
     var style = frameReads.style(host);
     var lineHeight = parseFloat(style.lineHeight);
     if (!lineHeight) lineHeight = (parseFloat(style.fontSize) || 16) * 1.4;
-    var data = text.data, len = data.length, rects, r;
+    var data = host.textContent, len = data.length, rects, r;
     offset = clamp(offset, 0, len);
     var left = null, fontTop = null, fontHeight = null;
 
@@ -890,6 +838,14 @@
     if (left == null && offset < len && data.charAt(offset) !== '\n') {
       rects = rectsBetween(text, offset, offset + 1);
       if (rects.length) { r = rects[0]; left = r.left; fontTop = r.top; fontHeight = r.height; }
+    }
+    if (left == null && data.length && data.charAt(offset - 1) !== '\n') {
+      for (var near = 1; near < data.length && left == null; near++) {
+        var at = forward ? offset + near : offset - near;
+        if (at < 0 || at >= data.length || data.charAt(at) === '\n') break;
+        rects = rectsBetween(host, at, at + 1);
+        if (rects.length) { r = rects[0]; left = forward ? r.left : r.right; fontTop = r.top; fontHeight = r.height; }
+      }
     }
     if (left == null) {
       // an empty line: measure the last character that has a rect and step down
@@ -940,8 +896,8 @@
     return lo;
   }
   function visualLineEnd(host, off) {
-    var text = textOf(host); if (!text) return off;
-    var len = text.data.length;
+    if (!host) return off;
+    var len = host.textContent.length;
     var here = lineTopAt(host, off, isForward(off)); if (here == null) return len;
     var lo = off, hi = len, mid, t;
     while (lo < hi) {
@@ -1022,7 +978,7 @@
       lineHeight: g.lineHeight,
       host: host
     };
-    return { caret: caret, selection: [], bounds: bounds, wash: readWash(caret) };
+    return { caret: caret, selection: [], bounds: bounds };
   }
 
   function paintOverlay(state, mode) {
@@ -1052,13 +1008,8 @@
     });
     paintHandles(selection);
     markFocusParagraph();
-    // The shade behind the caret. It sits with the other per-frame painters and
-    // ABOVE the caret's own early return: a hidden caret still has a sentence,
-    // and a world that lights it (Typewell) must not lose the wash the moment
-    // the caret is hidden by a selection.
-    paintWash(state.wash, mode);
     paintTrail(state.caret);
-    typewriterLine(state.caret);
+    if (mode !== 'layout') typewriterLine(state.caret);
     caretEl.hidden = !state.caret || pointerSelecting || selection.length > 0;
     if (caretEl.hidden) {
       stopCaretGlide();
@@ -1122,71 +1073,6 @@
     else caretRaf = requestAnimationFrame(animateCaret);
   }
 
-  // "The shade that it creates behind" — a wash under the sentence the caret is
-  // in. Off unless the world sets --focus-wash to a real colour, so a world that
-  // wants a quiet page pays nothing for it.
-  function washColor(host) {
-    if (frameReads.style(host).getPropertyValue('--focus-sentence').trim() === 'off') return '';
-    var v = frameReads.style(host).getPropertyValue('--focus-wash').trim();
-    return (!v || v === 'none' || v === 'transparent') ? '' : v;
-  }
-  function sentenceRange(source, at) {
-    var start = 0, end = source.length, i;
-    for (i = Math.min(at, source.length) - 1; i >= 0; i--) {
-      if (/[.!?\n]/.test(source.charAt(i)) && !(source.charAt(i) === '.' && /\d/.test(source.charAt(i + 1) || ''))) { start = i + 1; break; }
-    }
-    for (i = Math.max(0, at); i < source.length; i++) {
-      if (/[.!?\n]/.test(source.charAt(i))) { end = i + 1; break; }
-    }
-    while (start < end && /\s/.test(source.charAt(start))) start++;
-    return { start: start, end: end };
-  }
-  function readWash(caret) {
-    var host = caret && caret.host, text = host && textOf(host);
-    var colour = host ? washColor(host) : '';
-    var rects = [];
-    if (colour && text && focusId) {
-      var b = blockOf(focusId);
-      var range = frameReads.selection().range;
-      var off = range ? domOffset(host, range.startContainer, range.startOffset) : null;
-      if (b && off != null) {
-        var s = sentenceRange(b.source, off);
-        rects = mergeLineRects(rectsBetween(text, s.start, s.end).map(function (r) {
-          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
-        }));
-      }
-      if (!rects.length) rects = [{ left: caret.left, top: caret.lineTop, right: caret.left, bottom: caret.lineTop + caret.lineHeight, width: 0, height: caret.lineHeight }];
-    }
-    // Line boxes are measured before any overlay style is written.
-    var band = caret && caret.lineHeight ? caret.lineHeight : 0;
-    return { colour: colour, rects: rects.map(function (r) {
-      var height = Math.max(band, r.height * 1.24);
-      return { left: r.left, top: r.top + r.height / 2 - height / 2, width: r.width, height: height };
-    }) };
-  }
-  function paintWash(wash, mode) {
-    if (!washLayer) return;
-    var rects = wash ? wash.rects : [], colour = wash ? wash.colour : '';
-    // Keep the world's resting shade; only our own nodes are ours to paint.
-    var mine = Array.prototype.filter.call(washLayer.children, function (n) {
-      return n.getAttribute('data-owner') === 'editor';
-    });
-    while (mine.length < rects.length) {
-      var node = document.createElement('i');
-      node.className = 'cw-focus-wash';
-      node.setAttribute('data-owner', 'editor');
-      washLayer.appendChild(node);
-      mine.push(node);
-    }
-    mine.forEach(function (node, i) {
-      var r = rects[i];
-      node.style.opacity = r ? '1' : '0';
-      if (!r) return;
-      node.setAttribute('data-snap', mode === 'snap' ? '1' : '0');
-      if (node.style.background !== colour) node.style.background = colour;
-      node.style.transform = 'translate3d(' + r.left + 'px,' + r.top + 'px,0) scale(' + r.width + ',' + r.height + ')';
-    });
-  }
   // --- touch: real drag handles at both ends of a selection --------------------
   function coarsePointer() {
     return touchInput || !!(global.matchMedia && global.matchMedia('(pointer: coarse)').matches);
@@ -1245,8 +1131,8 @@
     return i;
   }
   function offsetFromPoint(host, x, y) {
-    var text = textOf(host); if (!text) return null;
-    var data = text.data, len = data.length;
+    if (!host) return null;
+    var text = host, data = host.textContent, len = data.length;
     var approx = null, r = pointToCaret(x, y);
     if (r && host.contains(r.startContainer)) approx = domOffset(host, r.startContainer, r.startOffset);
     if (approx == null) approx = 0;
@@ -1271,7 +1157,6 @@
       d = Math.abs(x - bounds[i].x);
       if (d < dx) { dx = d; pick = bounds[i]; }
     }
-    if (dx > pick.w / 2) return wordEdge(data, pick.off, x < pick.x);
     return pick.off;
   }
   function pointToPosition(x, y) {
@@ -1280,15 +1165,15 @@
     var host = r.startContainer;
     if (host.nodeType === 3) host = host.parentNode;
     var edit = host && host.closest ? host.closest('.cw-edit') : null;
-    if (edit && textOf(edit)) {
+    if (edit) {
       var off = offsetFromPoint(edit, x, y);
-      if (off != null) return { node: textOf(edit), offset: off };
+      if (off != null) return sourcePoint(edit, off, true);
     }
     return { node: r.startContainer, offset: r.startOffset };
   }
   function placePreciseCaret(id, x, y) {
     var host = editOf(id);
-    if (!host || !textOf(host)) return false;
+    if (!host) return false;
     var off = offsetFromPoint(host, x, y);
     if (off == null) return false;
     setCaret(id, off);
@@ -1356,6 +1241,56 @@
     }
     page.classList.toggle('cw-focus-paragraph', on);
   }
+  var revealTimer = 0, revealPending = false, revealNotBefore = 0, focusScroll = null, tapCaretRaf = 0;
+  function cancelCaretReveal() {
+    if (tapCaretRaf) global.cancelAnimationFrame(tapCaretRaf);
+    tapCaretRaf = 0;
+    if (revealTimer) global.clearTimeout(revealTimer);
+    revealTimer = 0; revealPending = false; revealNotBefore = 0; focusScroll = null;
+  }
+  function holdFocusScroll() {
+    var scroll = page && page.closest && page.closest('.page-scroll');
+    if (!scroll) return;
+    focusScroll = { host: scroll, top: scroll.scrollTop, left: scroll.scrollLeft };
+  }
+  function undoFocusScroll() {
+    var held = focusScroll;
+    if (!held || held.host.scrollTop === held.top && held.host.scrollLeft === held.left) return;
+    held.host.scrollTo({ top: held.top, left: held.left, behavior: 'instant' });
+  }
+  function revealCaret() {
+    if (!page || !focusId) return;
+    var host = editOf(focusId), c = caretSource();
+    if (!host || !c) return;
+    var scroll = page.closest && page.closest('.page-scroll');
+    if (!scroll || !scroll.scrollBy) return;
+    var g = caretGeometry(host, c.start, true);
+    if (!g) return;
+    var vv = global.visualViewport, box = scroll.getBoundingClientRect();
+    var app = document.getElementById('app');
+    var row = app && parseFloat(frameReads.style(app).getPropertyValue('--writing-row-bottom'));
+    if (!row) {
+      var topbar = document.querySelector('.topbar');
+      row = topbar ? topbar.getBoundingClientRect().bottom : box.top;
+    }
+    var touch = global.matchMedia && global.matchMedia('(pointer: coarse)').matches;
+    var keyboard = touch && vv && vv.height < global.innerHeight - 120;
+    var top = Math.max(box.top, row) + (touch ? 16 : 0);
+    var bottom = Math.min(box.bottom, vv ? vv.height + vv.offsetTop : global.innerHeight) - (keyboard ? 72 : touch ? 16 : 0);
+    var delta = g.lineTop < top ? g.lineTop - top : g.lineTop + g.lineHeight > bottom ? g.lineTop + g.lineHeight - bottom : 0;
+    if (Math.abs(delta) > 0.5) scroll.scrollBy({ top: delta, behavior: 'smooth' });
+  }
+  function requestCaretReveal(tap) {
+    revealPending = true;
+    if (tap && coarsePointer()) revealNotBefore = Date.now() + 460;
+    if (revealTimer) global.clearTimeout(revealTimer);
+    var vv = global.visualViewport;
+    var opening = tap && coarsePointer() && vv && vv.height >= global.innerHeight - 120;
+    // Keyboard geometry settles before the ONE visibility scroll. Resize events
+    // renew this debounce only for the writer's outstanding tap/input intent.
+    revealTimer = global.setTimeout(function () { revealTimer = 0; revealPending = false; undoFocusScroll(); focusScroll = null; revealCaret(); }, Math.max(80, revealNotBefore - Date.now()));
+  }
+
   function scroller() {
     var el = page && page.parentNode;
     while (el && el !== document.body) {
@@ -1537,6 +1472,7 @@
     lastUndoKind = '';
     finishComposition();
     lastNativeCaret = null;
+    nativeIntent = null;
     var b = blockOf(focusId);
     var was = focusId;
     focusId = null;
@@ -1548,14 +1484,14 @@
         removeBlockEl(b.id);
         delete rendered[b.id];
         scheduleReparse();
-        pending = [];
+        pending = []; literalRun = null;
         requestOverlay('snap');
         return;
       }
       refreshRendered(b);
     }
     repaint(was);
-    pending = [];
+    pending = []; literalRun = null;
     requestOverlay('snap');
   }
 
@@ -1565,7 +1501,10 @@
       blocks: blocks.map(function (b) { return { id: b.id, type: b.type, source: b.source, sep: b.sep, sepType: b.sepType, empty: b.empty }; }),
       focusId: focusId,
       caret: c ? c.start : null,
-      selectionEnd: c ? c.end : null
+      selectionEnd: c ? c.end : null,
+      literalRun: typeof literalRun !== 'undefined' && literalRun ? JSON.parse(JSON.stringify(literalRun)) : null,
+      pending: typeof pending !== 'undefined' ? JSON.parse(JSON.stringify(pending)) : [],
+      typingStyles: typeof typingStyles !== 'undefined' && typingStyles ? JSON.parse(JSON.stringify(typingStyles)) : null
     };
   }
 
@@ -1596,18 +1535,24 @@
   function restore(s) {
     // Emptying the article can clamp its scrollport to zero before the rebuilt
     // content arrives. Keep the writer's current viewport as well as the caret.
-    var scroll = scroller(), left = scroll === global ? global.scrollX || 0 : scroll.scrollLeft;
+    var scroll = page && page.closest && page.closest('.page-scroll') || scroller(), left = scroll === global ? global.scrollX || 0 : scroll.scrollLeft;
     var top = scroll === global ? global.scrollY || 0 : scroll.scrollTop;
     blocks = s.blocks.map(function (b) { return { id: b.id, type: b.type, source: b.source, sep: b.sep, sepType: b.sepType, empty: b.empty }; });
     focusId = null;
     blocks.forEach(function (b) { refreshRendered(b); });
     focusId = s.focusId && idx(s.focusId) >= 0 ? s.focusId : null;
     keyboardCaret = null;
+    if (typeof literalRun !== 'undefined') literalRun = s.literalRun ? JSON.parse(JSON.stringify(s.literalRun)) : null;
+    if (typeof pending !== 'undefined') pending = s.pending ? JSON.parse(JSON.stringify(s.pending)) : [];
+    typingStyles = s.typingStyles ? JSON.parse(JSON.stringify(s.typingStyles)) : null;
+    cancelCaretReveal();
     renderAll();
     if (focusId) setCaret(focusId, s.caret == null ? 0 : s.caret, s.selectionEnd == null ? undefined : s.selectionEnd);
     changed(true);
     if (scroll === global) { if (global.scrollTo) global.scrollTo({ left: left, top: top, behavior: 'instant' }); }
     else { scroll.scrollLeft = left; scroll.scrollTop = top; }
+    if (scroll !== global) focusScroll = { host: scroll, top: top, left: left };
+    requestCaretReveal(false);
     requestOverlay('layout');
   }
 
@@ -1654,7 +1599,9 @@
       reparseTimer = null;
       var keep = focusId, held = selectedBlockIds(), before = {};
       blocks.forEach(function (b) { before[b.id] = { source: b.source, type: b.type, html: rendered[b.id] }; });
+      var referencesBefore = JSON.stringify(doc.references || {});
       parseAll();
+      if (keep && referencesBefore !== JSON.stringify(doc.references || {}) && !composing) updateMirror(elOf(keep), blockOf(keep));
       // The focused text node is never touched. A block under a reader selection
       // also keeps the DOM to which the native Range points.
       blocks.forEach(function (b) {
@@ -1692,49 +1639,98 @@
 
   function finishInput(started) {
     var took = (global.performance && performance.now ? performance.now() : Date.now()) - started;
+    requestCaretReveal(false);
     metrics.inputs++;
     metrics.lastInputMs = took;
     metrics.maxInputMs = Math.max(metrics.maxInputMs, took);
   }
 
-  function changedSpan(before, after) {
+  function changedSpan(before, after, caret) {
     var start = 0;
     while (start < before.length && start < after.length && before.charAt(start) === after.charAt(start)) start++;
     var a = before.length, b = after.length;
     while (a > start && b > start && before.charAt(a - 1) === after.charAt(b - 1)) { a--; b--; }
+    // With no native range, equal runs admit several identical splices. Keep
+    // the smallest edit nearest the last observed caret, rather than its tail.
+    if (caret != null) {
+      var wanted = clamp(caret, 0, start);
+      while (start > wanted && before.charAt(start - 1) === after.charAt(start - 1) &&
+          before.charAt(a - 1) === after.charAt(b - 1)) { start--; a--; b--; }
+    }
     return { start: start, end: a, insertedLength: b - start };
   }
 
   function syncNativeInput(intent, restoreOffset) {
     var host = focusId && editOf(focusId), b = focusId && blockOf(focusId);
     if (!host || !b) return;
+    if (intent && intent.host && (intent.host !== host || intent.blockId !== b.id || intent.source !== b.source)) return;
     var raw = host.textContent.replace(/\r\n?/g, '\n');
-    if (raw === b.source) { if (restoreOffset != null) setCaret(b.id, restoreOffset); return; }
-    var span = changedSpan(b.source, raw);
-    b.source = raw;
-    if (restoreOffset != null) setCaret(b.id, restoreOffset);
-    adjustPending(b.id, span.start, span.end, span.insertedLength);
-    b.type = classify(raw);
-    updateMirror(elOf(b.id), b);
-    changed();
+    // contenteditable substitutes NBSP to paint a final/repeated ASCII space.
+    // Reconcile only the browser's changed input, retaining authored NBSP.
+    if (intent && intent.data && intent.data.includes(' ') && !intent.data.includes('\u00a0') && raw.includes('\u00a0')) {
+      var nativeSpan = changedSpan(b.source, raw);
+      var nativeEnd = nativeSpan.start + nativeSpan.insertedLength;
+      var nativeText = raw.slice(nativeSpan.start, nativeEnd);
+      if (nativeText.replace(/\u00a0/g, ' ') === intent.data) raw = raw.slice(0, nativeSpan.start) + intent.data + raw.slice(nativeEnd);
+    }
+    var intendedEdit = intent && intent.selectionEdit;
+    var intendedSource = intendedEdit && intent.data != null ? b.source.slice(0, intendedEdit.start) + intent.data + b.source.slice(intendedEdit.end) : null;
+    if (raw === b.source && (intendedSource == null || intendedSource === b.source)) { if (restoreOffset != null) setCaret(b.id, restoreOffset); return; }
+    var span;
+    if (intent && intent.selectionEdit) {
+      var edit = intent.selectionEdit;
+      span = { start: edit.start, end: edit.end, insertedLength: raw.length - b.source.length + edit.end - edit.start };
+    } else {
+      var after = caretSource(), delta = raw.length - b.source.length;
+      // input-only and direct native synchronization have no beforeinput. The
+      // post-input Range identifies the end of the edit even in an equal run.
+      var added = intent && intent.data != null ? intent.data.length : Math.max(0, delta);
+      var at = after && after.start === after.end ? after.start - added : -1;
+      var end = at + added - delta;
+      if (at >= 0 && end >= at && end <= b.source.length &&
+          raw === b.source.slice(0, at) + raw.slice(at, at + added) + b.source.slice(end)) {
+        span = { start: at, end: end, insertedLength: added };
+      } else span = changedSpan(b.source, raw, after ? Math.max(0, after.start - added) : typeof lastNativeCaret !== 'undefined' && lastNativeCaret && lastNativeCaret.start);
+    }
+    var inserted = raw.slice(span.start, span.start + span.insertedLength);
+    var simpleSource = !/[\\`*_~=<>&[\]#|^%\r\n-]/.test(b.source + raw);
+    var plain = (simpleSource && !/\s/.test(inserted) && !(intent && intent.pair && /[()[\]{}"]/.test(inserted)) || span.start === b.source.length && span.start === span.end && /[\p{L}\p{N}.,!?;:]$/u.test(b.source) && /^[\p{L}\p{N}]+$/u.test(inserted)) &&
+      !(typeof literalRun !== 'undefined' && literalRun && literalRun.escapes.length) && !(typeof typingStyles !== 'undefined' && typingStyles);
+    // Source synchronization callers have no InputEvent type. Native events,
+    // including input-only mobile events, always opt into literal reconciliation.
+    if (plain && (intendedSource == null || intendedSource === raw) || intent && intent.literal === false) {
+      b.source = raw;
+      adjustPending(b.id, span.start, span.end, span.insertedLength);
+      b.type = classify(raw); updateMirror(elOf(b.id), b);
+      if (restoreOffset != null) setCaret(b.id, restoreOffset);
+      if (typeof literalRun !== 'undefined') literalRun = { blockId: b.id, source: raw, caret: span.start + inserted.length, escapes: [] };
+      changed();
+      if (intent && intent.data && intent.data.length === 1) afterInsert(b.id, intent.data);
+      return;
+    }
+    if (intent && intent.selectionEdit) {
+      var edit = intent.selectionEdit;
+      var inserted = intent.data != null ? intent.data : span.insertedLength >= 0 ? raw.slice(edit.start, edit.start + span.insertedLength) : '';
+      host.innerHTML = editingHtml(liveHtml(b), b.source);
+      if (intent.pair) {
+        setCaret(b.id, edit.start, edit.end);
+        if (insertText(b.id, inserted, false)) return;
+      }
+      replaceVisible(b.id, edit.start, edit.end, inserted, false);
+      return true;
+    }
+    // Native, replacement and IME mutations share the literal transaction.
+    // Restore the pre-input source projection before reading its character model.
+    host.innerHTML = editingHtml(liveHtml(b), b.source);
+    replaceVisible(b.id, span.start, span.end, inserted, false);
     if (intent && intent.data && intent.data.length === 1) afterInsert(b.id, intent.data);
     else if (activePicker && activePicker.blockId === b.id) updatePicker();
   }
 
   function restoreSingleTextNode(host) {
-    if (!host || textOf(host)) return null;
-    var sel = global.getSelection(), off = null;
-    if (sel && sel.rangeCount && host.contains(sel.anchorNode)) {
-      try {
-        var before = document.createRange();
-        before.selectNodeContents(host); before.setEnd(sel.anchorNode, sel.anchorOffset);
-        off = before.toString().length;
-      } catch (e) { off = null; }
-    }
-    var raw = host.textContent.replace(/\r\n?/g, '\n');
-    host.textContent = '';
-    host.appendChild(document.createTextNode(raw));
-    return off;
+    // Kept as the normalization boundary for input callers. Formatted source
+    // runs belong to the renderer, and must never be flattened on each key.
+    return null;
   }
 
   // Programmatic mutations (pairs, pickers, structural edits) splice the one
@@ -1746,9 +1742,15 @@
     var b = blockOf(id); if (!b) return;
     start = clamp(start, 0, b.source.length);
     end = clamp(end, start, b.source.length);
-    var oldEnd = end;
-    b.source = b.source.slice(0, start) + text + b.source.slice(end);
-    adjustPending(id, start, oldEnd, text.length);
+    var nextSource = b.source.slice(0, start) + text + b.source.slice(end);
+    // A visible transaction may serialize the entire block. Pending closers
+    // belong to the actual changed span, not that serialization envelope.
+    var mutation = start === 0 && end === b.source.length ? changedSpan(b.source, nextSource) : { start: start, end: end, insertedLength: text.length };
+    // A shared escape prefix belongs to the changed character, not to an
+    // unchanged pending closer whose backslash happens to match it.
+    if (mutation.start > 0 && b.source.charAt(mutation.start - 1) === '\\') { mutation.start--; mutation.insertedLength++; }
+    b.source = nextSource;
+    adjustPending(id, mutation.start, mutation.end, mutation.insertedLength);
     b.type = classify(b.source);
     var host = editOf(id), node = textOf(host);
     if (node) node.data = b.source;
@@ -1767,79 +1769,46 @@
       if (p.index < end) return false;
       p.index += delta;
       var b = blockOf(id);
-      return !!b && b.source.charAt(p.index) === p.ch;
+      return !!b && (b.source.charAt(p.index) === p.ch || b.source.slice(p.index, p.index + 2) === '\\' + p.ch);
     });
   }
 
-  function insertText(id, ch) {
+  function insertText(id, ch, history) {
     var b = blockOf(id), c = caretSource();
     if (!b || !c) return false;
 
-    // 1 · a selection plus a pair character wraps the selection
-    if (c.end > c.start && OPENERS[ch] && ch.length === 1) {
-      pushUndo('wrap');
-      var inner = b.source.slice(c.start, c.end);
-      applyEdit(id, c.start, c.end, ch + inner + OPENERS[ch], c.start + 1 + inner.length + 1);
+    // Style delimiters are literal writer input, never an implicit command.
+    if (ch === '*' || ch === '_' || ch === '`') {
+      replaceVisible(id, c.start, c.end, ch, history === false ? false : 'type'); return true;
+    }
+
+    var at = c.start, parts = interactionRuns(editOf(id));
+    var visible = parts.filter(function (n) { return n.at + n.len > c.end; })[0];
+    var next = visible && visible.atomic ? '\ufffc' : visible ? (visible.node.nodeValue == null ? visible.node.data || '' : visible.node.nodeValue).charAt(Math.max(0, c.end - visible.at)) : '';
+    var hit = pending.find(function (p) { return p.blockId === id && p.index === at && p.ch === ch; });
+    var decision = shouldAutoClose({ text: ch, next: next, pending: hit && hit.ch });
+    if (c.start === c.end && decision.skip) {
+      var closerSize = b.source.charAt(at) === '\\' ? 2 : 1;
+      pending = pending.filter(function (p) { return p !== hit; });
+      overlayMode = 'snap';
+      if (typingStyles && typingStyles.blockId === id && typingStyles.at === at) { typingStyles.at = at + closerSize; typingStyles.run = null; }
+      setCaret(id, at + closerSize);
+      if (literalRun && literalRun.blockId === id && literalRun.source === b.source) literalRun.caret = at + closerSize;
       return true;
     }
-    if (c.end > c.start) return false;
-
-    var at = c.start, next = b.source.charAt(at), prev = b.source.charAt(at - 1);
-    var wasStep = stepOver; stepOver = null;
-
-    if ((ch === '*' || ch === '_' || ch === '`') && prev === ch && next === ch &&
-        b.source.charAt(at - 2) !== ch &&
-        !(wasStep && wasStep.blockId === id && wasStep.index === at && wasStep.ch === ch) &&
-        pending.some(function (p) { return p.blockId === id && p.index === at && p.ch === ch; })) {
-      pushUndo('pair');
-      applyEdit(id, at, at, ch + ch, at + 1);
-      pending.push({ blockId: id, index: at + 1, ch: ch });
+    if (decision.insert.length > ch.length) {
+      var closer = decision.insert.slice(-1), paired = replaceVisible(id, c.start, c.end, decision.insert, history === false ? false : 'pair');
+      var closeAt = paired.caret - (b.source.slice(paired.caret - 2, paired.caret) === '\\' + closer ? 2 : 1);
+      pending.push({ blockId: id, index: closeAt, ch: closer });
+      setCaret(id, closeAt);
+      if (literalRun && literalRun.blockId === id && literalRun.source === b.source) literalRun.caret = closeAt;
       return true;
     }
-
-    // 3 · step over an auto-inserted closer instead of doubling it
-    if (CLOSERS[ch] && next === ch) {
-      var hit = pending.filter(function (p) { return p.blockId === id && p.index === at && p.ch === ch; })[0];
-      if (hit) {
-        pending = pending.filter(function (p) { return p !== hit; });
-        overlayMode = 'snap';
-        stepOver = { blockId: id, index: at + 1, ch: ch };
-        setCaret(id, at + 1);
-        return true;
-      }
+    if (c.end > c.start || typingStyles && typingStyles.blockId === id && typingStyles.at === at) {
+      replaceVisible(id, c.start, c.end, ch, history === false ? false : 'type'); return true;
     }
-
-    if (ch === ' ' && next === '*') {
-      var ls = b.source.lastIndexOf('\n', Math.max(0, at - 1)) + 1;
-      if (/^[ \t]*\*$/.test(b.source.slice(ls, at)) &&
-          pending.some(function (p) { return p.blockId === id && p.index === at && p.ch === '*'; })) {
-        pushUndo('type');
-        applyEdit(id, at, at + 1, ' ', at + 1);
-        return true;
-      }
-    }
-
-    // 4 · `[[` — the second bracket lands inside the pair the first one made,
-    //     so `[|]` becomes `[[|]]` and the wiki picker opens.
-    if (ch === '[' && prev === '[' && next === ']') {
-      pushUndo('pair');
-      applyEdit(id, at, at, '[]', at + 1);
-      pending.push({ blockId: id, index: at + 1, ch: ']' });
-      openPicker('wiki', id, at - 1, 2);
-      return true;
-    }
-
-    // 5 · plain auto-close
-    if (OPENERS[ch] && shouldAutoClose(ch, prev, next)) {
-      pushUndo('pair');
-      applyEdit(id, at, at, ch + OPENERS[ch], at + 1);
-      pending.push({ blockId: id, index: at + 1, ch: OPENERS[ch] });
-      afterInsert(id, ch);
-      return true;
-    }
-
     if (at === b.source.length && /\n$/.test(b.source)) {
-      pushUndo('type');
+      if (history !== false) pushUndo('type');
       applyEdit(id, at, at, ch, at + ch.length);
       afterInsert(id, ch);
       return true;
@@ -1847,12 +1816,19 @@
     return false;
   }
 
-  function shouldAutoClose(ch, prev, next) {
-    // never close into a word: don't't, snake_case, 3*4
-    if ((ch === "'" || ch === '"') && isAlnum(prev)) return false;
-    if ((ch === '*' || ch === '_' || ch === '`') && isAlnum(prev)) return false;
-    if (isAlnum(next) || next === OPENERS[ch]) return false;
-    return true;
+  // Pure pairing specification, exported as Castor.editor.pairing. Input is
+  // visible text, never Markdown source: text, next, pending (closer), previous
+  // (opener), backspace. Output describes only the pair action; callers own
+  // source offsets, pending lifetime, history and mutations. Apostrophes are
+  // always literal. An opener pairs at block end, whitespace or closing
+  // punctuation. A pending closer steps over; Backspace removes an empty
+  // pending pair. All other input is literal, including pasted text.
+  function shouldAutoClose(input) {
+    var pairs = { '(': ')', '[': ']', '{': '}', '"': '"' };
+    var ch = input.text || '';
+    if (input.backspace) return { remove: !!input.pending && pairs[input.previous] === input.pending };
+    if (input.pending === ch && input.next === ch) return { insert: '', skip: true };
+    return { insert: ch + (pairs[ch] && (!input.next || /\s|[\p{Pe}\p{Pf}.,;:!?"']/u.test(input.next)) ? pairs[ch] : '') };
   }
 
   // Trigger detection runs after the character has landed in the source.
@@ -1868,6 +1844,7 @@
       return;
     }
     if (ch === '@') { var pre = b.source.charAt(at - 2); if (!pre || /\s/.test(pre)) openPicker('mention', id, at - 1, 1); return; }
+    if (ch === '^' && b.source.slice(at - 4, at) === '\\[\\^') { openPicker('footnote', id, at - 4, 4); return; }
     if (ch === '^' && b.source.charAt(at - 2) === '[') { openPicker('footnote', id, at - 2, 2); return; }
   }
 
@@ -1875,7 +1852,10 @@
     var b = blockOf(id), c = caretSource();
     if (!b || !c) return;
     pushUndo('split');
-    var head = b.source.slice(0, c.start), tail = b.source.slice(c.end);
+    var split = replaceVisible(id, c.start, c.end, { kind: 'split' }, 'project');
+    if (b.type === 'code') { applyEdit(id, 0, b.source.length, split.source, split.caret); return; }
+    var head = split.head, tail = split.tail;
+    if (headingLevel(b.type) && c.start === c.end && (c.start === b.source.length || /^[ \t]+#+[ \t]*$/.test(b.source.slice(c.start)))) head = b.source;
     var i = idx(id);
 
     if (MULTILINE[b.type] && b.type !== 'table') {
@@ -1898,7 +1878,7 @@
         return;
       }
       var nextMarker = marker.replace(/(\d+)([.)])/, function (_, n, d) { return (+n + 1) + d; });
-      applyEdit(id, c.start, c.end, '\n' + nextMarker, c.start + 1 + nextMarker.length);
+      applyEdit(id, 0, b.source.length, head + '\n' + nextMarker + tail, head.length + 1 + nextMarker.length);
       return;
     }
 
@@ -1925,18 +1905,9 @@
     var b = blockOf(id), c = caretSource();
     if (!b || !c) return;
     if (headingLevel(b.type)) { splitBlock(id); return; }
-    var raw = b.type === 'code' || b.type === 'frontmatter' || b.type === 'table';
-    var lineStart = b.source.lastIndexOf('\n', Math.max(0, c.start - 1)) + 1;
-    var line = b.source.slice(lineStart, c.start);
-    var lead = '';
-    if (!raw && MULTILINE[b.type]) {
-      var quoted = /^(\s*)((?:>\s?)+)/.exec(line);
-      // a quote keeps its arrows; a list item keeps the hang of its own marker
-      lead = quoted ? quoted[0] : new Array(markerLen(line) + 1).join(' ');
-    }
-    var text = raw ? '\n' : '  \n' + lead;
     pushUndo('break');
-    applyEdit(id, c.start, c.end, text, c.start + text.length);
+    var split = replaceVisible(id, c.start, c.end, { kind: 'split', soft: true }, 'project');
+    applyEdit(id, 0, b.source.length, split.source, split.caret);
   }
 
   function mergeBack(id) {
@@ -1960,8 +1931,21 @@
   function pairedDelete(id) {
     var b = blockOf(id), c = caretSource();
     if (!b || !c || c.end > c.start) return false;
+    var auto = pending.find(function (p) { return p.blockId === id && p.index === c.start; });
+    if (auto) {
+      var closeSize = b.source.charAt(c.start) === '\\' ? 2 : 1;
+      var previous = sourceNodes(editOf(id)).filter(function (n) { return !hiddenSource(n.node) && n.at < c.start; }).pop();
+      var previousEnd = previous && Math.min(previous.at + previous.len, c.start);
+      var opener = previous && previous.node.nodeValue.charAt(previousEnd - previous.at - 1);
+      if (previous && previousEnd === c.start && shouldAutoClose({ backspace: true, previous: opener, pending: auto.ch }).remove) {
+        var begin = c.start - 1;
+        if (begin > 0 && b.source.charAt(begin - 1) === '\\') begin--;
+        replaceVisible(id, begin, c.start + closeSize, ''); return true;
+      }
+    }
     for (var i = 0; i < PAIRED.length; i++) {
       var d = PAIRED[i];
+      if (/^[([\{"']$/.test(d.open)) continue;
       if (emptyPairAt(b.source, c.start, d)) {
         pushUndo('delete');
         applyEdit(id, c.start - d.open.length, c.start + d.close.length, '', c.start - d.open.length);
@@ -2006,27 +1990,53 @@
     }
     return rect;
   }
-  function openPicker(kind, id, start, len) {
+  function openPicker(kind, id, start, len, independent, end) {
     if (!Castor.commands || !Castor.commands.picker) return;
     if (!isArticle && kind !== 'mention') return;   // a field takes @names, not blocks, links or footnotes
     closePicker();
+    var anchor = independent ? caretRect() : null;
     var handle = Castor.commands.picker(kind, {
-      anchorRect: null,
+      anchorRect: anchor,
       query: '',
       doc: doc,
       onPick: function (item) { applyPick(item); },
-      onCancel: function () { activePicker = null; requestOverlay('navigate'); }
+      onCancel: function () { closePicker(true); }
     });
     if (!handle) return;
-    activePicker = { kind: kind, blockId: id, start: start, len: len, handle: handle };
-    updatePicker();
+    var label = independent && end > start ? interactionRuns(editOf(id)).map(function (n) {
+      return n.node.nodeValue.slice(Math.max(0, start - n.at), Math.max(0, Math.min(n.len, end - n.at)));
+    }).join('') : '';
+    activePicker = { kind: kind, blockId: id, start: start, end: end == null ? start : end, label: label, source: blockOf(id).source, len: len, handle: handle, independent: !!independent };
+    if (independent) {
+      var input = document.createElement('input');
+      input.className = 'cw-link-query';
+      input.type = 'text';
+      input.placeholder = 'Find a link';
+      input.setAttribute('aria-label', 'Find a link');
+      input.autocomplete = 'off';
+      input.value = label;
+      handle.el.insertBefore(input, handle.el.firstChild);
+      input.addEventListener('input', function () { handle.update(input.value, anchor); });
+      var dismiss = function (e) {
+        if (!handle.el.contains(e.target)) {
+          // A blank tap dismisses back into writing without losing the keyboard.
+          // Explicit controls and a new writer position keep their own action.
+          if (!e.target.closest || !e.target.closest('button,a,input,textarea,select,[contenteditable]')) e.preventDefault();
+          closePicker(true);
+        }
+      };
+      document.addEventListener('pointerdown', dismiss, true);
+      activePicker.dismiss = dismiss;
+      input.focus({ preventScroll: true });
+      handle.update(label, anchor);
+    } else updatePicker();
   }
   function updatePicker() {
     if (pickerRaf) return;
     pickerRaf = requestAnimationFrame(function () { pickerRaf = 0; updatePickerNow(); });
   }
   function updatePickerNow() {
-    if (!activePicker) return;
+    if (!activePicker || activePicker.independent) return;
     var b = blockOf(activePicker.blockId), c = caretSource();
     if (!b || !c || c.start < activePicker.start + activePicker.len) { closePicker(); return; }
     var q = b.source.slice(activePicker.start + activePicker.len, c.start);
@@ -2034,18 +2044,31 @@
     if (activePicker.kind === 'wiki') q = q.replace(/\]\]$/, '');
     activePicker.handle.update(q, caretRect());
   }
-  function closePicker() {
+  function closePicker(restore) {
+    var previous = activePicker;
     if (pickerRaf) { cancelAnimationFrame(pickerRaf); pickerRaf = 0; }
+    if (activePicker && activePicker.dismiss) document.removeEventListener('pointerdown', activePicker.dismiss, true);
     if (activePicker && activePicker.handle) activePicker.handle.close();
     activePicker = null;
+    if (restore && previous && previous.independent) {
+      var block = blockOf(previous.blockId);
+      if (block && block.source === previous.source) {
+        focusBlock(previous.blockId, previous.start);
+        setCaret(previous.blockId, previous.start, previous.end);
+      }
+    }
     requestOverlay('navigate');
   }
   function applyPick(item) {
     if (!activePicker || !item) { closePicker(); return; }
     var p = activePicker, b = blockOf(p.blockId), c = caretSource();
+    if (p.dismiss) document.removeEventListener('pointerdown', p.dismiss, true);
     activePicker = null;
-    if (!b || !c) return;
-    var end = c.start;
+    if (!b || !c && !p.independent || p.independent && p.source != null && b.source !== p.source) {
+      if (p.handle) p.handle.close();
+      return;
+    }
+    var end = p.independent ? p.end : c.start;
     if ((p.kind === 'search' || p.kind === 'block') && typeof item.run === 'function') {
       pushUndo('search');
       applyEdit(p.blockId, p.start, end, '', p.start);
@@ -2056,14 +2079,27 @@
     }
     // the trigger's auto-close left brackets sitting after the caret; the chosen
     // insertion carries its own, so swallow them rather than doubling up.
-    if (p.kind === 'wiki' && b.source.substr(end, 2) === ']]') end += 2;
+    if (!p.independent && p.kind === 'wiki' && b.source.substr(end, 2) === ']]') end += 2;
     else if (p.kind === 'footnote' && p.len && b.source.charAt(end) === ']') end += 1;
+    else if (p.kind === 'footnote' && p.len && b.source.substr(end, 2) === '\\]') end += 2;
     if (p.kind === 'footnote' || item.id === 'footnote') {
       if (p.handle) p.handle.close();
       insertFootnote(p.blockId, p.start, end);
       return;
     }
     var text = item.insert != null ? item.insert : (item.label || '');
+    if (p.independent && p.label && /^\[\[[^]*\]\]$/.test(text)) {
+      var target = text.slice(2, -2).split('|')[0];
+      text = '[[' + target + (target === p.label ? '' : '|' + p.label) + ']]';
+    }
+    if (p.independent) {
+      var wiki = /^\[\[([^]*?)\]\]$/.exec(item.insert || '');
+      if (wiki) {
+        replaceVisible(p.blockId, p.start, end, { kind: 'link', link: { wiki: true, target: wiki[1].split('|')[0] } }, 'pick');
+        if (p.handle) p.handle.close();
+        return;
+      }
+    }
     pushUndo('pick');
     var caretAt = p.start + text.length - (item.caretBack || 0);
     applyEdit(p.blockId, p.start, end, text, caretAt);
@@ -2188,7 +2224,15 @@
       return;
     }
     frameReads.invalidateSelection();
-    caretSource();
+    var sel = global.getSelection(), host = focusId && editOf(focusId);
+    if (!composing && sel && sel.isCollapsed && host && host.contains(sel.anchorNode) && hiddenSource(sel.anchorNode)) {
+      var off = domOffset(host, sel.anchorNode, sel.anchorOffset);
+      var p = sourcePoint(host, off, true);
+      if (p.node !== sel.anchorNode) setCaret(focusId, off);
+    }
+    var caret = caretSource();
+    if (!composing && typeof typingStyles !== 'undefined' && typingStyles && host && sel && page.contains(sel.anchorNode) &&
+        (!caret || caret.start !== caret.end || typingStyles.blockId !== focusId || typingStyles.at !== caret.start)) typingStyles = null;
     requestOverlay();
     if (selectionChangeRaf) return;
     selectionChangeRaf = requestAnimationFrame(function () { selectionChangeRaf = 0; syncSelectionChange(); });
@@ -2234,31 +2278,107 @@
     if (id === focusId) return;               // native caret handling inside the raw host
     if (focusId) blurCurrent();               // so a drag can select across blocks
   }
-  function onClick(e) {
-    var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
-    if (subtitle && subtitle.classList && subtitle.classList.contains('cw-subtitle')) return;
-    if (e.target.closest && e.target.closest('a[href]')) return; // let a real link work
+  function tappedSourceOffset(el, x, y) {
+    var r = pointToCaret(x, y);
+    if (!r || !el.contains(r.startContainer)) return null;
+    var edit = el.querySelector('.cw-edit');
+    if (edit) return offsetFromPoint(edit, x, y);
+    // Count reading characters at the finger BEFORE installing an edit surface.
+    var reading = document.createRange();
+    reading.selectNodeContents(el); reading.setEnd(r.startContainer, r.startOffset);
+    var count = reading.toString().length;
+    var b = blockOf(el.getAttribute('data-block-id')), temp = document.createElement('div');
+    if (!b) return null;
+    temp.innerHTML = liveHtml(b);
+    var nodes = sourceNodes(temp), seen = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i], atom = n.node.parentElement && n.node.parentElement.closest('.cw-atom');
+      if (atom) {
+        var label = atom.getAttribute('data-label') || '';
+        if (count <= seen + label.length) return n.at + (count > seen ? n.len : 0);
+        seen += label.length; continue;
+      }
+      if (hiddenSource(n.node)) continue;
+      if (seen + n.len >= count) return n.at + count - seen;
+      seen += n.len;
+    }
+    return b.source.length;
+  }
+  function passageTap(e, touch) {
+    if (e.target.closest && e.target.closest('.cw-subtitle,.footnote-ref,.cw-fnref')) return;
+    if (opts && opts.readOnly) return;
     var el = e.target.closest ? e.target.closest('.cw-block') : null;
     if (!el) return;
-    var sel = global.getSelection();
-    if (sel && !sel.isCollapsed) return;      // a drag-select, not a caret click
-    if (opts && opts.readOnly) return;        // read only: a click never opens a block for typing
+    var ui = e.target.closest && e.target.closest('[data-castor-ui]');
+    if (ui && el.contains(ui)) return;
+    if (touch && !ui && Castor.comments && Castor.comments.tapPassage && Castor.comments.tapPassage(e)) return;
     var id = el.getAttribute('data-block-id');
-    if (id === focusId) {
-      // A mouse inside the focused host is already exact and owns double-click
-      // word selection; a finger is not, so it is re-placed on the boundary.
-      if (touchInput) { placePreciseCaret(id, e.clientX, e.clientY); requestOverlay('navigate'); }
-      return;
+    var off = tappedSourceOffset(el, e.clientX, e.clientY);
+    // Empty padded cells have no reading character for the browser to hit.
+    // Resolve their element boundary in the exact editable source projection.
+    var cell = e.target.closest && e.target.closest('td,th'), paddedIndex = null;
+    if (cell && el.contains(cell)) {
+      var projection = el.querySelector('.cw-edit');
+      if (!projection) {
+        projection = document.createElement('div');
+        projection.innerHTML = liveHtml(blockOf(id));
+      }
+      var cellIndex = Array.prototype.indexOf.call(el.querySelectorAll('td,th'), cell);
+      var projectedCell = projection.querySelectorAll('td,th')[cellIndex];
+      if (projectedCell && !projectedCell.childNodes.length) { off = domOffset(projection, projectedCell, 0); paddedIndex = cellIndex; }
     }
-    focusBlock(id, 0);
-    // Re-hit-test against the raw text node at the same screen point. From this
-    // moment onward the browser owns the position; the mirror cannot receive it.
-    placePreciseCaret(id, e.clientX, e.clientY);
+    if (off == null) return;
+    if (e.preventDefault) e.preventDefault();
+    holdFocusScroll();
+    if (id !== focusId) focusBlock(id, off); else setCaret(id, off);
+    if (paddedIndex != null) {
+      var paddedCell = editOf(id).querySelectorAll('td,th')[paddedIndex];
+      var paddedRange = document.createRange(), paddedSelection = global.getSelection();
+      paddedRange.setStart(paddedCell, 0); paddedRange.setEnd(paddedCell, 0);
+      paddedSelection.removeAllRanges(); paddedSelection.addRange(paddedRange);
+      frameReads.invalidateSelection();
+    }
+    undoFocusScroll();
     requestOverlay('navigate');
+    requestCaretReveal(true);
+    // WebKit can replace the caret after touchend, including the first tap
+    // before its keyboard opens. Leave an already correct native selection
+    // alone: replacing it can interrupt iOS's keyboard-opening transaction.
+    if (touch) {
+      // Remember the browser's hit-test for this tap, not every later caret in
+      // the block. A new selection is never evidence of native tap snapping.
+      var host = editOf(id), native = pointToCaret(e.clientX, e.clientY);
+      var snap = native && host && host.contains(native.startContainer) ? domOffset(host, native.startContainer, native.startOffset) : null;
+      var token = { off: off, snap: snap, superseded: false };
+      passageTap.selectionToken = token;
+      if (!passageTap.watchSelection) {
+        passageTap.watchSelection = function () {
+          var pending = passageTap.selectionToken;
+          if (!pending || !tapCaretRaf) return;
+          var caret = caretSource();
+          if (!caret || caret.start !== caret.end || caret.start !== pending.off && caret.start !== pending.snap) pending.superseded = true;
+        };
+        document.addEventListener('selectionchange', passageTap.watchSelection);
+      }
+      tapCaretRaf = global.requestAnimationFrame(function () {
+        tapCaretRaf = 0;
+        var caret = caretSource();
+        if (passageTap.selectionToken !== token) return;
+        passageTap.selectionToken = null;
+        if (!token.superseded && focusId === id && snap != null && snap !== off && caret && caret.start === snap && caret.end === snap) setCaret(id, off);
+      });
+    }
+  }
+  function onClick(e) {
+    if (touchInput && Date.now() < suppressClickUntil) return;
+    var sel = global.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    passageTap(e, touchInput);
   }
   function onTouchStart(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
     if (subtitle && subtitle.classList && subtitle.classList.contains('cw-subtitle')) return;
+    cancelCaretReveal();
     lastUndoKind = '';
     touchInput = true;
     touchMoved = false;
@@ -2269,7 +2389,7 @@
     if (subtitle && subtitle.classList && subtitle.classList.contains('cw-subtitle')) return;
     if (!touchStart || !e.touches || !e.touches.length) return;
     var t = e.touches[0];
-    if (Math.abs(t.clientX - touchStart.x) > 8 || Math.abs(t.clientY - touchStart.y) > 8) touchMoved = true;
+    if (Math.abs(t.clientX - touchStart.x) > 8 || Math.abs(t.clientY - touchStart.y) > 8) { touchMoved = true; cancelCaretReveal(); }
   }
   function onTouchEnd(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
@@ -2282,15 +2402,14 @@
     var selected = sel && sel.rangeCount && !sel.isCollapsed && sel.getRangeAt(0);
     if (selected && page.contains(selected.startContainer) && page.contains(selected.endContainer)) return;
     var t = e.changedTouches[0];
-    var at = document.elementFromPoint(t.clientX, t.clientY);
-    if (at && at.closest && at.closest('a[href]')) return; // the synthetic click opens the link
-    var el = at && at.closest ? at.closest('.cw-block') : null;
-    if (!el || !page.contains(el)) return;
-    var id = el.getAttribute('data-block-id');
-    if (id !== focusId) focusBlock(id, 0);
-    placePreciseCaret(id, t.clientX, t.clientY);
-    requestOverlay('navigate');
+    suppressClickUntil = Date.now() + 700;
+    passageTap({ target: e.target, clientX: t.clientX, clientY: t.clientY,
+      preventDefault: function () {
+        var vv = global.visualViewport;
+        if (e.cancelable && (!vv || vv.height < global.innerHeight - 120)) e.preventDefault();
+      } }, true);
   }
+
   function onPointerMove(e) {
     if (e.buttons && page && (pointerStartedInPage || page.contains(e.target))) {
       pointerSelecting = true;
@@ -2330,6 +2449,9 @@
     e.preventDefault();
     try { e.clipboardData.setData('text/plain', text); }
     catch (err) { if (Castor.export.showFallback) Castor.export.showFallback(text); }
+    if (Castor.export.selectionHtml) {
+      try { e.clipboardData.setData('text/html', Castor.export.selectionHtml(range)); } catch (err) { /* Plain copy remains available. */ }
+    }
   }
   function crossHostRange(host) {
     var r = frameReads.selection().range;
@@ -2339,9 +2461,1642 @@
   function retireNativeHost(host) {
     // End only the unsupported editing host. A preceding valid IME input may
     // be kept, but a later cross-host mutation must never reach finishComposition.
-    finishComposition();
-    if (host.blur) host.blur();
+    finishComposition(true);
+    if (host && host.blur) host.blur();
     blurCurrent();
+  }
+  function replaceVisible(id, start, end, inserted, history, surface, work) {
+    var host = surface || editOf(id), b = blockOf(id);
+    if (!host || !b) return;
+    if (!surface && typeof currentReferences === 'function') {
+      var previousReferences = JSON.stringify(doc.references || {});
+      currentReferences();
+      if ((previousReferences !== JSON.stringify(doc.references || {}) || host.cwReferenceKey !== JSON.stringify(doc.references || {})) && !composing) updateMirror(elOf(id), b);
+    }
+    var source = b.source;
+    // A terminal line break is trimmed by the block reader, so editingHtml
+    // keeps that paragraph as raw source. Recover a lossless inline projection
+    // before a multiline transaction captures its styles and break markers.
+    if (b.type === 'p' && source.includes('\n') && host.textContent === source && !host.querySelector('.cw-mk')) {
+      var multiline = document.createElement('div'), multilineContext = typeof doc !== 'undefined' && doc || {};
+      multiline.innerHTML = MD().renderInline(source, { editSource: true, references: multilineContext.references, footnoteNumbers: new Map(Object.entries(multilineContext.footnoteNumbers || {})), footnotes: multilineContext.footnotes });
+      if (multiline.textContent === source) host = multiline;
+    }
+    var nodes = sourceNodes(host);
+    var action = inserted && typeof inserted === 'object' ? inserted : { kind: 'text', text: inserted || '' };
+    // Markdown styling inside raw HTML is literal text on the published site.
+    if (action.kind === 'style' && /^ {0,3}</.test(source) && MD().parse(source).blocks[0]?.meta.htmlBlock) return { source: source, caret: end, start: start, end: end };
+    if (action.kind === 'style' && (b.type === 'quote' || b.type === 'callout')) {
+      var styleBlocks = MD().parse(source).blocks.slice();
+      while (styleBlocks.length) {
+        var styleBlock = styleBlocks.pop();
+        if (styleBlock.meta.htmlBlock) return { source: source, caret: end, start: start, end: end };
+        if (styleBlock.meta.bodySource) styleBlocks = styleBlocks.concat(MD().parse(styleBlock.meta.bodySource).blocks);
+      }
+    }
+    // Share deterministic search limits across projections. Count parser input,
+    // not elapsed time: scheduling must never change the Markdown we save.
+    work = work || { probes: 0, steps: 0, characters: 0,
+      limit: Math.max(65536, 8 * (source.length + String(action.text || '').length + (host.cwSourcePrefix || '').length + (host.cwSourceSuffix || '').length)) };
+    var continuing = typeof literalRun !== 'undefined' && literalRun && literalRun.blockId === id && literalRun.source === source && action.kind === 'text';
+    var runEscapes = continuing ? literalRun.escapes.slice() : host.cwLiteralEscapes || [];
+    continuing = continuing || !!host.cwLiteralContinuation;
+    var runEscapeSet = new Set(runEscapes);
+    var pendingBefore = typeof pending !== 'undefined' ? pending.filter(function (p) { return p.blockId === id; }).map(function (p) { return { blockId: p.blockId, index: p.index, ch: p.ch }; }) : [];
+    var pendingFallback = null;
+    if (pendingBefore.length && /^h[12]$/.test(b.type) && /\n {0,3}(?:=+|-+)[ \t]*$/.test(source)) {
+      var pendingRuns = interactionRuns(host);
+      function pendingPoint(at) { return pendingRuns.reduce(function (count, n) { return count + (n.atomic ? n.at + n.len <= at ? 1 : 0 : Math.max(0, Math.min(n.len, at - n.at))); }, 0); }
+      pendingFallback = { from: pendingPoint(start), to: pendingPoint(end) };
+      pendingBefore.forEach(function (p) { p.point = pendingPoint(p.index); });
+    }
+    function rememberLiteral(next, escapes) {
+      if (history === 'project') return;
+      // Serialization may move several escape prefixes at once. Pending pairs
+      // follow their visible character, not the enclosing changed-source span.
+      if (pendingBefore.length && (chars && typeof from === 'number' || pendingFallback) && typeof document !== 'undefined' && document.createElement) {
+        var probe = document.createElement('div'), rawPoints = [];
+        probe.innerHTML = MD().parse(next.source, { editSource: true }).blocks.map(function (b) { return b.html; }).join('');
+        var escapeEnds = new Set(); sourceNodes(probe).forEach(function (n) { if (hiddenSource(n.node) && n.node.nodeValue === '\\') escapeEnds.add(n.at + n.len); });
+        interactionRuns(probe).forEach(function (n) {
+          if (n.atomic) rawPoints.push(n.at);
+          else for (var i = 0; i < n.len; i++) {
+            var at = n.at + i;
+            if (!i && next.source.charAt(at - 1) === '\\' && escapeEnds.has(at)) at--;
+            rawPoints.push(at);
+          }
+        });
+        var restored = [];
+        pendingBefore.forEach(function (p) {
+          var point = chars ? characterOffset(p.index) : p.point;
+          var editFrom = chars ? from : pendingFallback.from, editTo = chars ? to : pendingFallback.to;
+          if (action.kind === 'text') {
+            if (point >= editFrom && point < editTo) return;
+            if (point >= editTo) point += String(action.text || '').length - (editTo - editFrom);
+          }
+          var at = rawPoints[point];
+          if (at != null && (next.source.charAt(at) === p.ch || next.source.slice(at, at + 2) === '\\' + p.ch)) restored.push({ blockId: id, index: at, ch: p.ch });
+        });
+        pending = pending.filter(function (p) { return p.blockId !== id; }).concat(restored);
+      }
+      literalRun = action.kind === 'text' ? { blockId: id, source: next.source, caret: next.caret, escapes: (escapes || []).slice() } : null;
+    }
+    function rawHTML(value) {
+      return value.match(/(?<!\\)(?:\\\\)*(?:<!--(?:>|->|[^]*?-->)|<\?[^]*?\?>|<!\[CDATA\[[^]*?\]\]>|<![A-Za-z][^>]*>|<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t\r\n][^<>]*?)?\/?>)/g) || [];
+    }
+
+    if (/^#{1,6}[ \t]+$/.test(source) && start === source.length && end === start && action.kind === 'text' && action.text && typeof document !== 'undefined' && document.createElement) {
+      var blankProbe = document.createElement('div'), blankType = b.type, savedTyping = typeof typingStyles !== 'undefined' ? typingStyles : null, bodyEdit, bodyTyping;
+      blankProbe.cwSourcePrefix = source; blankProbe.cwHeading = true;
+      try {
+        b.source = ''; b.type = 'inline';
+        if (savedTyping && savedTyping.blockId === id && savedTyping.at === start) typingStyles = { blockId: id, at: 0, styles: savedTyping.styles.slice(), run: savedTyping.run };
+        bodyEdit = replaceVisible(id, 0, 0, action, 'project', blankProbe, work); bodyTyping = typeof typingStyles !== 'undefined' && typingStyles;
+      } finally { b.source = source; b.type = blankType; if (typeof typingStyles !== 'undefined') typingStyles = savedTyping; }
+      if (bodyEdit) {
+        bodyEdit.source = source + bodyEdit.source; bodyEdit.caret += source.length; bodyEdit.escapes = (bodyEdit.escapes || []).map(function (at) { return at + source.length; });
+        if (bodyEdit.start != null) bodyEdit.start += source.length;
+        if (bodyEdit.end != null) bodyEdit.end += source.length;
+        if (history === 'project') return bodyEdit;
+        if (history !== false) pushUndo(history || 'replace');
+        if (savedTyping && bodyTyping && savedTyping.blockId === id && savedTyping.at === start) { savedTyping.at = bodyEdit.caret; savedTyping.run = bodyTyping.run; }
+        applyEdit(id, 0, source.length, bodyEdit.source, bodyEdit.caret); rememberLiteral(bodyEdit, bodyEdit.escapes); return bodyEdit;
+      }
+    }
+    // A setext underline is a heading's hidden closing marker. Edit its text
+    // through the same inline transaction, retaining the authored underline.
+    var setext = /^h[12]$/.test(b.type) && /\n {0,3}(?:=+|-+)[ \t]*$/.exec(source);
+    if (setext && (action.kind === 'text' || action.kind === 'style') && typeof document !== 'undefined' && document.createElement) {
+      var headingBody = source.slice(0, setext.index), headingProbe = document.createElement('div');
+      headingProbe.innerHTML = MD().renderInline(headingBody, { editSource: true });
+      headingProbe.cwSourceSuffix = setext[0]; headingProbe.cwLiteralEscapes = runEscapes; headingProbe.cwLiteralContinuation = continuing;
+      var headingType = b.type, headingEdit;
+      try {
+        b.source = headingBody; b.type = 'p';
+        headingEdit = replaceVisible(id, Math.min(start, headingBody.length), Math.min(end, headingBody.length), action, 'project', headingProbe, work);
+      } finally { b.source = source; b.type = headingType; }
+      if (headingEdit) {
+        if (headingEdit.source) headingEdit.source += setext[0];
+        if (history === 'project') return headingEdit;
+        if (history !== false) pushUndo(history || 'replace');
+        if (typeof typingStyles !== 'undefined' && typingStyles && typingStyles.blockId === id && typingStyles.at === start) { typingStyles.at = headingEdit.caret; typingStyles.run = headingEdit.typingRun; }
+        applyEdit(id, 0, source.length, headingEdit.source, headingEdit.caret); rememberLiteral(headingEdit, headingEdit.escapes);
+        if (action.kind === 'style') setCaret(id, headingEdit.start, headingEdit.end);
+        return headingEdit;
+      }
+    }
+    // A fenced block has one body. Its fences and info string are structural,
+    // never inline Markdown and never candidates for a paragraph split.
+    if (b.type === 'code' || b.type === 'frontmatter' || b.type === 'table' || /^ {0,3}</.test(source) && MD().parse(source).blocks[0]?.meta.htmlBlock) {
+      if (action.kind !== 'text' && action.kind !== 'split') {
+        if (b.type === 'table' && action.kind === 'style' && end > start) {
+          // Project just one cell through the ordinary inline transaction.
+          // Delimiters, clipped fields and cross-cell selections stay raw.
+          var lineStart = source.lastIndexOf('\n', start - 1) + 1, lineEnd = source.indexOf('\n', start);
+          if (lineEnd < 0) lineEnd = source.length;
+          var edges = [lineStart - 1];
+          for (var at = lineStart; at < lineEnd; at++) {
+            if (source.charAt(at) === '\\') { at++; continue; }
+            if (source.charAt(at) === '|') edges.push(at);
+          }
+          edges.push(lineEnd);
+          for (var cell = 1; cell < edges.length; cell++) {
+            var left = edges[cell - 1] + 1, right = edges[cell];
+            while (left < right && /[ \t]/.test(source.charAt(left))) left++;
+            while (right > left && /[ \t]/.test(source.charAt(right - 1))) right--;
+            if (start < left || end > right) continue;
+            var cellSource = source.slice(left, right), cellProbe = document.createElement('div'), tableType = b.type, cellEdit;
+            // The site and app have different delimiter resolution for dense
+            // authored runs and nested strike. Keep those cells unchanged
+            // rather than turn literal delimiters into different visible text.
+            if (/[*_~]/.test(cellSource) && !/^(\*\*|\*|__|_)[^*_~]+\1$/.test(cellSource)) break;
+            cellProbe.innerHTML = MD().renderInline(cellSource, { editSource: true, tableCell: true, references: typeof doc !== 'undefined' && doc && doc.references });
+            try {
+              b.source = cellSource; b.type = 'inline';
+              cellEdit = replaceVisible(id, start - left, end - left, action, 'project', cellProbe, work);
+            } finally { b.source = source; b.type = tableType; }
+            if (!cellEdit) break;
+            // Inline serialization does not own GFM row delimiters. Escape any
+            // newly literal pipe, retaining source selection positions as it grows.
+            var tableCell = '', tableShift = [];
+            for (var ci = 0; ci < cellEdit.source.length; ci++) {
+              if (cellEdit.source.charAt(ci) === '|') {
+                var slashes = 0;
+                for (var si = ci - 1; si >= 0 && cellEdit.source.charAt(si) === '\\'; si--) slashes++;
+                if (!(slashes % 2)) { tableCell += '\\'; tableShift.push(ci); }
+              }
+              tableCell += cellEdit.source.charAt(ci);
+            }
+            // Table escaping also applies inside code. Validate visible cell
+            // text after that final spelling, rather than guessing from slash
+            // parity; a style may safely refuse an unrepresentable projection.
+            var beforeCell = document.createElement('div'), afterCell = document.createElement('div');
+            beforeCell.innerHTML = MD().renderInline(cellSource, { tableCell: true, references: typeof doc !== 'undefined' && doc && doc.references });
+            afterCell.innerHTML = MD().renderInline(tableCell, { tableCell: true, references: typeof doc !== 'undefined' && doc && doc.references });
+            if (beforeCell.textContent !== afterCell.textContent) break;
+            ['caret', 'start', 'end'].forEach(function (key) {
+              cellEdit[key] += tableShift.filter(function (at) { return at < cellEdit[key]; }).length;
+            });
+            cellEdit.source = source.slice(0, left) + tableCell + source.slice(right);
+            cellEdit.caret += left; cellEdit.start += left; cellEdit.end += left;
+            if (history === 'project') return cellEdit;
+            if (history !== false) pushUndo(history || 'replace');
+            applyEdit(id, 0, source.length, cellEdit.source, cellEdit.caret);
+            setCaret(id, cellEdit.start, cellEdit.end);
+            return cellEdit;
+          }
+        }
+        return { source: source, caret: end, start: start, end: end };
+      }
+      var rawText = action.kind === 'split' ? '\n' : action.text || '';
+      if (b.type === 'code') {
+        var firstBreak = source.indexOf('\n'), indentedCode = /^(?: {4}| {0,3}\t)/.test(source);
+        var closing = !indentedCode && /\n[ \t]*(?:`{3,}|~{3,})[ \t]*$/.exec(source);
+        var bodyStart = indentedCode ? (/^(?: {4}| {0,3}\t)/.exec(source) || [''])[0].length : firstBreak < 0 ? source.length : firstBreak + 1;
+        var bodyEnd = closing ? closing.index : source.length;
+        start = clamp(start, bodyStart, bodyEnd); end = clamp(end, start, bodyEnd);
+        if (indentedCode) rawText = rawText.replace(/\n/g, '\n    ');
+        else if (firstBreak < 0 && rawText) rawText = '\n' + rawText;
+      }
+      if (b.type === 'table') {
+        // Padded cells share a byte boundary until the first edit. The native
+        // cell carries the missing delimiters, materialized only by that edit.
+        if (start === end && rawText) {
+          var padRange = frameReads.selection().range, padNode = padRange && padRange.startContainer;
+          var padCell = padNode && (padNode.nodeType === 1 ? padNode : padNode.parentElement);
+          padCell = padCell && padCell.closest && padCell.closest('[data-cw-table-pad]');
+          if (padCell && host.contains(padCell) && domOffset(host, padRange.startContainer, padRange.startOffset) === start) {
+            var padCount = +padCell.getAttribute('data-cw-table-pad') || 0;
+            source = source.slice(0, start) + '|'.repeat(padCount) + source.slice(start);
+            start += padCount; end += padCount;
+          }
+        }
+        rawText = rawText.replace(/[\\`*_\[\]()~<>#|=^%&]/g, '\\$&').replace(/\n/g, '<br>');
+        if (/^[ \t]/.test(rawText) && /^[ \t]*$/.test(source.slice(source.lastIndexOf('|', start - 1) + 1, start))) {
+          var cellSpaces = /^[ \t]+/.exec(rawText)[0];
+          rawText = '<span style="white-space:pre">' + cellSpaces + '</span>' + rawText.slice(cellSpaces.length);
+        }
+        rawText = rawText.replace(/ +$/, function (spaces) { return '&#32;'.repeat(spaces.length); });
+      }
+      var raw = { source: source.slice(0, start) + rawText + source.slice(end), caret: start + rawText.length };
+      if (b.type === 'code') {
+        var fence = /^( {0,3})(`{3,}|~{3,})/.exec(source), body = raw.source.slice(bodyStart, bodyEnd + raw.source.length - source.length);
+        if (fence && closing) {
+          var size = fence[2].length;
+          body.split('\n').forEach(function (line) { var run = new RegExp('^ {0,3}(' + fence[2][0] + '+)[ \t]*$').exec(line); if (run) size = Math.max(size, run[1].length + 1); });
+          if (size > fence[2].length) {
+            var delta = size - fence[2].length, marker = fence[2][0].repeat(size);
+            raw.source = raw.source.replace(/^( {0,3})(`{3,}|~{3,})/, '$1' + marker).replace(/\n([ \t]*)(?:`{3,}|~{3,})[ \t]*$/, '\n$1' + marker);
+            raw.caret += delta;
+          }
+        }
+      }
+
+      if (action.kind === 'split' && !action.soft && b.type !== 'code') return { head: source.slice(0, start), tail: source.slice(end), prefix: '' };
+      if (history === 'project' || action.kind === 'split') return raw;
+      if (history !== false) pushUndo(history || 'replace');
+      applyEdit(id, 0, source.length, raw.source, raw.caret);
+      return raw;
+    }
+    // Capture characters and semantic owners, not delimiters. Source offsets are
+    // used only at this boundary; all editing below is on the visible sequence.
+    var chars = [], membersByOwner = new Map(), ownersByNode = new Map(), escapedEnds = new Set();
+    nodes.forEach(function (n) {
+      if (hiddenSource(n.node) && n.node.nodeValue === '\\') escapedEnds.add(n.at + n.len);
+      for (var parent = n.node.parentElement; parent && parent !== host; parent = parent.parentElement) {
+        if (!membersByOwner.has(parent)) membersByOwner.set(parent, []);
+        membersByOwner.get(parent).push(n);
+      }
+    });
+    function ownedNodes(node) { return membersByOwner.get(node) || []; }
+    nodes.forEach(function (n) {
+      var parent = n.node.parentElement, atom = parent && parent.closest('.cw-atom');
+      if (atom) {
+        if (chars.some(function (c) { return c.atom === atom; })) return;
+        var members = ownedNodes(atom);
+        var first = members[0], last = members[members.length - 1];
+        var atomLink = atom.parentElement && atom.parentElement.closest('a');
+        chars.push({ text: source.slice(first.at, last.at + last.len), at: first.at, end: last.at + last.len, styles: [], atom: atom, link: atomLink, originalLink: atomLink });
+        return;
+      }
+      if (hiddenSource(n.node)) return;
+      var styles = [], link = null, ticks = null;
+      for (var p = parent; p && p !== host; p = p.parentElement) {
+        var key = { STRONG: 'bold', EM: 'italic', MARK: 'highlight', DEL: 'strike', CODE: 'code', SUP: 'sup', SUB: 'sub', SPAN: 'span' }[p.tagName];
+        if (key && styles.indexOf(key) < 0) styles.push(key);
+        if (key === 'code') { var members = ownedNodes(p); ticks = members.length && (/^`+/.exec(source.slice(members[0].at)) || ['`'])[0]; }
+        if (p.tagName === 'A' && !(p.className && /(?:^| )tag(?: |$)/.test(p.className))) link = p;
+      }
+      for (var i = 0; i < n.len; i++) chars.push({ text: parent && parent.closest('.cw-code-newline') ? ' ' : (n.node.nodeValue == null ? n.node.data || '' : n.node.nodeValue).charAt(i), at: n.at + i, end: n.at + i + 1, styles: styles.slice(), originalStyles: styles.slice(), link: link, originalLink: link, ticks: ticks, parent: parent });
+    });
+    nodes.forEach(function (n) {
+      if (hiddenSource(n.node) && /^(?:<br\s*\/?>)$/i.test(n.node.nodeValue)) chars.push({ text: '\n', at: n.at, end: n.at + n.len, styles: [], originalStyles: [], rawAt: n.at, breakSource: n.node.nodeValue });
+    });
+    chars.sort(function (a, b) { return a.at - b.at; });
+    chars.forEach(function (c) {
+      if (c.atom) {
+        for (var p = c.atom.parentElement; p && p !== host; p = p.parentElement) {
+          var key = { STRONG: 'bold', EM: 'italic', MARK: 'highlight', DEL: 'strike', SUP: 'sup', SUB: 'sub' }[p.tagName];
+          if (key && !(key === 'sup' && /footnote-ref/.test(p.className || ''))) c.styles.push(key);
+        }
+        c.originalStyles = c.styles.slice(); c.parent = c.atom;
+      }
+      c.rawAt = c.at;
+      // An escape belongs to its visible character, not to its predecessor.
+      if (!c.atom && source.charAt(c.at - 1) === '\\' && escapedEnds.has(c.at)) c.rawAt--;
+      c.owners = [];
+      for (var p = c.parent; p && p !== host; p = p.parentElement) {
+        if (!ownersByNode.has(p)) {
+          var members = ownedNodes(p), owner = null;
+          if (members.length) {
+            var ownerAt = members[0].at, htmlOpen = new RegExp('<' + p.tagName.toLowerCase() + (p.tagName === 'SPAN' ? '(?: style="white-space:pre")?' : '') + '>\\s*$', 'i').exec(source.slice(0, ownerAt)); if (htmlOpen) ownerAt = htmlOpen.index;
+            var ancestors = new Set(); for (var ancestor = p; ancestor && ancestor !== host; ancestor = ancestor.parentElement) ancestors.add(ancestor);
+            owner = { node: p, at: ownerAt, end: members[members.length - 1].at + members[members.length - 1].len, ancestors: ancestors };
+          }
+          ownersByNode.set(p, owner);
+        }
+        if (ownersByNode.get(p)) c.owners.push(ownersByNode.get(p));
+      }
+    });
+    var derivedAnchors = new Set(), followingAnchors = new Set(), addressLabels = new Map();
+    chars.forEach(function (c) {
+      if (c.link && c.link.getAttribute) addressLabels.set(c.link, (addressLabels.get(c.link) || '') + (c.atom ? ' ' : c.text));
+    });
+    var replacedLabel = chars.filter(function (c) { return c.at < end && c.end > start; });
+    if (action.kind === 'text' && replacedLabel.length && replacedLabel[0].link && replacedLabel.every(function (c) { return c.link === replacedLabel[0].link && !c.atom; }) && action.text === replacedLabel.map(function (c) { return c.text; }).join('')) {
+      if (history !== 'project') setCaret(id, end);
+      return { source: source, caret: end };
+    }
+    if (action.kind !== 'link') addressLabels.forEach(function (label, anchor) {
+      // Content is the reload rule: words that derive exactly their destination
+      // follow edits. Authored links with other words retain their destination.
+      var members = ownedNodes(anchor);
+      if (attr(anchor, 'data-autolink') && members.length && source.charAt(members[0].at) !== '<') {
+        followingAnchors.add(anchor);
+        if (action.kind !== 'style') return;
+      }
+      var visible = chars.filter(function (c) { return c.link === anchor; });
+      var angleEdge = members.length && (source.charAt(members[0].at - 1) === '<' && start <= members[0].at && end > members[0].at - 1 || source.charAt(members[members.length - 1].at + members[members.length - 1].len) === '>' && start <= members[members.length - 1].at + members[members.length - 1].len && end > members[members.length - 1].at + members[members.length - 1].len);
+      if (!angleEdge && !visible.some(function (c) { return start === end ? c.at <= start && c.end >= start : c.at < end && c.end > start; })) return;
+      if (!label || /\s/.test(label)) return;
+      var probe = document.createElement('div');
+      probe.innerHTML = MD().renderInline('<' + label + '>');
+      var address = probe.querySelector('a');
+      if (!address || address.textContent !== label || address.getAttribute('href') !== attr(anchor, 'href')) {
+        probe.innerHTML = MD().renderInline(label, { literalAutolinkAt: 0 });
+        address = probe.querySelector('a');
+      }
+      if ((!address || address.textContent !== label || address.getAttribute('href') !== attr(anchor, 'href')) && /^www\./i.test(label)) {
+        probe.innerHTML = MD().renderInline('<http://' + label + '>'); address = probe.querySelector('a');
+      }
+      if (address && (address.textContent === label || /^www\./i.test(label) && address.textContent === 'http://' + label) && address.getAttribute('href') === attr(anchor, 'href')) {
+        followingAnchors.add(anchor);
+        // Plain bare autolinks already re-derive in the reader. Only formatting
+        // or an explicit/angle link needs the full regeneration path.
+        if (!attr(anchor, 'data-autolink') || members.length && source.charAt(members[0].at) === '<' || action.kind === 'style' && members.some(function (n) { return !hiddenSource(n.node) && n.at < end && n.at + n.len > start; })) derivedAnchors.add(anchor);
+      }
+    });
+    chars.forEach(function (c) {
+      var anchor = c.link;
+      if (!followingAnchors.has(anchor)) return;
+      var members = ownedNodes(anchor);
+      c.explicitAddress = !attr(anchor, 'data-autolink') && members.length && source.charAt(members[0].at - 1) !== '<';
+      c.addressOrigin = anchor; c.addressTitle = attr(anchor, 'title');
+      c.automatic = true; c.link = c.originalLink = null;
+      c.owners = c.owners.filter(function (o) { return o.node !== anchor; });
+    });
+    // Ask the same GFM scanner that paints the reader which source characters
+    // belong to a bare autolink. Escapes inside those spans are URL characters.
+    function automaticPositions(value) {
+      var positions = [];
+      if (!/https?:\/\/|www\.|@(?:[A-Za-z0-9._&-]|\\[._&-])/i.test(value) || typeof document === 'undefined' || !document.createElement) return positions;
+      var probe = document.createElement('div');
+      probe.innerHTML = MD().renderInline(value, { editSource: true });
+      if (probe.textContent !== value) return positions;
+      var parts = sourceNodes(probe);
+      parts.forEach(function (n) {
+        var anchor = n.node.parentElement && n.node.parentElement.closest('a');
+        if (!anchor || !anchor.getAttribute('data-autolink') || hiddenSource(n.node)) return;
+        var first = parts.find(function (part) { return anchor.contains(part.node); });
+        if (!first || value.charAt(first.at) === '<') return;
+        for (var i = n.at; i < n.at + n.len; i++) if (value.charAt(i) !== '<' && value.charAt(i) !== '`' && !(value.charAt(i) === '&' && /^&(?:#[xX][0-9a-fA-F]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*);/.test(value.slice(i)))) positions[i] = true;
+        // GFM trims terminal delimiters until another URL character arrives.
+        // Keep them in the same literal run, so typing the next character can
+        // extend the destination instead of inheriting a permanent HTML break.
+        for (var tail = n.at + n.len; tail < value.length && /[)_*\[\](]/.test(value[tail]); tail++) positions[tail] = true;
+      });
+      return positions;
+    }
+    function structuralPrefix(line) {
+      if (b.type === 'inline' || b.type === 'p') return 0;
+      if (b.type === 'footnote-def') return (/^(?:\[\^[^\]]+\]:[ \t]*|[ \t]+)/.exec(line) || [''])[0].length;
+      var rest = line, size = 0, match;
+      while ((match = /^(?: {0,3}>[ \t]?|[ \t]*(?:[-+*]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?|#{1,6}[ \t]+)/.exec(rest))) {
+        size += match[0].length; rest = rest.slice(match[0].length);
+      }
+      if (b.type === 'list' || /^(?:quote|callout)$/.test(b.type)) size += (/^[ \t]+/.exec(rest) || [''])[0].length;
+      return size;
+    }
+    function opensBlock(value) {
+      return /^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|nav|ol|p|param|script|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?=[ \t/>]|$))/i.test(value) || /^[ \t]+/.test(value) || /^ {0,3}(?:[-+*]|#{1,6}|>)[ \t]*$/.test(value) || /^ {0,3}(?:(?:-[ \t]*){3,}$|[-=]+[ \t]*$|(?:[-+*]|\d+[.)]|#{1,6}|>)[ \t]|`{3,}|~{3,})/.test(value);
+    }
+    // Native reconciliation can temporarily expose raw source instead of
+    // hidden marker nodes. Structural prefixes still belong to the block.
+    chars = chars.filter(function (c) {
+      var lineAt = source.lastIndexOf('\n', c.at - 1) + 1, end = source.indexOf('\n', lineAt);
+      return c.at >= lineAt + structuralPrefix(source.slice(lineAt, end < 0 ? source.length : end));
+    });
+    var charactersByOwner = new Map();
+    chars.forEach(function (c) { (c.owners || []).forEach(function (o) {
+      if (!charactersByOwner.has(o.node)) charactersByOwner.set(o.node, []);
+      charactersByOwner.get(o.node).push(c);
+    }); });
+    function ownerCharacters(owner) { return charactersByOwner.get(owner.node) || []; }
+    function charBefore(at) {
+      var lo = 0, hi = chars.length;
+      while (lo < hi) { var mid = (lo + hi) >>> 1; if (chars[mid].end <= at) lo = mid + 1; else hi = mid; }
+      return chars[lo - 1];
+    }
+    function charAfter(at) {
+      var lo = 0, hi = chars.length;
+      while (lo < hi) { var mid = (lo + hi) >>> 1; if (chars[mid].at < at) lo = mid + 1; else hi = mid; }
+      return chars[lo];
+    }
+    function characterOffset(at) { var lo = 0, hi = chars.length; while (lo < hi) { var mid = (lo + hi) >>> 1; if (chars[mid].end <= at) lo = mid + 1; else hi = mid; } return lo; }
+    var from = characterOffset(start), to = characterOffset(end), active = chars[from];
+    // At a hidden closing marker the caret is outside the style. At the end of
+    // a visible run it still belongs to that run until the closing marker.
+    if (from === to && (!active || active.at > start) && from && chars[from - 1].end === start) active = chars[from - 1];
+    // Reconstruct the live typing run, including whitespace temporarily emitted
+    // outside Markdown marks. These are edited characters, not raw source trees.
+    var typing = typeof typingStyles !== 'undefined' && typingStyles && typingStyles.blockId === id && typingStyles.at === start ? typingStyles : null;
+    var typingRun = typing && action.kind === 'text' && !action.link ? { from: typing.run ? typing.run.from : from, styles: typing.run ? typing.run.styles.map(function (styles) { return styles.slice(); }) : [] } : null;
+    if (typingRun) typingRun.styles.forEach(function (styles, index) {
+      var c = chars[typingRun.from + index];
+      if (c) {
+        // Only whitespace may have moved outside its typing delimiters. A
+        // retained run must never re-own untouched non-whitespace characters.
+        if (/^\s$/.test(c.text)) c.styles = styles.slice();
+        else typingRun.styles[index] = c.styles.slice();
+        c.typed = true;
+      }
+    });
+    function literal(text, owner) { return String(text).split('').map(function (ch) { return { text: ch, at: start, end: start, styles: typeof typingStyles !== 'undefined' && typingStyles && typingStyles.blockId === id && typingStyles.at === start ? typingStyles.styles.slice() : owner ? owner.styles.slice() : [], link: owner && owner.link, ticks: owner && owner.ticks, owners: owner && owner.owners, automatic: owner && owner.automatic, explicitAddress: owner && owner.explicitAddress, addressOrigin: owner && owner.addressOrigin, addressTitle: owner && owner.addressTitle, typed: !!typingRun }; }); }
+    function attr(el, name) { return el && el.getAttribute ? el.getAttribute(name) : null; }
+    function linkInfo(el) {
+      var members = ownedNodes(el);
+      var raw = members.length ? source.slice(members[0].at, members[members.length - 1].at + members[members.length - 1].len) : '';
+      if (/(?:^| )wikilink(?: |$)/.test(attr(el, 'class') || '') && raw.slice(0, 2) === '[[') return { wiki: true, target: raw.slice(2, -2).split('|')[0] };
+      return { wiki: false, target: attr(el, 'href') || (raw.match(/\]\(([^]*)\)$/) || [,''])[1], title: attr(el, 'title') };
+    }
+    // The published reader leaves wiki syntax literal. A code span must not
+    // begin in one wiki token and consume content outside that token.
+    // Wiki scans keep escaped and ordinary characters disjoint so a malformed
+    // closer cannot backtrack over every spelling of a backslash run.
+    function crossesWikiCode(value) {
+      if (value.indexOf('[[') < 0 || value.indexOf('`') < 0) return false;
+      var spans = [], wiki = /(?<!\\)\[\[(?:\\.|[^\]\\\n])*\]\]/g, match;
+      while ((match = wiki.exec(value))) spans.push({ start: match.index, end: match.index + match[0].length });
+      function scope(at) { for (var n = 0; n < spans.length; n++) if (at >= spans[n].start && at < spans[n].end) return n + 1; return 0; }
+      for (var at = 0; at < value.length;) {
+        if (value[at] === '\\') { at += 2; continue; }
+        if (value[at] !== '`') { at++; continue; }
+        var size = 1; while (value[at + size] === '`') size++;
+        var close = at + size;
+        while (close < value.length) {
+          if (value[close] !== '`') { close++; continue; }
+          var run = 1; while (value[close + run] === '`') run++;
+          if (run === size) break; close += run;
+        }
+        if (close >= value.length) { at += size; continue; }
+        if (scope(at) !== scope(close) && (scope(at) || scope(close))) return true;
+        at = close + size;
+      }
+      return false;
+    }
+    function crossesWikiStyles(value) {
+      if (!/\[\[/.test(value) || !/[*_~]/.test(value)) return false;
+      var spans = [], extra = 0;
+      var plain = value.replace(/(?<!\\)\[\[(?:\\.|[^\]\\\n])*\]\]/g, function (token, at) {
+        spans.push({ start: at + extra, end: at + extra + token.length + 1 }); extra++;
+        return '\\' + token;
+      });
+      if (!spans.length) return false;
+      var probe = document.createElement('div'); probe.innerHTML = MD().renderInline(plain, { editSource: true });
+      var bounds = new Map();
+      sourceNodes(probe).forEach(function (n) {
+        for (var parent = n.node.parentElement; parent && parent !== probe; parent = parent.parentElement) {
+          if (!/^(?:STRONG|EM|DEL|MARK)$/.test(parent.tagName)) continue;
+          var range = bounds.get(parent);
+          if (!range) bounds.set(parent, { start: n.at, end: n.at + n.len }); else range.end = n.at + n.len;
+        }
+      });
+      var crossing = false;
+      bounds.forEach(function (range) { spans.forEach(function (span) {
+        if ((range.start > span.start && range.start < span.end) !== (range.end > span.start && range.end < span.end)) crossing = true;
+      }); });
+      return crossing;
+    }
+    var globalLiteralCounts = new Map();
+    chars.forEach(function (c, i) { if (!c.atom && !(action.kind === 'text' && i >= from && i < to)) globalLiteralCounts.set(c.text, (globalLiteralCounts.get(c.text) || 0) + 1); });
+    if (action.kind === 'text') String(action.text || '').split('').forEach(function (ch) { globalLiteralCounts.set(ch, (globalLiteralCounts.get(ch) || 0) + 1); });
+    var emphasisMatches = new WeakMap();
+    function matchesEmphasis(candidate, list) {
+      var cache = emphasisMatches.get(list);
+      if (!cache) { cache = new Map(); emphasisMatches.set(list, cache); }
+      var cacheKey = (candidate.full ? 'block:' : 'inline:') + (candidate.breaks === false ? 'nobr:' : '') + candidate.source;
+      if (!cache.has(cacheKey)) cache.set(cacheKey, computeEmphasis(candidate, list));
+      return cache.get(cacheKey);
+    }
+    function computeEmphasis(candidate, list) {
+          if (crossesWikiCode(candidate.source) || crossesWikiStyles(candidate.source)) return false;
+          var probe = document.createElement('div'), actual = [];
+          var context = { editSource: true, references: typeof doc !== 'undefined' && doc && doc.references };
+          probe.innerHTML = candidate.full ? MD().parse(candidate.source, context).blocks.map(function (b) { return b.html; }).join('') : MD().renderInline(candidate.source, context);
+          function walk(node, styles, link) {
+            if (node.nodeType !== 3 && /(?:^| )cw-mk(?: |$)/.test(node.className || '')) return;
+            if (node.nodeType !== 3 && /(?:^| )cw-code-newline(?: |$)/.test(node.className || '')) { actual.push({ text: ' ', styles: styles, link: link }); return; }
+            if (node.nodeType === 3) {
+              var text = node.nodeValue == null ? node.data || '' : node.nodeValue;
+              for (var n = 0; n < text.length; n++) actual.push({ text: text.charAt(n), styles: styles, link: link });
+              return;
+            }
+            var next = styles.slice(), key = { STRONG: 'bold', EM: 'italic', CODE: 'code', DEL: 'strike', MARK: 'highlight', SUP: 'sup', SUB: 'sub', SPAN: 'span' }[node.tagName];
+            if (key && !(key === 'sup' && /(?:^| )footnote-ref(?: |$)/.test(node.className || '')) && !(key === 'span' && /(?:^| )cw-atom(?: |$)/.test(node.className || '')) && next.indexOf(key) < 0) next.push(key);
+            var nextLink = node.tagName === 'A' ? { target: node.getAttribute('href') || node.getAttribute('data-target') || '', automatic: !!node.getAttribute('data-autolink') } : link;
+            if (node.tagName === 'BR' && candidate.breaks === false) return;
+            if (node.tagName === 'BR') { actual.push({ text: '\n', styles: next, link: nextLink }); return; }
+            if (node.nodeType !== 3 && /(?:^| )cw-atom(?: |$)/.test(node.className || '')) { var wanted = list[actual.length], label = node.getAttribute('data-label'); if (wanted && wanted.atom || label == null || !/^&#(?:[xX][0-9a-fA-F]+|[0-9]+);$/.test(node.textContent)) actual.push({ text: node.textContent, styles: next, link: nextLink }); else for (var i = 0; i < label.length; i++) actual.push({ text: label.charAt(i), styles: next, link: nextLink }); return; }
+            Array.prototype.forEach.call(node.childNodes || [], function (child) { walk(child, next, nextLink); });
+          }
+          walk(probe, []);
+          return actual.length === list.length && actual.every(function (c, index) {
+            var wanted = list[index];
+            var target = wanted.link && (wanted.link.nodeType ? attr(wanted.link, 'href') || attr(wanted.link, 'data-target') || '' : wanted.link.target);
+            if (!wanted.atom && (wanted.link ? !c.link || c.link.target !== target : c.link && !c.link.automatic)) return false;
+            return c.text === wanted.text && ['bold', 'italic', 'code', 'strike', 'highlight', 'sup', 'sub', 'span'].every(function (key) { return key !== 'code' && /\s/.test(c.text) || (c.styles.indexOf(key) >= 0) === (wanted.styles.indexOf(key) >= 0); });
+          });
+        }
+    // Reuse authored spelling outside the edit before accepting a whole-paragraph
+    // serialization. Validate the stitched paragraph against the intended visible
+    // model, so preserving source cannot introduce a new delimiter interaction.
+    // Opaque constructs need this even when our inline model cannot describe the
+    // site's HTML semantics: their original bytes remain the authority.
+    function retainUntouched(next, wanted) {
+      if (!next || next.source === source) return next;
+      var pattern = /(?<!\\)<[!?A-Za-z/][^>\n]*>/g, token, spans = [];
+      while ((token = pattern.exec(source))) {
+        if (/^<\/?(?:span|strong|em|mark|del|sup|sub|br)(?:[ \t/>]|$)/i.test(token[0])) continue;
+        // An angle autolink shown with its own angles (<<https://x>>) loses
+        // that spelling when the edit removes one of the wrapping angles: the
+        // edit owns it then. Any other untouched construct keeps its bytes.
+        var tokenEnd = token.index + token[0].length;
+        if (/^<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\x00-\x20]*|[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*)>$/.test(token[0])
+          && source.charAt(token.index - 1) === '<' && source.charAt(tokenEnd) === '>'
+          && (token.index === end && start <= token.index - 1 || tokenEnd === start && end > tokenEnd)) continue;
+        if (token.index + token[0].length <= start || token.index >= end) spans.push({ at: token.index, end: token.index + token[0].length, raw: token[0] });
+      }
+      if (!spans.length) return next;
+      var context = { editSource: true, references: typeof doc !== 'undefined' && doc && doc.references };
+      // Replace only the opaque owners, right to left. Reusing a whole raw
+      // prefix would also freeze spelling generated by earlier keystrokes.
+      spans.reverse().forEach(function (span) {
+        var probe = document.createElement('div'), points = [], atomSeen = new Set();
+        probe.innerHTML = b.type === 'inline' ? MD().renderInline(next.source, context) : MD().parse(next.source, context).blocks.map(function (b) { return b.html; }).join('');
+        sourceNodes(probe).forEach(function (n) {
+          var atom = n.node.parentElement && n.node.parentElement.closest('.cw-atom');
+          if (atom) {
+            if (!atomSeen.has(atom)) { atomSeen.add(atom); var ns = sourceNodes(atom); points.push({ at: n.at, end: n.at + ns.reduce(function (total, n) { return total + n.len; }, 0) }); }
+          } else if (!hiddenSource(n.node)) for (var i = 0; i < n.len; i++) points.push({ at: n.at + i, end: n.at + i + 1 });
+        });
+        var first = chars.filter(function (c) { return c.end <= span.at; }).length;
+        var last = chars.filter(function (c) { return c.at < span.end; }).length;
+        if (action.kind === 'text' && span.at >= end) { var delta = String(action.text || '').length - (to - from); first += delta; last += delta; }
+        var left = [first ? points[first - 1]?.end : structuralPrefix(next.source.split('\n')[0]), points[first]?.at ?? next.source.length];
+        var right = [last < points.length ? points[last].at : next.source.length, last ? points[last - 1]?.end : 0];
+        for (var a = 0; a < left.length; a++) for (var z = 0; z < right.length; z++) {
+          var lo = left[a], hi = right[z];
+          if (lo == null || hi == null || lo > hi) continue;
+          var value = next.source.slice(0, lo) + span.raw + next.source.slice(hi);
+          if (value === next.source) return;
+          if (!matchesEmphasis({ source: value, full: b.type !== 'inline' }, wanted)) continue;
+          var shift = span.raw.length - (hi - lo);
+          function point(at) { return at == null ? at : at <= lo ? at : at >= hi ? at + shift : lo; }
+          next = Object.assign({}, next, { source: value, caret: point(next.caret), start: point(next.start), end: point(next.end),
+            escapes: (next.escapes || []).filter(function (at) { return at < lo || at >= hi; }).map(point) });
+          return;
+        }
+      });
+      return next;
+    }
+    // Remove only escapes introduced by this transaction. Compare complete
+    // reader trees, including links, atoms, whitespace and block structure;
+    // text equality alone would accept accidental formatting. Authored escapes
+    // are retained; only this run's generated escapes can be revisited. Raw spelling wins whenever it is valid.
+    function cleanSpelling(value, positions, caret, inline) {
+      if (!positions.length || typeof document === 'undefined' || !document.createElement) return { source: value, caret: caret, escapes: positions.slice() };
+      var exhausted = {}, meanings = new Map();
+      function checkpoint() { if (++work.steps > 4096) throw exhausted; }
+      function parseInput(text) {
+        checkpoint();
+        // Count actual parser input. Dense families make one bounded pass;
+        // sparse inputs retain the exact search within the same work limits.
+        var cost = text.length;
+        if (work.characters + cost > work.limit) throw exhausted;
+        work.characters += cost;
+        return text;
+      }
+      function render(text) { return MD().renderInline(parseInput(text)); }
+      function meaning(text) {
+        checkpoint();
+        if (meanings.has(text)) return meanings.get(text);
+        if (++work.probes > 128) throw exhausted;
+        var probe = document.createElement('div'), tokens = [];
+        var context = typeof doc !== 'undefined' && doc || {};
+        var wrapped = (host.cwSourcePrefix || '') + text + (host.cwSourceSuffix || '');
+        parseInput(wrapped);
+        probe.innerHTML = inline && !host.cwSourcePrefix && !host.cwSourceSuffix ? MD().renderInline(text, context) : MD().parse(wrapped, context).blocks.map(function (b) { return b.html; }).join('');
+        // The app intentionally displays unsupported HTML literally; CommonMark
+        // publishes it as HTML. Also retain empty block markers whose app
+        // interpretation is more permissive while writing. Include those
+        // source constructs in the comparison rather than accepting text alone.
+        var withoutWiki = wrapped.replace(/(?<!\\)\[\[(?:\\.|[^\]\\\n])*\]\]/g, function (token) { return '\\[' + token.slice(1); });
+        tokens.push(['site-html-openings', wrapped.match(/(?<!\\)(?:\\\\)*<(?:!(?!@)|\?)[^\n]*/g) || []]);
+        tokens.push(['site-wiki-context', withoutWiki === wrapped ? '' : MD().parse(parseInput(withoutWiki), context).blocks.map(function (b) { return b.html; }).join('')]);
+        // CommonMark can consume a wiki closer as a new inline-link label.
+        // Literal parentheses after that token must retain their escape.
+        tokens.push(['site-wiki-link-boundary', wrapped.match(/(?<!\\)(?:\\\\)*\[\[(?:\\.|[^\]\\\n])*\]\]\(/g) || []]);
+        tokens.push(['CommonMark', (wrapped.match(/(?<!\\)<!(?:[A-Za-z][^>]*|--[^]*?--)>/g) || []), (wrapped.match(/\[\[(?:\\.|[^\]\\\n])*\]\]/g) || []).map(function (token) { return token.replace(/\\(.)/g, '$1'); }), (wrapped.match(/(?<!\\)(?:\\\\)*\\\n/g) || []), (wrapped.match(/^ {0,3}(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|nav|ol|p|param|script|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?=[ \t/>]|$))/gim) || []), (wrapped.match(/(?<!\\)(?:\\\\)*<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t\r\n][^<>]*?)?\/?>/g) || []), inline && !host.cwSourceSuffix ? [] : wrapped.split('\n').map(function (line, index) { var rest = line.replace(/^\[\^[^\]]+\]:[ \t]*/, '').trimStart(), markers = [], match; while ((match = /^(?: {0,3}>[ \t]?|[ \t]*(?:[-+*]|\d+[.)])[ \t]+| {0,3}#{1,6}(?:[ \t]+|$))/.exec(rest))) { markers.push(match[0]); rest = rest.slice(match[0].length); } var body = rest.trim();
+          var htmlBlock = /^(?:<!--|<\?|<![A-Z]|<!\[CDATA\[|<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|nav|ol|p|param|script|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?=[ \t/>]|$))/i.exec(rest);
+          if (htmlBlock) markers.push(htmlBlock[0]); if (/^(?:[-=*+>]|#{1,6})$/.test(body) || index > 0 && /^[-=]+$/.test(body) || /^(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/.test(body) || /^(?:`{3,}|~{3,})/.test(body)) markers.push(body); return markers.length ? [index, markers] : null; }).filter(Boolean)]);
+        function visit(node) {
+          if (node.nodeType === 3) {
+            var text = node.nodeValue == null ? node.data || '' : node.nodeValue, last = tokens[tokens.length - 1];
+            if (last && last[0] === 'text') last[1] += text; else tokens.push(['text', text]);
+            return;
+          }
+          var tag = node.tagName, attributes = ['href', 'title', 'src', 'alt', 'class', 'style', 'data-target', 'data-footnote', 'data-note'].map(function (key) { return node.getAttribute && node.getAttribute(key); });
+          if (node !== probe) tokens.push(['open', tag, attributes]);
+          Array.prototype.forEach.call(node.childNodes || [], visit);
+          if (node !== probe) tokens.push(['close', tag]);
+        }
+        visit(probe); var result = JSON.stringify(tokens); meanings.set(text, result); return result;
+      }
+      // The serializer already supplied an exact literal spelling. If optimization
+      // expires, retain it in full, never an unvalidated search candidate.
+      try {
+        var expected = meaning(value);
+        var eligiblePositions = new Set(positions);
+        function spell(kept) { var retained = new Set(kept); return value.split('').filter(function (_, index) { return !eligiblePositions.has(index) || retained.has(index); }).join(''); }
+        var kept = [], raw = spell(kept);
+        if (meaning(raw) !== expected) {
+          // Dense punctuation uses a canonical bounded pass. Try each character
+          // family, then its individual positions in a fixed order. Sparse
+          // inputs retain the exact minimum search below. The whole reader
+          // meaning still validates every accepted removal.
+          function isolatedMinimum() {
+            if (host.cwSourcePrefix || host.cwSourceSuffix || !/^[A-Za-z0-9 *_]+$/.test(raw) || render(value) !== raw) return null;
+            var eligible = new Set(positions), originalAt = [], domains = [], covered = new Set(), match;
+            for (var at = 0; at < value.length; at++) if (!eligible.has(at)) originalAt.push(at);
+            var pattern = /(^| )([*_]{1,3})([A-Za-z0-9](?:[A-Za-z0-9 ]*[A-Za-z0-9])?)\2(?= |$)/g;
+            while ((match = pattern.exec(raw))) {
+              var mark = match[2]; if (!/^\*+$|^_+$/.test(mark)) return null;
+              var begin = match.index + match[1].length, close = begin + mark.length + match[3].length, points = [];
+              for (var n = 0; n < mark.length; n++) points.push(originalAt[begin + n] - 1);
+              for (var n = 0; n < mark.length; n++) points.push(originalAt[close + n] - 1);
+              if (!points.every(function (at) { return eligible.has(at); })) return null;
+              for (var n = begin; n < close + mark.length; n++) if (/[*_]/.test(raw[n])) covered.add(n);
+              domains.push({ begin: begin, end: close + mark.length, mark: mark, body: match[3], points: points });
+            }
+            if (domains.length < 2 || raw.split('').some(function (ch, at) { return /[*_]/.test(ch) && !covered.has(at); })) return null;
+            var probes = []; ['*', '_'].forEach(function (ch) { for (var n = 1; n <= 3; n++) { probes.push(' a' + ch.repeat(n) + ' '); probes.push(' !' + ch.repeat(n) + '!'); } });
+            function state(text, shown) { var bits = 0; probes.forEach(function (probe, bit) { if (render(text + probe) !== shown + probe) bits |= 1 << bit; }); return bits; }
+            var states = new Map([[0, { text: '', count: 0, points: [] }]]), previousEnd = 0;
+            for (var d = 0; d < domains.length; d++) {
+              var domain = domains[d], options = [], token = domain.mark + domain.body + domain.mark;
+              for (var mask = 0; mask < Math.pow(2, domain.points.length); mask++) {
+                checkpoint();
+                var spelling = '', points = [];
+                for (var n = 0; n < token.length; n++) { var bit = n < domain.mark.length ? n : n >= domain.mark.length + domain.body.length ? n - domain.body.length : -1; var escape = bit >= 0 && mask & (1 << bit); spelling += escape ? '\\' + token[n] : token[n]; if (escape) points.push(domain.points[bit]); }
+                if (render(spelling) === token) options.push({ text: spelling, points: points });
+              }
+              var nextStates = new Map(), plain = raw.slice(previousEnd, domain.begin), shown = raw.slice(0, domain.end);
+              states.forEach(function (prior) { options.forEach(function (option) {
+                checkpoint();
+                var count = prior.count + option.points.length; if (count > kept.length) return;
+                var text = prior.text + plain + option.text; if (render(text) !== shown) return;
+                var key = state(text, shown), best = nextStates.get(key);
+                if (!best || count < best.count) nextStates.set(key, { text: text, count: count, points: prior.points.concat(option.points) });
+              }); });
+              states = nextStates; previousEnd = domain.end;
+            }
+            var best = null; states.forEach(function (candidate) { if ((!best || candidate.count < best.count) && meaning(spell(candidate.points)) === expected) best = candidate; });
+            return best && best.points;
+          }
+          kept = positions.slice();
+          var isolated = isolatedMinimum();
+          if (isolated) kept = isolated;
+          else {
+            var candidates = positions.slice();
+            if (positions.length > 8) {
+              // Remove harmless families in bulk before refining a small
+              // interacting remainder. Long delimiter families keep the same
+              // deterministic work bound as the bulk pass.
+              Array.from(new Set(positions.map(function (at) { return value[at + 1]; }))).sort().forEach(function (ch) {
+                var candidate = kept.filter(function (at) { return value[at + 1] !== ch; });
+                if (meaning(spell(candidate)) === expected) kept = candidate;
+              });
+              candidates = kept.slice();
+            }
+            if (candidates.length <= 8) {
+              function prune(order) {
+                var retained = candidates.slice(), changed = true;
+                while (changed) {
+                  changed = false;
+                  order.forEach(function (position) {
+                    if (retained.indexOf(position) < 0) return;
+                    var candidate = retained.filter(function (p) { return p !== position; });
+                    if (meaning(spell(candidate)) === expected) { retained = candidate; changed = true; }
+                  });
+                }
+                return retained;
+              }
+              kept = prune(candidates.slice().reverse());
+              var forward = prune(candidates);
+              if (forward.length < kept.length) kept = forward;
+              // Greedy removal alone can keep two early delimiters when escaping one
+              // later delimiter suffices. Search smaller subsets before accepting the
+              // bound above, in source order for deterministic ties. Ordinary typing
+              // has one candidate; syntax-free paste takes the zero-escape fast path.
+              function choose(start, count, selected) {
+                checkpoint();
+                if (!count) return meaning(spell(selected)) === expected ? selected : null;
+                for (var index = start; index <= candidates.length - count; index++) {
+                  var found = choose(index + 1, count - 1, selected.concat(candidates[index]));
+                  if (found) return found;
+                }
+                return null;
+              }
+              // For plain isolated delimiter runs, no emphasis pair may close.
+              // The state records which closing runs would match an outstanding
+              // opener. Equal states have the same valid continuations; keep the
+              // cheapest prefix. This avoids exponential subsets for ordinary pasted
+              // Markdown while the general search below handles interacting syntax.
+              for (var size = 1; !isolated && size < kept.length; size++) {
+                var minimum = choose(0, size, []);
+                if (minimum) { kept = minimum; break; }
+              }
+            }
+          }
+        }
+
+        var keptSet = new Set(kept), removed = positions.filter(function (position) { return !keptSet.has(position); }).sort(function (a, b) { return a - b; });
+        var spelling = spell(kept), mappedCaret = caret - removed.filter(function (position) { return position < caret; }).length, escapedAt = new Set(), mapped = new Set(), removedBefore = 0;
+        // Both sequences are ordered. Map all generated prefixes in one merge,
+        // rather than rescanning every removed prefix for each retained one.
+        kept.slice().sort(function (a, b) { return a - b; }).forEach(function (at) {
+          while (removedBefore < removed.length && removed[removedBefore] < at) removedBefore++;
+          escapedAt.add(at - removedBefore);
+        });
+        // Removing one backslash can make its neighbour the escape prefix.
+        // Follow actual prefix ownership within the resulting run, rather than
+        // treating a generated prefix's new visible neighbour as authored.
+        for (var at = 0; at < spelling.length;) {
+          if (spelling[at] !== '\\') { at++; continue; }
+          var begin = at;
+          while (spelling[at] === '\\') { if (escapedAt.has(at)) mapped.add(begin + 2 * Math.floor((at - begin) / 2)); at++; }
+          if (mappedCaret > begin && mappedCaret < at && (mappedCaret - begin) % 2) mappedCaret++;
+        }
+        return { source: spelling, caret: mappedCaret, removed: removed, escapes: Array.from(mapped).sort(function (a, b) { return a - b; }) };
+      } catch (error) {
+        if (error !== exhausted) throw error;
+        return { source: value, caret: caret, escapes: positions.slice(), spellingFallback: true };
+      }
+    }
+    // Inline serialization uses a fixed semantic nesting order. Whitespace is
+    // moved outside delimiter edges, literals are escaped, and source carets are
+    // obtained from the serializer's own boundary map.
+    function serialize(list, caretIndex, variant) {
+      // A literal delimiter on another visual line can pair with a style mark
+      // emitted here. The entire edited surface determines shortcut safety.
+      var styledDelimiters = rows && (rows.length > 1 || rows.some(function (row) { return row.chars.some(function (c) { return c.text === '\n'; }); })) && rows.some(function (row) { return row.chars.some(function (c) { return c.styles.indexOf('bold') >= 0 || c.styles.indexOf('italic') >= 0; }); });
+      // A literal angle address keeps its visible brackets. Spell the address
+      // with a derived autolink, never an authored destination, so label edits
+      // and reloads always derive its target from the current address text.
+      var angleText = list.map(function (c) { return c.atom ? ' ' : c.text; }).join(''), anglePattern = /<([^<>\s]+)>/g, angleMatch;
+      while ((angleMatch = anglePattern.exec(angleText))) {
+        var begin = angleMatch.index + 1, finish = begin + angleMatch[1].length;
+        var members = list.slice(begin, finish);
+        if (members.some(function (c) { return c.link; })) continue;
+        var angleProbe = document.createElement('div'); angleProbe.innerHTML = MD().renderInline(angleMatch[0]);
+        var angleLink = angleProbe.querySelector('a');
+        if (!angleLink || !angleLink.getAttribute('data-autolink') || angleLink.textContent !== angleMatch[1]) continue;
+        var derived = { target: angleLink.getAttribute('href'), angle: members.every(function (c) { return !c.atom && !c.styles.length; }) && (angleProbe.textContent === angleMatch[1] ? 'fenced' : 'bare') };
+        members.forEach(function (c) { c.link = derived; });
+      }
+      // Removing a visible angle must not discard the remaining address's
+      // derivation. Styled bare addresses use the same reader scanner and
+      // content rule as styled angle addresses; other explicit links stay owned.
+      if (derivedAnchors.size) {
+        // An authored address can own punctuation that GFM trims from a bare
+        // autolink. Regenerate the complete edited label as an explicit link.
+        for (var addressAt = 0; addressAt < list.length;) {
+          var addressStart = addressAt, origin = list[addressAt].addressOrigin;
+          while (++addressAt < list.length && origin && list[addressAt].addressOrigin === origin) {}
+          var addressMembers = list.slice(addressStart, addressAt);
+          if (!origin || !addressMembers.every(function (c) { return c.explicitAddress && !c.link && !c.atom; })) continue;
+          var addressText = addressMembers.map(function (c) { return c.text; }).join('');
+          var fullProbe = document.createElement('div'); fullProbe.innerHTML = MD().renderInline('<' + (/^www\./i.test(addressText) ? 'http://' : '') + addressText + '>');
+          var fullLink = fullProbe.querySelector('a');
+          if (!fullLink || fullLink.textContent !== addressText && fullLink.textContent !== 'http://' + addressText) continue;
+          var fullTarget = fullLink.getAttribute('href'), fullTitle = addressMembers[0].addressTitle;
+          fullProbe.innerHTML = MD().renderInline(addressText, { literalAutolinkAt: 0 });
+          var plainLink = fullProbe.querySelector('a');
+          var fullDerived = { target: fullTarget, title: fullTitle, angle: fullTitle == null && plainLink && plainLink.textContent === addressText && plainLink.getAttribute('href') === fullTarget && addressMembers.every(function (c) { return !c.styles.length; }) && 'plain' };
+          addressMembers.forEach(function (c) { c.link = fullDerived; });
+        }
+        var barePattern = /[A-Za-z][A-Za-z0-9+.-]{1,31}:|www\.|[A-Za-z0-9.+_-]+@/gi, bareMatch;
+        while ((bareMatch = barePattern.exec(angleText))) {
+          var bareProbe = document.createElement('div'); bareProbe.innerHTML = MD().renderInline(angleText, { literalAutolinkAt: bareMatch.index });
+          var bareLink = bareProbe.querySelector('a'), barePlain = !!bareLink;
+          if (!bareLink) {
+            // Other URI schemes are native angle addresses, not bare GFM links.
+            // Their explicit spelling still follows its visible address.
+            var token = /^[^\s<>]+/.exec(angleText.slice(bareMatch.index));
+            if (token) bareProbe.innerHTML = MD().renderInline('<' + token[0] + '>');
+            bareLink = bareProbe.querySelector('a');
+            if (!bareLink || !bareLink.getAttribute('data-autolink') || bareLink.textContent !== token[0]) continue;
+          }
+          var bareEnd = bareMatch.index + bareLink.textContent.length, bareMembers = list.slice(bareMatch.index, bareEnd);
+          barePattern.lastIndex = bareEnd;
+          if (bareMembers.some(function (c) { return c.link || c.atom; }) || !bareMembers.some(function (c) { return c.automatic; }) || !barePlain && !bareMembers.every(function (c) { return c.explicitAddress; })) continue;
+          var bareTitle = bareMembers.find(function (c) { return c.addressTitle != null; });
+          var bareDerived = { target: bareLink.getAttribute('href'), title: bareTitle && bareTitle.addressTitle, angle: !bareTitle && barePlain && bareMembers.every(function (c) { return !c.styles.length; }) && 'plain' };
+          bareMembers.forEach(function (c) { c.link = bareDerived; });
+        }
+      }
+      var out = '', caret = null, inLinkLabel = false, newEscapes = [], automaticFrom = 0, automaticCandidate = false, automaticWord = false, automaticProbeDirty = true, automaticCut = Infinity;
+      var indexes = new Map(), literalCounts = new Map();
+      list.forEach(function (c, index) { if (!indexes.has(c)) indexes.set(c, index); if (!c.atom) literalCounts.set(c.text, (literalCounts.get(c.text) || 0) + 1); });
+      if (list.some(function (c) { return c.text === '\n' && !c.atom; })) {
+        var segment = [], consumed = 0;
+        function flush() {
+          var local = caretIndex != null && caretIndex >= consumed && caretIndex <= consumed + segment.length ? caretIndex - consumed : null;
+          var chunk = serialize(segment, local, variant);
+          if (local != null) caret = out.length + chunk.caret;
+          (chunk.escapes || []).forEach(function (at) { newEscapes.push(out.length + at); });
+          out += chunk.source; consumed += segment.length + 1; segment = [];
+        }
+        list.forEach(function (c) { if (c.text === '\n' && !c.atom) { flush(); out += c.breakSource || '\n'; } else segment.push(c); });
+        flush(); return { source: out, caret: caret == null ? out.length : caret, escapes: newEscapes };
+      }
+      function append(s, literal, character, rawAt) {
+        // GFM consumes backslashes and emphasis marks at the end of a URL.
+        // End that source run before emitting syntax for a separate character.
+        if (!inLinkLabel && automaticCandidate && automaticWord && (/^\\/.test(s) && s.length > 1 || !literal && /^[*_`]/.test(s))) {
+          // Only a link in the final non-space run can consume this syntax.
+          // An emitted empty span is a permanent text-event boundary, so earlier
+          // URLs never need another prefix render as the rest of the run grows.
+          var tail = out.slice(automaticFrom);
+          if (automaticProbeDirty && MD().renderInline(tail, { autolinkProbe: true })) {
+            var spans = automaticPositions(tail), last = spans.lastIndexOf(true);
+            if (last >= 0) last += automaticFrom;
+            if (last >= 0 && (!literal || s !== '\\>' || /https?:\/\/|www\./i.test(tail)) && /^[?!.,:;*_~\]\)"']*$/.test(out.slice(last + 1))) { if (caret != null && caret >= out.length) caret += 13; out += '<span></span>'; automaticFrom = out.length; automaticCandidate = automaticWord = false; automaticCut = Math.min(automaticCut, character ? indexes.get(character) : 0); }
+          } else if (automaticProbeDirty) automaticProbeDirty = false;
+        }
+        // Adjacent code spans must not merge their closing/opening tick runs.
+        if (!literal && /`$/.test(out) && /^`/.test(s)) { if (caret != null && caret >= out.length) caret += 13; out += '<span></span>'; }
+        if (rawAt != null) for (var at = rawAt; at < rawAt + s.length; at++) { if (runEscapeSet.has(at)) newEscapes.push(out.length + at - rawAt); }
+        if (character && s === '\\' + character.text && (!character.originalStyles || character.typed || source.slice(character.rawAt, character.end) !== s || character.styles.join() !== character.originalStyles.join() || character.link !== character.originalLink || runEscapeSet.has(character.rawAt))) newEscapes.push(out.length);
+        // Carry the final text-event boundary forward instead of rescanning
+        // the growing prefix for whitespace at every escaped character.
+        var space = Math.max(s.lastIndexOf(' '), s.lastIndexOf('\n'), s.lastIndexOf('\r'), s.lastIndexOf('\t'));
+        if (space >= 0) { automaticFrom = out.length + space + 1; automaticCandidate = automaticWord = false; automaticProbeDirty = true; }
+        var addedTail = s.slice(space + 1);
+        // A failed conservative prefilter cannot become true until a protocol,
+        // host, email or entity character arrives. Do not decode the growing
+        // punctuation-only suffix again for every generated escape.
+        if (/[A-Za-z0-9._+\-:\/@&;#\u0080-\uffff]/.test(addedTail)) automaticProbeDirty = true;
+        if (/[A-Za-z0-9]/.test(addedTail)) automaticWord = true;
+        if (/https?:\/\/|www\.|[A-Za-z0-9.+_;>\\-]@/i.test((space >= 0 ? '' : out.slice(Math.max(automaticFrom, out.length - 8))) + addedTail)) automaticCandidate = true;
+        out += s;
+      }
+      var automatic = [];
+      for (var lo = 0; lo < list.length;) {
+        var hi = lo + 1;
+        while (hi < list.length && list[hi].styles.join() === list[lo].styles.join() && list[hi].link === list[lo].link && !list[hi].atom) hi++;
+        var segment = list.slice(lo, hi).map(function (c) { return c.text; }).join('');
+        if (!list[lo].link && !list[lo].atom && list[lo].styles.indexOf('code') < 0 && /https?:\/\/|www\.|@/i.test(segment)) {
+          automaticPositions(segment).forEach(function (value, at) { automatic[lo + at] = value; });
+        }
+        lo = hi;
+      }
+      var rawLiteral = list.map(function (c) { return c.text; }).join('');
+      var rawAutomatic = (variant == null || variant < 6) && /https?:\/\/|www\./i.test(rawLiteral) && list.every(function (c) { return !c.atom && !c.link && !c.styles.length; }) && matchesEmphasis({ source: rawLiteral }, list);
+      function escaped(s, character) {
+        if (variant >= 7 && s === '`' && !character.originalStyles) return '&#96;';
+        return s.replace(/[\\`*_\[\]()~#<>!|=^%&]/g, function (ch) {
+          if ((variant == null || variant < 6) && !character.link && indexes.get(character) < automaticCut && (rawAutomatic && /[)_*\[\](]/.test(ch) || automaticCandidate && automaticWord && automatic[indexes.get(character)]) && character.styles.indexOf('code') < 0) return ch;
+          var literalCount = literalCounts.get(ch) || 0;
+          if (ch === '!' && !(list[indexes.get(character) + 1] && list[indexes.get(character) + 1].link)) return ch;
+          var point = indexes.get(character), prev = list[point - 1], next = list[point + 1];
+          var sameStyle = prev && next && character && prev.styles.join() === character.styles.join() && next.styles.join() === character.styles.join();
+          if ((ch === '[' || !styledDelimiters) && literalCount === 1 && globalLiteralCounts.get(ch) === 1 &&
+              // A projected inline span can still sit inside an outer link label.
+              (ch === '[' && b.type !== 'inline' && !character.link && !list.some(function (c) { return c.atom; }) && !(prev && prev.link || next && next.link) && !globalLiteralCounts.get(']') ||
+               ch === '_' && b.type !== 'inline' && prev && /[\p{L}\p{N}]/u.test(prev.text) && !character.link && !character.styles.length && !prev.styles.length && (!next || !next.styles.length) ||
+               (ch === '*' || ch === '_') && b.type !== 'inline' && sameStyle && /[\p{L}\p{N}]/u.test(prev.text) && /[\p{L}\p{N}]/u.test(next.text) && character.styles.indexOf('italic') < 0)) return ch;
+          return '\\' + ch;
+        });
+      }
+      var order = ['link', variant >= 3 && variant < 6 ? 'italic' : 'bold', variant >= 3 && variant < 6 ? 'bold' : 'italic', 'highlight', 'strike', 'sup', 'sub', 'span', 'code'];
+      function ownerKey(owner) { return { A: 'link', STRONG: 'bold', EM: 'italic', MARK: 'highlight', DEL: 'strike', SUP: 'sup', SUB: 'sub', SPAN: 'span', CODE: 'code' }[owner.node.tagName]; }
+      function rawFits(group, owner, level) {
+        return group.every(function (c) {
+          return (c.owners || []).every(function (o) {
+            var key = ownerKey(o), index = order.indexOf(key);
+            var wanted = key === 'link' ? c.link === o.node : c.styles.indexOf(key) >= 0;
+            if (index < 0 || !wanted) return true;
+            var inside = o.ancestors.has(owner.node);
+            // Raw markup cannot omit an un-emitted ancestor or duplicate a
+            // semantic wrapper that the enclosing serializer already emitted.
+            return index < level ? !inside : inside;
+          });
+        });
+      }
+      function rawFlanks(group, owner) {
+        var marker = source.charAt(owner.at);
+        var automatic = owner.node.tagName === 'A' && attr(owner.node, 'data-autolink');
+        if (marker !== '*' && marker !== '_' && !automatic) return true;
+        var previous = list[indexes.get(group[0]) - 1], following = list[indexes.get(group[group.length - 1]) + 1];
+        var before = charBefore(owner.at);
+        var after = charAfter(owner.end);
+        function text(c) { return c ? c.text : ''; }
+        if (text(previous) === text(before) && text(following) === text(after)) return true;
+        if (automatic) return false;
+        // Markdown flanking sees source punctuation, including a nested code
+        // fence, rather than the code span's visible first/last character.
+        var size = owner.node.tagName === 'STRONG' ? 2 : 1;
+        return markdownFlanks(source.slice(owner.at + size, owner.end - size), text(previous), text(following)) &&
+          (marker !== '_' || !/[\p{L}\p{N}]/u.test(text(previous) + text(following)));
+      }
+      function emit(items, level, base, boundary) {
+        if (level === order.length) {
+          items.forEach(function (c, i) { if (base + i === caretIndex && caret == null) caret = out.length; append(c.atom ? c.text : c.originalStyles && !c.automatic && !(automatic[indexes.get(c)] && c.rawAt < c.at) && !((/[\\`*_]/.test(c.text) || action.kind !== 'split' && /[\[\]()~#<>!|=^%&]/.test(c.text)) && c.rawAt === c.at) && !(c.text === '!' && list[indexes.get(c) + 1] && list[indexes.get(c) + 1].link) ? source.slice(c.rawAt, c.end) : escaped(c.text, c), true, c); });
+          if (base + items.length === caretIndex && caret == null) caret = out.length;
+          return;
+        }
+        var key = order[level], i = 0;
+        while (i < items.length) {
+          var c = items[i], value = key === 'link' ? c.link : c.styles.indexOf(key) >= 0;
+          var j = i + 1;
+          while (j < items.length && (key === 'link' ? items[j].link : items[j].styles.indexOf(key) >= 0) === value) j++;
+          if (!value) { emit(items.slice(i, j), level + 1, base + i, j === items.length ? boundary : ''); i = j; continue; }
+          var lo = i, hi = j;
+          var group = items.slice(i, j), ownerTag = { bold: 'STRONG', italic: 'EM', highlight: 'MARK', strike: 'DEL', link: 'A', code: 'CODE', sup: 'SUP', sub: 'SUB', span: 'SPAN' }[key];
+          var owner = group[0].owners && group[0].owners.find(function (o) { return o.node.tagName === ownerTag; });
+          var unchanged = owner && group.every(function (x) { return !x.typed && x.originalStyles && x.styles.join() === x.originalStyles.join() && x.link === x.originalLink && x.owners.some(function (o) { return o.node === owner.node; }); });
+          var whole = unchanged && ownerCharacters(owner).length === group.length;
+          var previous = list[indexes.get(group[0]) - 1], following = list[indexes.get(group[group.length - 1]) + 1];
+          // Existing underscore italics need new delimiters when an edit changes
+          // their flanking word. Everything else in an untouched owner is raw.
+          if (variant !== 8 && whole && rawFits(group, owner, level) && rawFlanks(group, owner)) {
+            if (caretIndex >= base + i && caretIndex <= base + j) caret = out.length + (caretIndex === base + j ? group[group.length - 1].end : group[caretIndex - base - i].at) - owner.at;
+            append(source.slice(owner.at, owner.end), false, null, owner.at); i = j; continue;
+          }
+
+          if (key !== 'code' && !(key === 'span' && owner && /^<span style="white-space:pre">/i.test(source.slice(owner.at, owner.end)))) {
+            while (lo < hi && /\s/.test(items[lo].text)) { if (previous && (key === 'link' ? previous.link === value : previous.styles.indexOf(key) >= 0)) break; lo++; }
+            while (hi > lo && /\s/.test(items[hi - 1].text)) { if (following && (key === 'link' ? following.link === value : following.styles.indexOf(key) >= 0)) break; hi--; }
+          }
+          emit(items.slice(i, lo), level + 1, base + i);
+          if (hi > lo) {
+            var open, close, info;
+            if (key === 'link') {
+              info = value.nodeType ? linkInfo(value) : value;
+              var label = items.slice(lo, hi).map(function (x) { return x.text; }).join('');
+              // Code and atom labels use the inline renderer inside the link.
+              var styled = items.slice(lo, hi).some(function (x) { return x.styles.length > 0 || x.atom; });
+              open = info.angle ? info.angle === 'fenced' ? '<' : '' : info.wiki ? '[[' + info.target + (label === info.target && !styled ? '' : '|') : '[';
+              close = info.angle ? info.angle === 'fenced' ? '>' : info.angle === 'plain' ? '' : '<span></span>' : info.wiki ? ']]' : '](' + info.target.replace(/[\\()&<>]/g, '\\$&') + (info.title == null ? '' : ' \"' + info.title.replace(/[\\\"&<>]/g, '\\$&') + '\"') + ')';
+              var edgeSpace = info.wiki && /^\s|\s$/.test(label);
+              if (edgeSpace) { open += '<span>'; close = '</span>' + close; }
+              append(open);
+              if (info.angle) {
+                items.slice(lo, hi).forEach(function (x, n) { if (base + lo + n === caretIndex && caret == null) caret = out.length; append(x.text, true, x); });
+                if (base + hi === caretIndex && caret == null) caret = out.length;
+              } else if (info.wiki && !styled) {
+                items.slice(lo, hi).forEach(function (x, n) { if (base + lo + n === caretIndex && caret == null) caret = out.length; if (label !== info.target) append(x.atom ? x.text : escaped(x.text, x), true, x); });
+                if (label === info.target && caretIndex >= base + lo && caretIndex <= base + hi) caret = out.length - info.target.length + caretIndex - base - lo;
+                if (base + hi === caretIndex && caret == null) caret = out.length;
+              } else { inLinkLabel = true; emit(items.slice(lo, hi), level + 1, base + lo, close.charAt(0)); inLinkLabel = false; }
+              append(close);
+              if ((action.kind === 'link' || action.link) && base + hi === caretIndex) caret = out.length;
+            } else if (key === 'code') {
+              var body = items.slice(lo, hi).map(function (x) { return x.text; }).join(''), ticks = items[lo].ticks || '`';
+              while (body.indexOf(ticks) >= 0) ticks += '`';
+              var originalCode = items[lo].owners && items[lo].owners.find(function (o) { return o.node.tagName === 'CODE'; });
+              var originalMembers = originalCode && ownerCharacters(originalCode);
+              var originalTicks = originalCode && (/^`+/.exec(source.slice(originalCode.at)) || [''])[0];
+              var originalPad = originalMembers && originalMembers.length ? source.slice(originalCode.at + originalTicks.length, originalMembers[0].at) : '';
+              var pad = /\S/.test(body) && (originalPad || /^`|`$|^ .* $/.test(body)) ? ' ' : '';
+              append(ticks + pad);
+              // Tick characters inside code are literal, not adjacent spans.
+              items.slice(lo, hi).forEach(function (x, n) { if (base + lo + n === caretIndex && caret == null) caret = out.length; out += x.text; });
+              if (base + hi === caretIndex && caret == null) caret = out.length;
+              out += pad + ticks;
+            } else {
+              open = { bold: variant % 3 === 1 ? '__' : '**', italic: variant % 3 === 2 ? '_' : '*', highlight: '==', strike: '~~' }[key];
+              var at = indexes.get(items[lo]), stop = indexes.get(items[hi - 1]) + 1;
+              var prev = out.slice(-1), next = hi === items.length && boundary ? boundary : list[stop] ? list[stop].text : '';
+              var first = items[lo].text, last = items[hi - 1].text;
+              var punct = function (c) { return !!c && /[\p{P}\p{S}]/u.test(c); };
+              var canOpen = !/\s/.test(first) && (!punct(first) || !prev || /\s/.test(prev) || punct(prev));
+              var canClose = !/\s/.test(last) && (!punct(last) || !next || /\s/.test(next) || punct(next));
+              // CommonMark cannot delimit every punctuation/letter boundary.
+              // Its safe inline HTML spelling preserves that exact style range.
+              var tag = { bold: 'strong', italic: 'em', highlight: 'mark', strike: 'del', sup: 'sup', sub: 'sub', span: 'span' }[key];
+              if (open && open.charAt(0) === '_') {
+                var left = !!prev && !/\s/.test(prev) && (!punct(prev) || !first || /\s/.test(first) || punct(first));
+                var right = !!next && !/\s/.test(next) && (!punct(next) || !last || /\s/.test(last) || punct(last));
+                canOpen = canOpen && (!left || punct(prev)); canClose = canClose && (!right || punct(next));
+              }
+              if (!open || variant >= 6 && (key === 'bold' || key === 'italic' || key === 'highlight' || key === 'strike')) canOpen = false;
+              var original = items[lo].owners && items[lo].owners.find(function (o) { return o.node.tagName === tag.toUpperCase(); });
+              var generated = original && ownerCharacters(original).every(function (c) { return c.typed; });
+              var raw = original && !generated && source.slice(original.at, original.end);
+              var oldOpen = raw && new RegExp('^<' + tag + (tag === 'span' ? '(?: style="white-space:pre")?' : '') + '>', 'i').exec(raw), oldClose = raw && new RegExp('</' + tag + '>$', 'i').exec(raw);
+              close = oldOpen && oldClose ? oldClose[0] : canOpen && canClose ? open : '</' + tag + '>';
+              append(oldOpen && oldClose ? oldOpen[0] : canOpen && canClose ? open : '<' + tag + '>');
+              emit(items.slice(lo, hi), level + 1, base + lo, close.charAt(0));
+              append(close);
+            }
+          }
+          emit(items.slice(hi, j), level + 1, base + hi, j === items.length ? boundary : '');
+          i = j;
+        }
+      }
+      // Preserve complete, unchanged original trees before choosing any
+      // canonical nesting order. Their historical nesting is part of the source.
+      var cursor = 0, point = 0;
+      while (point < list.length) {
+        var character = list[point], retained = null, members = null;
+        if (variant !== 8 && !character.typed && character.originalStyles && character.owners) {
+          character.owners.slice().reverse().some(function (owner) {
+            var key = ownerKey(owner);
+            if (!key) return false;
+            var original = ownerCharacters(owner);
+            // A raw owner can begin only at its first original character.
+            // Reject every interior position before slicing or scanning its characters.
+            if (!original.length || original[0] !== character) return false;
+            var group = list.slice(point, point + original.length);
+            if (!rawFlanks(group, owner)) return false;
+            function belongs(c) { return c && c.owners && c.owners.some(function (o) { return o.node === owner.node; }) && (key === 'link' ? c.link === owner.node : c.styles.indexOf(key) >= 0); }
+            if (belongs(list[point - 1]) || belongs(list[point + original.length])) return false;
+            if (group.length !== original.length || !group.every(function (c, i) { return c === original[i] && !c.typed && c.originalStyles && c.styles.join() === c.originalStyles.join() && c.link === c.originalLink; }) || !rawFits(group, owner, 0)) return false;
+            retained = owner; members = group; return true;
+          });
+        }
+        if (!retained) { point++; continue; }
+        if (point > cursor) emit(list.slice(cursor, point), 0, cursor);
+        if (caret == null && caretIndex >= point && caretIndex <= point + members.length) caret = out.length + (caretIndex === point + members.length ? members[members.length - 1].end : members[caretIndex - point].at) - retained.at;
+        append(source.slice(retained.at, retained.end), false, null, retained.at);
+        point += members.length; cursor = point;
+      }
+      if (cursor < list.length || !list.length) emit(list.slice(cursor), 0, cursor);
+      // Adjacent star runs can pair differently under CommonMark's rule of
+      // three. Check the emitted span against the edited character model, then
+      // try the other Markdown delimiter/nesting choices before resorting to
+      // HTML. Existing raw owners are retained by each candidate above.
+      if (variant == null && typeof document !== 'undefined' && document.createElement) {
+
+        var candidate = { source: out, caret: caret == null ? out.length : caret, escapes: newEscapes };
+        var best = matchesEmphasis(candidate, list) ? candidate : null;
+        function fallbackCount(value) { return (value.source.match(/<(?:strong|em)>/gi) || []).length; }
+        if (!best || fallbackCount(best)) {
+          var firstChoice = list.some(function (c) { return c.styles.length || c.link || c.atom; }) ? 1 : 6;
+          for (var choice = firstChoice; choice <= 8; choice++) {
+            if (choice === 6 && best) break;
+            candidate = serialize(list, caretIndex, choice);
+            if (matchesEmphasis(candidate, list) && (!best || fallbackCount(candidate) < fallbackCount(best))) best = candidate;
+            if (best && !fallbackCount(best)) break;
+          }
+        }
+        if (best) { out = best.source; caret = best.caret; newEscapes = best.escapes || []; }
+      }
+      // Keep literal indentation visible under normal reader whitespace too,
+      // without converting ASCII input to entities or nonbreaking spaces.
+      var literalIndent = false;
+      if (b.type !== 'inline' && /^[ \t]/.test(out)) for (var edge = 0; edge < list.length && /^[ \t]+$/.test(list[edge].text); edge++) {
+        if (!list[edge].originalStyles) { literalIndent = true; break; }
+      }
+      if (literalIndent) {
+        var spaces = /^[ \t]+/.exec(out)[0], open = '<span style="white-space:pre">';
+        newEscapes = newEscapes.map(function (at) { return at + open.length + (at >= spaces.length ? 7 : 0); });
+        out = open + spaces + '</span>' + out.slice(spaces.length);
+        if (caret != null) caret += open.length + (caret > spaces.length ? 7 : 0);
+        // The generated HTML boundary can change GFM's URL/image tokenization.
+        // Validate the completed spelling, including that boundary, before use.
+        if (variant == null && !matchesEmphasis({ source: out }, list)) {
+          for (var spelling = 6; spelling <= 8; spelling++) {
+            var protectedIndent = serialize(list, caretIndex, spelling);
+            if (matchesEmphasis(protectedIndent, list)) return protectedIndent;
+          }
+        }
+      }
+      // A literal block opener must not turn a paragraph into another kind.
+      if (b.type !== 'inline' && /^ {0,3}(?:(?:-[ \t]*){3,}|-+|=+)[ \t]*$/.test(out)) { var escapeAt = out.search(/[-=]/); newEscapes = newEscapes.map(function (at) { return at + (at >= escapeAt ? 1 : 0); }); newEscapes.push(escapeAt); out = out.replace(/[-=]/, '\\$&'); if (caret != null) caret++; }
+      else if (b.type !== 'inline' && /^\d+[.)] /.test(out)) { var escapeAt = /^\d+/.exec(out)[0].length; newEscapes = newEscapes.map(function (at) { return at + (at >= escapeAt ? 1 : 0); }); newEscapes.push(escapeAt); out = out.replace(/^(\d+)([.)])/, function (_, n, marker) { return n + '\\' + marker; }); if (caret != null) caret++; }
+      else if (b.type !== 'inline' && /^(?:> |[-+*] )/.test(out)) { newEscapes = newEscapes.map(function (at) { return at + 1; }); newEscapes.unshift(0); out = '\\' + out; if (caret != null) caret++; }
+      return { source: out, caret: caret == null ? out.length : caret, escapes: newEscapes };
+    }
+    function markdownFlanks(body, previous, following) {
+      var punct = function (c) { return !!c && /[\p{P}\p{S}]/u.test(c); };
+      return body && !/\s/.test(body.charAt(0)) && !/\s/.test(body.slice(-1)) &&
+        (!punct(body.charAt(0)) || !previous || /\s/.test(previous) || punct(previous)) &&
+        (!punct(body.slice(-1)) || !following || /\s/.test(following) || punct(following));
+    }
+    // Plain labels already are valid Markdown. Wrapping their existing source
+    // needs neither canonical serialization nor repeated endpoint projections.
+    if (action.kind === 'link' && action.link && to > from && chars.slice(from, to).every(function (c) { return !c.atom && !c.link && !c.styles.length; })) {
+      var lo = chars[from].rawAt, hi = chars[to - 1].end, label = source.slice(lo, hi);
+      if (/^[\p{L}\p{N} \t.,!?:;'"“”‘’-]+$/u.test(label) && /\S/.test(label) && label.length === to - from) {
+        var leading = /^[ \t]*/.exec(label)[0], trailing = /[ \t]*$/.exec(label)[0], body = label.slice(leading.length, label.length - trailing.length);
+        var wrapped = action.link.wiki ? '[[' + action.link.target + (body === action.link.target ? '' : '|' + body) + ']]' : '[' + body + '](' + action.link.target.replace(/[\\()&<>]/g, '\\$&') + ')';
+        var replacement = leading + wrapped + trailing, labelAt = lo + leading.length + (action.link.wiki ? 2 + (body === action.link.target ? 0 : action.link.target.length + 1) : 1);
+        var linked = { source: source.slice(0, lo) + replacement + source.slice(hi), caret: lo + replacement.length, start: labelAt, end: labelAt + body.length, escapes: [] };
+        if (history === 'project') return linked;
+        if (history !== false) pushUndo(history || 'link');
+        applyEdit(id, lo, hi, replacement, linked.caret); rememberLiteral(linked, []); return linked;
+      }
+    }
+    // A style selection inside one owner leaves its ancestor's original bytes
+    // in place, using Markdown wherever the new delimiter edges can flank.
+    var styleChars = chars.slice(from, to), styleTag = { bold: 'strong', italic: 'em', highlight: 'mark', strike: 'del' }[action.style];
+    if (!derivedAnchors.size && action.kind === 'style' && styleTag && styleChars.length && styleChars.every(function (c) { return !c.atom && c.parent === styleChars[0].parent && c.parent.tagName === styleTag.toUpperCase() && c.styles.indexOf(action.style) >= 0; })) {
+      var owner = styleChars[0].owners.find(function (o) { return o.node === styleChars[0].parent; });
+      var rawOwner = source.slice(owner.at, owner.end), htmlOpen = new RegExp('^<' + styleTag + '>', 'i').exec(rawOwner);
+      var mark = htmlOpen ? htmlOpen[0] : ({ bold: /^(?:\*\*|__)/, italic: /^(?:\*|_)/, highlight: /^==/, strike: /^~~/ }[action.style].exec(rawOwner) || [''])[0];
+      var close = htmlOpen ? (new RegExp('</' + styleTag + '>$', 'i').exec(rawOwner) || [''])[0] : mark;
+      if (mark && close) {
+        var lo = styleChars[0].rawAt, hi = styleChars[styleChars.length - 1].end;
+        var left = source.slice(owner.at + mark.length, lo), middle = source.slice(lo, hi), right = source.slice(hi, owner.end - close.length);
+        function wrappedPart(raw, previous, following) {
+          if (!raw) return '';
+          var edge = /^(\s*)([^]*?)(\s*)$/.exec(raw), body = edge[2];
+          if (!body) return raw;
+          var markdown = action.style === 'italic' ? '*' : mark;
+          var keep = markdownFlanks(body, edge[1] ? ' ' : previous, edge[3] ? ' ' : following);
+          return edge[1] + (htmlOpen ? mark : keep ? markdown : '<' + styleTag + '>') + body + (htmlOpen ? close : keep ? markdown : '</' + styleTag + '>') + edge[3];
+        }
+        var leftSource = wrappedPart(left, source.charAt(owner.at - 1), middle.charAt(0));
+        var replacement = leftSource + middle + wrappedPart(right, middle.slice(-1), source.charAt(owner.end));
+        var unstyled = { source: source.slice(0, owner.at) + replacement + source.slice(owner.end), start: owner.at + leftSource.length, end: owner.at + leftSource.length + middle.length };
+        if (history === 'project') return unstyled;
+        if (history !== false) pushUndo(history || 'style');
+        applyEdit(id, owner.at, owner.end, replacement, unstyled.end);
+        setCaret(id, unstyled.start, unstyled.end); return unstyled;
+      }
+    }
+    if (!derivedAnchors.size && action.kind === 'style' && styleTag && styleChars.length && styleChars.every(function (c) { return !c.atom && c.parent === styleChars[0].parent && c.styles.indexOf('code') < 0 && c.styles.indexOf(action.style) < 0; }) && (styleChars[0].styles.length || styleChars[0].link) && !(styleChars[0].link && attr(styleChars[0].link, 'data-autolink'))) {
+      var lo = styleChars[0].rawAt, hi = styleChars[styleChars.length - 1].end;
+      var opening = '<' + styleTag + '>', closing = '</' + styleTag + '>', body = source.slice(lo, hi);
+      var markdown = { bold: '**', italic: '*', highlight: '==', strike: '~~' }[action.style];
+      if (markdownFlanks(body, source.charAt(lo - 1), source.charAt(hi))) opening = closing = markdown;
+      var styled = { source: source.slice(0, lo) + opening + body + closing + source.slice(hi), start: lo + opening.length, end: hi + opening.length, caret: hi + opening.length };
+      if (history === 'project') return styled;
+      if (history !== false) pushUndo(history || 'style');
+      applyEdit(id, lo, hi, opening + body + closing, styled.caret);
+      setCaret(id, styled.start, styled.end); return styled;
+    }
+    // Updating a whole existing link changes its destination, not the label's
+    // spelling or any ancestor delimiters. Partial selections use the shared
+    // transaction below so that the unselected label remains outside the link.
+    if (action.kind === 'link') {
+      var currentLink = active && active.link;
+      var linkChars = currentLink && chars.filter(function (c) { return c.link === currentLink; });
+      if (currentLink && (from === to || chars.slice(from, to).every(function (c) { return c.link === currentLink; }) && (to - from === linkChars.length || chars.slice(from, to).every(function (c) { return !c.atom && c.parent === chars[from].parent; })))) {
+        var members = nodes.filter(function (n) { return currentLink.contains(n.node); });
+        var linkStart = members[0].at, linkEnd = members[members.length - 1].at + members[members.length - 1].len;
+        var rawLink = source.slice(linkStart, linkEnd), labelSource, labelAt;
+        if (rawLink.slice(0, 2) === '[[') {
+          var pipe = rawLink.indexOf('|'); labelSource = pipe >= 0 ? rawLink.slice(pipe + 1, -2) : rawLink.slice(2, -2); labelAt = linkStart + (pipe >= 0 ? pipe + 1 : 2);
+        } else { labelSource = rawLink.slice(1, rawLink.lastIndexOf('](')); labelAt = linkStart + 1; }
+        var replacement = '[[' + action.link.target + (labelSource === action.link.target ? '' : '|' + labelSource) + ']]';
+        var pickedCaret = linkStart + replacement.length;
+        if (from !== to && to - from < linkChars.length) {
+          var labelStart = chars[from].rawAt - labelAt, labelEnd = chars[to - 1].end - labelAt;
+          var selectedLabel = labelSource.slice(labelStart, labelEnd);
+          var fragment = '[[' + action.link.target + (selectedLabel === action.link.target ? '' : '|' + selectedLabel) + ']]';
+          replacement = labelSource.slice(0, labelStart) + fragment + labelSource.slice(labelEnd);
+          pickedCaret = linkStart + labelStart + fragment.length;
+        }
+        var picked = { source: source.slice(0, linkStart) + replacement + source.slice(linkEnd), caret: pickedCaret };
+        if (history === 'project') return picked;
+        if (history !== false) pushUndo(history || 'link');
+        applyEdit(id, linkStart, linkEnd, replacement, picked.caret); return picked;
+      }
+    }
+    // Inline code owns its delimiter and optional invisible padding. A body
+    // edit can make that padding visible, or collide with the delimiter. Repair
+    // only this span; all surrounding source and inline ancestors remain raw.
+    if (!derivedAnchors.size && action.kind === 'text' && !action.link && !/\n/.test(action.text || '') && !(typeof typingStyles !== 'undefined' && typingStyles && typingStyles.blockId === id && typingStyles.at === start)) {
+      var codeRun = chars.slice(from, to)[0] || active;
+      var codeOwner = codeRun && codeRun.owners && codeRun.owners.find(function (o) { return o.node.tagName === 'CODE'; });
+      if (codeOwner && !(/%|\]/.test(action.text || '') && /%%|\[[A-Z][A-Z0-9 ]+:/.test(source)) && chars.slice(from, to).every(function (c) { return c.parent === codeRun.parent; })) {
+        var members = ownerCharacters(codeOwner);
+        var first = members.filter(function (c) { return c.end <= start; }).length, last = members.filter(function (c) { return c.end <= end; }).length;
+        var head = members.slice(0, first).map(function (c) { return c.text; }).join('');
+        var body = head + (action.text || '') + members.slice(last).map(function (c) { return c.text; }).join('');
+        var ticks = (/^`+/.exec(source.slice(codeOwner.at)) || [''])[0];
+        if (body && ticks) {
+          var oldPad = source.slice(codeOwner.at + ticks.length, members[0].at), pad = '';
+          while (body.indexOf(ticks) >= 0) ticks += '`';
+          if (/\S/.test(body) && (oldPad || /^`|`$|^ .* $/.test(body))) pad = ' ';
+          var replacement = ticks + pad + body + pad + ticks;
+          var codeEdit = { source: source.slice(0, codeOwner.at) + replacement + source.slice(codeOwner.end), caret: codeOwner.at + ticks.length + pad.length + head.length + (action.text || '').length };
+          if (history === 'project') return codeEdit;
+          if (history !== false) pushUndo(history || (action.text ? 'replace' : 'delete'));
+          applyEdit(id, codeOwner.at, codeOwner.end, replacement, codeEdit.caret); return codeEdit;
+        }
+      }
+    }
+    // Raw HTML is opaque to the editor's model: tags show as text, so a
+    // reserialized paragraph can escape a tag with no visible change. In a
+    // paragraph that holds raw HTML or an angle construct, a plain edit is a
+    // byte splice: only the edited source range changes. The splice is taken
+    // only when the result keeps the intended visible model and every raw
+    // token outside the edit stays in place, byte for byte, with no new one;
+    // otherwise the edit goes through the serializer below, unchanged.
+    function rawTokens(value) {
+      var pattern = /(?<!\\)(?:\\\\)*(?:<!--(?:>|->|[^]*?-->)|<\?[^]*?\?>|<!\[CDATA\[[^]*?\]\]>|<![A-Za-z][^>]*>|<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t\r\n][^<>]*?)?\/?>|<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*>|<[^<>\s@]+@[^<>\s]+>|<[^<>\s]+>)/g, found = [], token;
+      while ((token = pattern.exec(value))) { var lead = /^(?:\\\\)*/.exec(token[0])[0].length; found.push({ at: token.index + lead, raw: token[0].slice(lead) }); }
+      return found;
+    }
+    function sourceSplice() {
+      if (surface || (b.type !== 'p' && b.type !== 'inline') || typeof document === 'undefined' || !document.createElement) return null;
+      if (pendingBefore.length || runEscapes.length || typeof typingStyles !== 'undefined' && typingStyles && typingStyles.blockId === id) return null;
+      if (source.indexOf('<') < 0) return null;
+      var tokens = rawTokens(source);
+      var selected = chars.slice(from, to), a, z, spellings, wanted;
+      if (selected.some(function (c) { return c.atom; })) return null;
+      if (action.kind === 'text' && !action.link) {
+        var text = String(action.text || '');
+        // Markdown characters and line breaks need the serializer's spelling.
+        if (/[\\`*_\[\]()~<>#|=^%&\n\r\t]/.test(text)) return null;
+        a = selected.length ? selected[0].rawAt : start; z = selected.length ? selected[selected.length - 1].end : end;
+        // A typed ! before [ would open an image.
+        if (/!$/.test(text) && source.charAt(z) === '[') return null;
+        // Removing all of a styled element's words also removes its marks.
+        if (!text && selected.some(function (c) { return (c.owners || []).some(function (o) { return /^(?:STRONG|EM|MARK|DEL|CODE|A|SUP|SUB|SPAN)$/.test(o.node.tagName) && ownerCharacters(o).every(function (x) { return selected.indexOf(x) >= 0; }); }); })) return null;
+        spellings = [['', text, '']];
+        // Typed indentation at a line start takes the serializer's own
+        // spelling (literalIndent): the site drops bare leading whitespace.
+        var lineAt = source.lastIndexOf('\n', a - 1) + 1, typedIndent = /^[ \t]+/.exec(text);
+        if (typedIndent && a === lineAt && !/^[ \t]/.test(source.slice(z)) && b.type !== 'inline') {
+          var indentOpen = '<span style="white-space:pre">' + typedIndent[0] + '</span>';
+          spellings = [[indentOpen, text.slice(typedIndent[0].length), '', [{ at: 0, raw: '<span style="white-space:pre">' }, { at: indentOpen.length - 7, raw: '</span>' }]]];
+        }
+        wanted = chars.slice(); wanted.splice.apply(wanted, [from, to - from].concat(literal(text, active)));
+      } else if (action.kind === 'style' && /^(?:bold|italic|strike|code)$/.test(action.style) && selected.length) {
+        // Adding a style to plain words only; removing or nesting is the serializer's.
+        var words = selected.map(function (c) { return c.text; }).join(''), mark = { bold: '**', italic: '*', strike: '~~', code: '`' }[action.style];
+        var tag = { bold: 'strong', italic: 'em', strike: 'del', code: 'code' }[action.style];
+        a = selected[0].rawAt; z = selected[selected.length - 1].end;
+        if (source.slice(a, z) !== words || /^\s|\s$/.test(words) || /[<>&]/.test(words)) return null;
+        if (selected.some(function (c) { return c.styles.length || c.link || c.automatic; })) return null;
+        // Markdown first; the editor's own HTML form where delimiters cannot open or close.
+        spellings = [[mark, words, mark], ['<' + tag + '>', words, '</' + tag + '>']];
+        if (mark === '`' && /`/.test(words)) spellings.shift();
+        wanted = chars.map(function (c) { return selected.indexOf(c) >= 0 ? Object.assign({}, c, { styles: c.styles.concat([action.style]) }) : c; });
+      } else return null;
+      // An edit inside a raw token changes that token, and a removed angle is
+      // generated spelling: the serializer owns both.
+      if (/[<>]/.test(source.slice(a, z))) return null;
+      if (tokens.some(function (t) { var e = t.at + t.raw.length; return z > a ? a < e && z > t.at : a > t.at && a < e; })) return null;
+      // An opener in the edited word that is not a kept token (<? <! </ or a
+      // doubled, generated angle), or the editor's own empty separator span,
+      // keeps the serializer's canonical spelling.
+      function opener(text, lo, hi, starts) {
+        var left = text.slice(0, lo).search(/\S*$/), right = hi + text.slice(hi).search(/\s|$/);
+        if (text.slice(left, right).indexOf('<span></span>') >= 0) return true;
+        for (var at = left; at < right; at++) if (text.charAt(at) === '<' && /^<[?!\/<]|<$/.test(text.slice(at - 1 < 0 ? at : at - 1, at + 2).replace(/^[^<]/, '')) && starts.indexOf(at) < 0 && !/(?:^|[^\\])(?:\\\\)*\\$/.test(text.slice(Math.max(0, at - 8), at))) return true;
+        return false;
+      }
+      for (var i = 0; i < spellings.length; i++) {
+        var open = spellings[i][0], close = spellings[i][2], inserted = open + spellings[i][1] + close;
+        var value = source.slice(0, a) + inserted + source.slice(z), shift = inserted.length - (z - a);
+        // Leading whitespace on a line is dropped by the site: an edit within
+        // it keeps the serializer's spelling (literalIndent).
+        var lineStart = value.lastIndexOf('\n', a - 1) + 1, indent = /^[ \t]*/.exec(value.slice(lineStart))[0].length;
+        if (indent && a <= lineStart + indent) continue;
+        // Every raw token outside the edit stays in place; the only new ones
+        // are the style's own HTML tags.
+        var expected = tokens.map(function (t) { return { at: t.at >= z ? t.at + shift : t.at, raw: t.raw }; });
+        if (spellings[i][3]) spellings[i][3].forEach(function (t) { expected.push({ at: a + t.at, raw: t.raw }); });
+        else if (open.charAt(0) === '<') expected.push({ at: a, raw: open }, { at: a + inserted.length - close.length, raw: close });
+        expected.sort(function (x, y) { return x.at - y.at; });
+        if (rawTokens(value).map(function (t) { return t.at + ':' + t.raw; }).join('\n') !== expected.map(function (t) { return t.at + ':' + t.raw; }).join('\n')) continue;
+        if (typeof classify === 'function' && b.type === 'p' && classify(value) !== 'p') continue;
+        var angle = opener(value, a, a + inserted.length, expected.map(function (t) { return t.at; })) || opener(source, a, z, tokens.map(function (t) { return t.at; }));
+        if (angle) continue;
+        // The edit view shows a Markdown hard break as its marker, not as a character.
+        if (!matchesEmphasis({ source: value, full: b.type !== 'inline' }, wanted) && !(/\n/.test(value) && matchesEmphasis({ source: value, full: b.type !== 'inline', breaks: false }, wanted))) continue;
+        var caret = a + inserted.length;
+        return action.kind === 'style' ? { source: value, caret: caret, start: a + open.length, end: caret - close.length, escapes: [] } : { source: value, caret: caret, escapes: [] };
+      }
+      return null;
+    }
+    var spliced = sourceSplice();
+    if (spliced) {
+      if (history === 'project') return spliced;
+      if (history !== false) pushUndo(history || (action.text ? 'replace' : 'delete'));
+      applyEdit(id, 0, source.length, spliced.source, spliced.caret); rememberLiteral(spliced, []);
+      if (action.kind === 'style') setCaret(id, spliced.start, spliced.end);
+      return spliced;
+    }
+    // Text within one visible source run needs no block serialization. Expand
+    // escapes at the edit edge, and spell only new literal characters. Fall back
+    // when changing delimiter flanking or a code fence requires new delimiters.
+    if (action.kind === 'text' && !action.link && !/\n/.test(action.text || '') && !(typeof typingStyles !== 'undefined' && typingStyles && typingStyles.blockId === id && typingStyles.at === start)) {
+      var selectedChars = chars.slice(from, to), run = selectedChars[0] || active;
+      var sameRun = !selectedChars.length || run && selectedChars.every(function (c) { return !c.atom && c.parent === run.parent; });
+      var rawStart = selectedChars.length ? selectedChars[0].rawAt : start;
+      var rawEnd = selectedChars.length ? selectedChars[selectedChars.length - 1].end : end;
+      if (!selectedChars.length && /^h[1-6]$/.test(b.type) && chars.length && /^[ \t]+#+[ \t]*$/.test(source.slice(chars[chars.length - 1].end)) && start > chars[chars.length - 1].end) rawStart = rawEnd = chars[chars.length - 1].end;
+      if (!selectedChars.length && active && active.at === start && active.rawAt < start) rawStart = rawEnd = active.rawAt;
+      var codeOwner = run && run.owners && run.owners.find(function (o) { return o.node.tagName === 'CODE'; });
+      var safe = !derivedAnchors.size && sameRun && (!run || !run.atom) && !source.slice(rawStart, rawEnd).includes('\n');
+      if (continuing && (runEscapes.length || /[\\`*_\[\]()~<>#|=^%&]/.test(action.text || '') || /<\?|<!/.test(source.slice(0, rawStart) + (action.text || '') + source.slice(rawEnd)))) safe = false;
+      // Backslashes inside autolinks are displayed literally. A label edit
+      // needs an explicit link so escaped writer input remains just its label.
+      if (chars.some(function (c) { return c.link && attr(c.link, 'data-autolink'); }) || /<[^<>\s]+>/.test(source.slice(0, rawStart) + (action.text || '') + source.slice(rawEnd))) safe = false;
+      if (run && run.styles.some(function (k) { return k !== 'code'; })) {
+        // Spaces at delimiter edges, or word edits immediately outside a style,
+        // may require closing/reopening an ancestor. The general path owns those.
+        var edge = !selectedChars.length && (!active || active.at !== start && (!from || chars[from - 1].end !== start));
+        if (edge || /^\s|\s$/.test(action.text || '') || selectedChars.length && (rawStart === run.owners[0].at || rawEnd === run.owners[0].end)) safe = false;
+      }
+      if (codeOwner && /`/.test(action.text || '') || !codeOwner && /[\[*_]/.test(action.text || '')) safe = false;
+      if (!action.text && run && selectedChars.length) {
+        if (run.owners.some(function (owner) { return /^(?:STRONG|EM|MARK|DEL|CODE|A|SUP|SUB|SPAN)$/.test(owner.node.tagName) && ownerCharacters(owner).every(function (x) { return selectedChars.indexOf(x) >= 0; }); })) safe = false;
+      }
+      if (!action.text && run && selectedChars.length) {
+        run.owners.forEach(function (owner) {
+          var rawOwner = source.slice(owner.at, owner.end);
+          if (!/^(?:\*|_|==|~~)/.test(rawOwner)) return;
+          var remaining = chars.filter(function (x) { return x.owners && x.owners.some(function (o) { return o.node === owner.node; }) && selectedChars.indexOf(x) < 0; });
+          if (remaining.length && (/\s/.test(remaining[0].text) || /\s/.test(remaining[remaining.length - 1].text))) safe = false;
+        });
+      }
+      var leftChar = chars[from - 1], rightChar = chars[to];
+      if ([leftChar, rightChar].some(function (x) { return x && (x.styles.indexOf('italic') >= 0 || x.styles.indexOf('bold') >= 0) && (!run || x.parent !== run.parent); })) safe = false;
+      // Preserve Markdown's italic flanking rule when inserting next to a run.
+      if (!selectedChars.length && /[\p{L}\p{N}]/u.test(action.text || '') && chars.some(function (c) { return c.styles.indexOf('italic') >= 0 && (c.at > start && source.slice(start, c.at).match(/^[*_]+$/) || c.end < start && source.slice(c.end, start).match(/^[*_]+$/)); })) safe = false;
+      if (safe) {
+        var literalText = String(action.text || '');
+        var rawCandidate = source.slice(0, rawStart) + literalText + source.slice(rawEnd);
+        var bare = /https?:\/\/|www\.|@/i.test(rawCandidate) ? automaticPositions(rawCandidate) : [];
+        var text = codeOwner ? literalText : literalText.replace(/[\\`*_\[\]()~<>#|=^%&]/g, function (ch, i) { return bare[rawStart + i] ? ch : '\\' + ch; }).replace(/!(?=\[|$)/g, function (ch, at, value) { return at + 1 < value.length || source.charAt(rawEnd) === '[' ? '\\!' : '!'; });
+        if (!codeOwner && /https?:\/\/|www\.|@/i.test(rawCandidate)) {
+          var wantedRaw = chars.slice();
+          wantedRaw.splice.apply(wantedRaw, [from, to - from].concat(literal(literalText, active)));
+          var rawPrefix = structuralPrefix(source.split('\n')[0]);
+          if ([].every.call(literalText, function (ch, i) { return !/[\\`*_\[\]()~<>#|=^%&]/.test(ch) || bare[rawStart + i] || /[)_*\[\](]/.test(ch) && /https?:\/\/|www\./i.test(rawCandidate); }) && matchesEmphasis({ source: rawCandidate.slice(rawPrefix) }, wantedRaw)) text = literalText;
+        }
+        var generated = runEscapes.filter(function (at) { return at < rawStart; }), offset = 0;
+        if (!codeOwner) for (var i = 0; i < literalText.length; i++) {
+          if (text.slice(offset, offset + 2) === '\\' + literalText.charAt(i)) { generated.push(rawStart + offset); offset++; }
+          offset++;
+        }
+        runEscapes.filter(function (at) { return at >= rawEnd; }).forEach(function (at) { generated.push(at + text.length - (rawEnd - rawStart)); });
+        var directClean = cleanSpelling(source.slice(0, rawStart) + text + source.slice(rawEnd), generated, rawStart + text.length, b.type === 'inline');
+        var cleanedStart = rawStart - (directClean.removed || []).filter(function (at) { return at < rawStart; }).length;
+        text = directClean.source.slice(cleanedStart, directClean.source.length - source.length + rawEnd);
+        var candidate = directClean.source;
+        if (JSON.stringify(rawHTML(candidate)) !== JSON.stringify(rawHTML(source))) safe = false;
+        if (b.type === 'p' && candidate.includes('\n') && MD().parse(candidate).blocks.some(function (block) { return block.type === 'table'; })) safe = false;
+        // A continuation is a paragraph even inside a list or quote. Compare
+        // its body, after the original structural prefix, before taking a splice.
+        if (b.type !== 'inline') {
+          var lineAt = source.lastIndexOf('\n', rawStart - 1) + 1;
+          var lineEnd = source.indexOf('\n', rawEnd);
+          if (lineEnd < 0) lineEnd = source.length;
+          var prefixLength = structuralPrefix(source.slice(lineAt, lineEnd));
+          var nextLine = candidate.slice(lineAt, lineEnd + candidate.length - source.length);
+          if (opensBlock(nextLine.slice(prefixLength))) safe = false;
+        }
+        if (safe && typeof document !== 'undefined' && document.createElement && typeof MD === 'function' && MD().renderInline) {
+          var expectedDirect = chars.slice();
+          expectedDirect.splice.apply(expectedDirect, [from, to - from].concat(literal(action.text, active)));
+          var inlineCandidate = b.type === 'inline' ? candidate : candidate.slice(typeof markerLen === 'function' ? markerLen(candidate) : 0);
+          if (!matchesEmphasis({ source: inlineCandidate }, expectedDirect)) safe = false;
+        }
+        if (safe && !codeOwner && (/https?:\/\/|www\./i.test(candidate) || chars.some(function (c) { return c.automatic; }))) {
+          var wanted = chars.slice();
+          wanted.splice.apply(wanted, [from, to - from].concat(literal(literalText, active)));
+          if (!matchesEmphasis({ source: candidate.slice(structuralPrefix(source.split('\n')[0])) }, wanted)) safe = false;
+        }
+        // Removing a run's final content also removes its empty delimiters.
+        if (safe) {
+          var direct = retainUntouched({ source: directClean.source, spellingFallback: !!directClean.spellingFallback, caret: directClean.caret, escapes: directClean.escapes }, expectedDirect);
+          directClean = direct;
+          if (history === 'project') return direct;
+          if (history !== false) pushUndo(history || (action.text ? 'replace' : 'delete'));
+          applyEdit(id, 0, source.length, directClean.source, direct.caret); rememberLiteral(direct, directClean.escapes); return direct;
+        }
+      }
+    }
+    if ((action.kind === 'style' || action.kind === 'text' && !action.link) && typeof document !== 'undefined' && document.createElement) {
+      var sample = chars.slice(from, to)[0] || active, selection = chars.slice(from, to);
+      var styleFor = { STRONG: 'bold', EM: 'italic', MARK: 'highlight', DEL: 'strike', CODE: 'code', SUP: 'sup', SUB: 'sub', SPAN: 'span' };
+      var intent = typeof typingStyles !== 'undefined' && typingStyles && typingStyles.blockId === id && typingStyles.at === start ? typingStyles : null;
+      var window = sample && sample.owners && sample.owners.find(function (owner, index) {
+        if (!/^(?:STRONG|EM|MARK|DEL|SUP|SUB|SPAN)$/.test(owner.node.tagName)) return false;
+        var raw = source.slice(owner.at, owner.end), name = owner.node.tagName.toLowerCase();
+        var open = new RegExp('^<' + name + (name === 'span' ? '(?: style="white-space:pre")?' : '') + '>', 'i').exec(raw), close = new RegExp('</' + name + '>$', 'i').exec(raw);
+        if ((!open || !close) && typingRun && !/\n/.test(action.text || '')) {
+          var delimiter = /^(\*\*|__|\*|_|==|~~)/.exec(raw);
+          if (delimiter && raw.endsWith(delimiter[0])) open = close = delimiter;
+        }
+        if (typingRun && ownerCharacters(owner).every(function (c) { return c.typed; })) return false;
+        if (!open || !close || start < owner.at + open[0].length || end > owner.end - close[0].length || !selection.every(function (c) { return c.owners && c.owners.some(function (o) { return o.node === owner.node; }); })) return false;
+        var outside = sample.owners.slice(index).map(function (o) { return styleFor[o.node.tagName]; }).filter(Boolean);
+        if (action.kind === 'style' && outside.indexOf(action.style) >= 0 || intent && outside.some(function (key) { return intent.styles.indexOf(key) < 0; })) return false;
+        owner.open = open[0]; owner.close = close[0]; owner.outside = outside; return true;
+      });
+      if (window) {
+        var bodyStart = window.at + window.open.length, bodyEnd = window.end - window.close.length;
+        var body = source.slice(bodyStart, bodyEnd), probe = document.createElement('div');
+        var context = typeof doc !== 'undefined' && doc || {};
+        probe.innerHTML = MD().renderInline(body, { editSource: true, references: context.references, footnoteNumbers: context.footnoteNumbers, footnotes: context.footnotes });
+        probe.cwLiteralContinuation = continuing; probe.cwSourcePrefix = source.slice(0, bodyStart); probe.cwSourceSuffix = source.slice(bodyEnd); probe.cwLiteralEscapes = runEscapes.filter(function (at) { return at >= bodyStart && at < bodyEnd; }).map(function (at) { return at - bodyStart; });
+        if (probe.textContent === body) {
+          var originalType = b.type, savedIntent = typeof typingStyles !== 'undefined' ? typingStyles : null, projection, projectedRun;
+          var bodyFrom = chars.filter(function (c) { return c.end <= bodyStart; }).length;
+          try {
+            b.source = body; b.type = 'inline';
+            if (intent) typingStyles = { blockId: id, at: start - bodyStart, styles: intent.styles.filter(function (key) { return window.outside.indexOf(key) < 0; }), run: typingRun && { from: typingRun.from - bodyFrom, styles: typingRun.styles.map(function (styles) { return styles.filter(function (key) { return window.outside.indexOf(key) < 0; }); }) } };
+            projection = replaceVisible(id, start - bodyStart, end - bodyStart, action, 'project', probe, work);
+            projectedRun = projection && projection.typingRun;
+          } finally { b.source = source; b.type = originalType; if (typeof typingStyles !== 'undefined') typingStyles = savedIntent; }
+          if (projection && projection.source != null) {
+            var gaps = [], bodySource = projection.source.replace(/\n(?:[ \t]*\n)+/g, function (gap, at) { gaps.push({ at: at, end: at + gap.length }); return window.close + gap + window.open; });
+            function projectedPoint(point) {
+              if (point == null) return point;
+              var delta = 0; gaps.forEach(function (gap) { if (point > gap.at) delta += window.close.length; if (point >= gap.end) delta += window.open.length; });
+              return bodyStart + point + delta;
+            }
+            var local = { source: source.slice(0, bodyStart) + bodySource + source.slice(bodyEnd), escapes: (projection.escapes || []).map(projectedPoint), caret: projectedPoint(projection.caret == null ? projection.end : projection.caret), start: projectedPoint(projection.start), end: projectedPoint(projection.end), typingRun: projectedRun && { from: projectedRun.from + bodyFrom, styles: projectedRun.styles.map(function (styles) { return styles.concat(window.outside); }) } };
+            var windowChars = chars.filter(function (c) { return c.at >= window.at && c.end <= window.end; });
+            var windowFrom = chars.filter(function (c) { return c.end <= window.at; }).length;
+            var expectedWindow = windowChars.slice();
+            if (action.kind === 'text') expectedWindow.splice.apply(expectedWindow, [from - windowFrom, to - from].concat(literal(action.text, active)));
+            else expectedWindow = expectedWindow.map(function (c, i) {
+              if (i < from - windowFrom || i >= to - windowFrom) return c;
+              var styles = c.styles.filter(function (key) { return key !== action.style; });
+              if (!selection.every(function (x) { return x.styles.indexOf(action.style) >= 0; })) styles.push(action.style);
+              return { text: c.text, styles: styles };
+            });
+            // The retained outer delimiters must still mean the edited model.
+            // Invalid flanking (notably a trailing space) takes the same general
+            // serializer and validation as every other visible transaction.
+            var expectedBlock = chars.slice(0, windowFrom).concat(expectedWindow, chars.slice(windowFrom + windowChars.length));
+            var wholeCandidate = source.slice(0, bodyStart) + bodySource + source.slice(bodyEnd);
+            if (JSON.stringify(rawHTML(wholeCandidate).filter(function (token) { return /^<!/.test(token); })) === JSON.stringify(rawHTML(source).filter(function (token) { return /^<!/.test(token); })) && matchesEmphasis({ source: wholeCandidate.slice(structuralPrefix(source.split('\n')[0])) }, expectedBlock)) {
+            if (history === 'project') return local;
+            if (history !== false) pushUndo(history || (action.text ? 'replace' : 'delete'));
+            if (intent) {
+              intent.at = local.caret;
+              if (projectedRun) intent.run = { from: projectedRun.from + bodyFrom, styles: projectedRun.styles.map(function (styles) { return styles.concat(window.outside); }) };
+            }
+            applyEdit(id, bodyStart, bodyEnd, bodySource, local.caret); rememberLiteral(local, local.escapes);
+            if (action.kind === 'style') setCaret(id, local.start, local.end);
+            return local;
+            }
+          }
+        }
+      }
+    }
+    var selected = chars.slice(from, to);
+    if (action.kind === 'link') {
+      var touched = selected.map(function (c) { return c.link; }).filter(Boolean);
+      if (from === to && active && active.link) {
+        var link = active.link;
+        while (from > 0 && chars[from - 1].link === link) from--;
+        while (to < chars.length && chars[to].link === link) to++;
+        touched.push(link);
+      } else if (from === to) {
+        action = { kind: 'text', text: action.link.target, link: action.link };
+      }
+      chars.forEach(function (c) { if (touched.indexOf(c.link) >= 0) c.link = null; });
+      for (var j = from; j < to; j++) if (!chars[j].atom) chars[j].link = action.link;
+    } else if (action.kind === 'style') {
+      var off = selected.length && selected.every(function (c) { return c.styles.indexOf(action.style) >= 0; });
+      selected.forEach(function (c) { c.styles = c.styles.filter(function (s) { return s !== action.style; }); if (!off) c.styles.push(action.style); });
+    }
+    // Preserve each structural prefix. Only the affected block is serialized;
+    // every other block retains its original source bytes.
+    var rows = [], pos = 0;
+    var visibleLines = [], lineStart = 0;
+    for (var lineEnd = 0; lineEnd < source.length; lineEnd++) if (source.charAt(lineEnd) === '\n' && !chars.some(function (c) { return c.at === lineEnd && c.styles.indexOf('code') >= 0; })) { visibleLines.push(source.slice(lineStart, lineEnd)); lineStart = lineEnd + 1; }
+    visibleLines.push(source.slice(lineStart));
+    visibleLines.forEach(function (line) {
+      var prefixSize = structuralPrefix(line);
+      if (b.type === 'list' && !prefixSize) prefixSize = (/^[ \t]+/.exec(line) || [''])[0].length;
+      var hard = /  $/.test(line) && source.charAt(pos + line.length) === '\n';
+      var contentEnd = line.length - (hard ? 2 : 0);
+      if (!chars.some(function (c) { return c.at >= pos && c.at < pos + contentEnd; })) prefixSize = contentEnd;
+      var prefix = line.slice(0, prefixSize);
+      rows.push({ at: pos, end: pos + line.length, prefix: prefix, suffix: hard ? '  ' : '', chars: chars.filter(function (c) { return c.at >= pos + prefix.length && c.at < pos + contentEnd; }) });
+      pos += line.length + 1;
+    });
+    var firstRow = 0, lastRow = 0;
+    rows.forEach(function (r, i) { if (r.at <= start) firstRow = i; if (r.at <= end) lastRow = i; });
+    var headChars = rows[firstRow].chars.filter(function (c) { return c.end <= start; });
+    var tailChars = rows[lastRow].chars.filter(function (c) { return c.at >= end; });
+    var caretInRow = headChars.length, caretRow = firstRow;
+    function trim(list) { while (list.length && /\s/.test(list[0].text)) list.shift(); while (list.length && /\s/.test(list[list.length - 1].text)) list.pop(); return list; }
+    if (action.kind === 'split') {
+      var left = serialize(trim(headChars), headChars.length), right = serialize(trim(tailChars), 0);
+      var before = rows.slice(0, firstRow).map(function (r) { return r.prefix + serialize(r.chars).source + (r.suffix || ''); });
+      var after = rows.slice(lastRow + 1).map(function (r) { return r.prefix + serialize(r.chars).source + (r.suffix || ''); });
+      var prefix = rows[firstRow].prefix, nextPrefix = prefix.replace(/(\d+)([.)])/, function (_, n, d) { return (+n + 1) + d; });
+      var leftSource = before.concat(prefix + left.source).join('\n');
+      var rightSource = right.source + (after.length ? '\n' + after.join('\n') : '');
+      if (action.soft) {
+        var lead = /^(?:\s*>)/.test(prefix) ? prefix : new Array(prefix.length + 1).join(' ');
+        return { source: leftSource + '  \n' + lead + rightSource, caret: leftSource.length + 3 + lead.length };
+      }
+      return { head: leftSource, tail: rightSource, prefix: nextPrefix, caret: leftSource.length + 1 + nextPrefix.length };
+    }
+    if (action.kind === 'link' && to > from) {
+      var last = chars[to - 1];
+      rows.forEach(function (r, index) { var at = r.chars.indexOf(last); if (at >= 0) { caretRow = index; caretInRow = at + 1; } });
+    }
+    if (action.kind === 'text') {
+      var add = literal(action.text, active);
+      if (/^h[1-6]$/.test(b.type) || host.cwHeading) add.forEach(function (c) { if (c.text === '\n') c.breakSource = '<br>'; });
+      if (typingRun) {
+        typingRun.styles.splice.apply(typingRun.styles, [Math.max(0, from - typingRun.from), to - from].concat(add.map(function (c) { return c.styles.slice(); })));
+      }
+      if (action.link) add.forEach(function (c) { c.link = action.link; });
+      rows.splice(firstRow, lastRow - firstRow + 1, { at: rows[firstRow].at, end: rows[lastRow].end, prefix: rows[firstRow].prefix, suffix: rows[lastRow].suffix, chars: headChars.concat(add, tailChars) });
+      caretInRow += add.length;
+    }
+    var result = '', nextCaret = 0, selectionStart = 0, selectionEnd = 0, resultEscapes = [];
+    function writeRows(variant) {
+      result = ''; nextCaret = selectionStart = selectionEnd = 0; resultEscapes = [];
+    rows.forEach(function (r, index) {
+      var chunk = serialize(r.chars, index === caretRow ? caretInRow : null, variant);
+      if (action.kind === 'text' && /\n/.test(action.text || '') && (b.type === 'list' || b.type === 'quote' || b.type === 'callout' || b.type === 'footnote-def')) {
+        var continuation = b.type === 'footnote-def' ? '    ' : r.prefix.replace(/(?:[-+*]|\d+[.)])[ \t]+(?:\[[ xX]\][ \t]+)?/g, function (marker) { return ' '.repeat(marker.length); });
+        var beforeCaret = chunk.source.slice(0, chunk.caret);
+        chunk.caret += (beforeCaret.match(/\n/g) || []).length * continuation.length;
+        chunk.escapes = (chunk.escapes || []).map(function (at) { return at + (chunk.source.slice(0, at).match(/\n/g) || []).length * continuation.length; });
+        chunk.source = chunk.source.replace(/\n/g, '\n' + continuation);
+      }
+      if (index) result += '\n';
+      if (index === caretRow) nextCaret = result.length + r.prefix.length + chunk.caret;
+      // Selection mapping comes from the same serialization as caret mapping.
+      var lo = r.chars.filter(function (c) { return c.end <= start; }).length;
+      var hi = r.chars.filter(function (c) { return c.end <= end; }).length;
+      if (action.kind !== 'text' && index === firstRow) selectionStart = result.length + r.prefix.length + (index === caretRow && lo === caretInRow ? chunk.caret : serialize(r.chars, lo, variant).caret);
+      if (action.kind !== 'text' && index === lastRow) selectionEnd = lo === hi && index === firstRow ? selectionStart : result.length + r.prefix.length + (index === caretRow && hi === caretInRow ? chunk.caret : serialize(r.chars, hi, variant).caret);
+      (chunk.escapes || []).forEach(function (at) { resultEscapes.push(result.length + r.prefix.length + at); });
+      result += r.prefix + chunk.source + (r.suffix || '');
+    });
+    }
+    writeRows();
+    if (b.type === 'p' && source.includes('\n')) {
+      var expectedFull = [];
+      rows.forEach(function (row, index) { if (index) expectedFull.push({ text: '\n', styles: [] }); expectedFull = expectedFull.concat(row.chars); });
+      // Raw owners validated on one row may contain an unmatched delimiter
+      // that pairs with a later row. Validate the complete paragraph once.
+      if (!matchesEmphasis({ source: result }, expectedFull)) writeRows(8);
+    }
+    var cleaned = cleanSpelling(result, resultEscapes, nextCaret, b.type === 'inline');
+    function cleanedPoint(at) { return at - resultEscapes.filter(function (p) { return p < at && cleaned.removed.indexOf(p) >= 0; }).length; }
+    var next = { source: cleaned.source, spellingFallback: !!cleaned.spellingFallback, escapes: cleaned.escapes, caret: cleaned.caret, start: cleaned.removed ? cleanedPoint(selectionStart) : selectionStart, end: cleaned.removed ? cleanedPoint(selectionEnd) : selectionEnd, typingRun: typingRun };
+    var wantedSource = [];
+    rows.forEach(function (row, index) { if (index) wantedSource.push({ text: '\n', styles: [] }); wantedSource = wantedSource.concat(row.chars); });
+    next = retainUntouched(next, wantedSource);
+    if (history === 'project') return next;
+    if (history !== false) pushUndo(history || (action.text ? 'replace' : 'delete'));
+    var typed = typeof typingStyles !== 'undefined' && typingStyles && typingStyles.blockId === id && typingStyles.at === start;
+    if (typed) { typingStyles.at = next.caret; typingStyles.run = typingRun; }
+    applyEdit(id, 0, source.length, next.source, next.caret); rememberLiteral(next, next.escapes);
+    if (action.kind === 'style') setCaret(id, next.start, next.end);
+    return next;
+  }
+  function deleteVisible(type, c, deferNative) {
+    var host = editOf(focusId), b = blockOf(focusId);
+    if (!host || !b) return false;
+    if (b.type === 'p' && b.source.includes('\n') && host.textContent === b.source && !host.querySelector('.cw-mk')) {
+      var breakProjection = document.createElement('div');
+      breakProjection.innerHTML = MD().renderInline(b.source, { editSource: true });
+      if (breakProjection.textContent === b.source) host = breakProjection;
+    }
+    if (!host.querySelector || !host.querySelector('.cw-mk')) {
+      var plainStart = c.start, plainEnd = c.end;
+      if (plainStart === plainEnd) { if (/Backward$/.test(type)) plainStart = Math.max(0, plainStart - 1); else plainEnd = Math.min(b.source.length, plainEnd + 1); }
+      var remaining = b.source.slice(0, plainStart) + b.source.slice(plainEnd);
+      if (b.type !== 'p' || !/^(?:[-+*>]|#{1,6})$/.test(remaining)) return false;
+    }
+    var start = c.start, end = c.end;
+    if (start === end) {
+      // A rendered hard break has no text node. Its hidden source run is one
+      // deletion unit, so Backspace must not skip back into the preceding word.
+      var breakRun = sourceNodes(host).find(function (n) { return hiddenSource(n.node) && /^(?:  \n|<br\s*\/?>)$/i.test(n.node.nodeValue) && (/Backward$/.test(type) ? n.at + n.len === start : n.at === start); });
+      if (breakRun) {
+        var range = { start: breakRun.at, end: breakRun.at + breakRun.len };
+        if (deferNative) return range;
+        pushUndo('delete'); applyEdit(focusId, range.start, range.end, '', range.start); return true;
+      }
+
+      var back = /Backward$/.test(type);
+      var candidates = interactionRuns(host);
+      if (/Word/.test(type)) {
+        var visible = '', positions = [], offset = 0;
+        candidates.forEach(function (n) {
+          for (var j = 0; j < n.len; j++) {
+            positions.push(n.at + j);
+            visible += n.node.nodeValue.charAt(j);
+            if (n.at + j < c.start) offset++;
+          }
+        });
+        var edge = selectionStep(visible, offset, back, true);
+        var wordStart = positions[Math.min(edge, offset)], wordEnd = positions[Math.max(edge, offset) - 1];
+        if (wordStart != null && wordEnd != null && edge !== offset) {
+          start = wordStart; end = wordEnd + 1;
+          // Atomic runs remain indivisible even when their raw source has words.
+          candidates.forEach(function (n) { if (n.atomic && start < n.at + n.len && end > n.at) { start = Math.min(start, n.at); end = Math.max(end, n.at + n.len); } });
+          if (deferNative) return { start: start, end: end };
+          replaceVisible(focusId, start, end, '');
+          return true;
+        }
+      }
+      var picked = null;
+      candidates.forEach(function (n) {
+        if (back && n.at < start) picked = n;
+        else if (!back && !picked && n.at + n.len > start) picked = n;
+      });
+      if (!picked) {
+        if (!deferNative && back && markerLen(b.source.split('\n')[0])) { pushUndo('unmark'); applyEdit(b.id, 0, markerLen(b.source.split('\n')[0]), '', 0); return true; }
+        return false;
+      }
+      if (picked.atomic) { start = picked.at; end = picked.at + picked.len; }
+      else if (back) {
+        end = Math.min(start, picked.at + picked.len);
+        start = picked.at + selectionStep(picked.node.nodeValue, end - picked.at, true, /Word/.test(type));
+      } else {
+        start = Math.max(start, picked.at);
+        end = picked.at + selectionStep(picked.node.nodeValue, start - picked.at, false, /Word/.test(type));
+      }
+    }
+    if (deferNative) return { start: start, end: end };
+    replaceVisible(focusId, start, end, '');
+    return true;
   }
   function onBeforeInput(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
@@ -2362,17 +4117,74 @@
     }
     if (composing) return;
     if (handledBackspace && t === 'deleteContentBackward') { e.preventDefault(); return; }
+    var liveInputCaret = caretSource(), visibleCaret = liveInputCaret;
+    // Noncollapsed replacement targets are authoritative. A collapsed typing
+    // target cannot override the live Selection, including a selected final
+    // space: browsers may snap that target before whitespace or hidden fences.
+    var targets = e.getTargetRanges && e.getTargetRanges();
+    if (targets && targets.length === 1) {
+      var target = targets[0], targetStart = domOffset(el, target.startContainer, target.startOffset), targetEnd = domOffset(el, target.endContainer, target.endOffset);
+      if (targetStart != null && targetEnd != null &&
+          (t !== 'insertText' || !liveInputCaret || targetStart !== targetEnd)) {
+        visibleCaret = { start: Math.min(targetStart, targetEnd), end: Math.max(targetStart, targetEnd) };
+      }
+    }
+    if (e.cancelable !== false && visibleCaret && liveInputCaret &&
+        (visibleCaret.start !== liveInputCaret.start || visibleCaret.end !== liveInputCaret.end) &&
+        /^(insertText|insertReplacementText)$/.test(t || '') && e.data != null) {
+      e.preventDefault(); replaceVisible(focusId, visibleCaret.start, visibleCaret.end, e.data);
+      finishInput(global.performance && performance.now ? performance.now() : Date.now()); return;
+    }
+    if (t === 'deleteContentBackward' && e.cancelable !== false && visibleCaret && visibleCaret.start === visibleCaret.end && pending.some(function (p) { return p.blockId === focusId && p.index === visibleCaret.start; }) && pairedDelete(focusId)) {
+      e.preventDefault(); finishInput(global.performance && performance.now ? performance.now() : Date.now()); return;
+    }
+    var deletion = /^delete(?:Content|Word)(?:Backward|Forward)$/.test(t || '') && visibleCaret && deleteVisible(t, visibleCaret, e.cancelable === false);
+    if (deletion) {
+      if (e.cancelable === false) {
+        // The browser still owns this deletion. Reconcile its input against the
+        // original visible range instead of deleting once here and again natively.
+        pushUndo('delete');
+        nativeIntent = { literal: true, data: '', selectionEdit: deletion, host: el, blockId: focusId, source: blockOf(focusId).source,
+          started: global.performance && performance.now ? performance.now() : Date.now() };
+      } else { e.preventDefault(); finishInput(global.performance && performance.now ? performance.now() : Date.now()); }
+      return;
+    }
+    if (e.cancelable !== false && visibleCaret && visibleCaret.end > visibleCaret.start && el.querySelector && el.querySelector('.cw-mk') &&
+        (/^delete/.test(t || '') || /^(insertText|insertReplacementText)$/.test(t || '') && e.data != null)) {
+      e.preventDefault(); replaceVisible(focusId, visibleCaret.start, visibleCaret.end, /^delete/.test(t) ? '' : e.data); finishInput(global.performance && performance.now ? performance.now() : Date.now()); return;
+    }
     handledBackspace = false;
     var started = global.performance && performance.now ? performance.now() : Date.now();
     overlayMode = 'snap';
+    if (e.cancelable === false && visibleCaret && visibleCaret.end > visibleCaret.start && el.querySelector && el.querySelector('.cw-mk') &&
+        (/^delete/.test(t || '') || /^(insertText|insertReplacementText)$/.test(t || ''))) {
+      pushUndo(/^delete/.test(t) ? 'delete' : 'replace');
+      nativeIntent = { literal: true, data: /^delete/.test(t) ? '' : e.data, started: started,
+        selectionEdit: { start: visibleCaret.start, end: visibleCaret.end } };
+      return;
+    }
+    if ((e.cancelable === false || t === 'insertReplacementText') && visibleCaret && /^(insertText|insertReplacementText)$/.test(t || '') && e.data != null) {
+      pushUndo(visibleCaret.end > visibleCaret.start ? 'replace' : 'type');
+      nativeIntent = { literal: true, data: e.data, started: started, host: el, blockId: focusId, source: blockOf(focusId).source,
+        pair: t === 'insertText' && e.data.length === 1, selectionEdit: { start: visibleCaret.start, end: visibleCaret.end } };
+      return;
+    }
     if (t === 'insertText' && e.data != null) {
       var chars = e.data;
       if (chars.length === 1 && insertText(focusId, chars)) {
         e.preventDefault(); finishInput(started); return;
       }
-      var c = caretSource();
+      var c = visibleCaret;
       pushUndo(chars.length === 1 ? (c && c.end > c.start ? 'replace' : 'type') : 'paste');
-      nativeIntent = { data: chars, started: started };
+      var range = frameReads.selection().range;
+      var inputBlock = blockOf(focusId), whitespaceEdge = c && inputBlock && /[ \t]/.test(inputBlock.source.slice(Math.max(0, c.start - 1), c.start + 1));
+      // Native insertion may inherit the preceding style or discard collapsed
+      // whitespace. Splice the source when the host contains hidden markers.
+      if (c && c.start === c.end && range && (whitespaceEdge || /^[ \t]+$/.test(chars) || range.startContainer.nodeType === 1 || el.querySelector && el.querySelector('.cw-mk, a[data-autolink]') || typingStyles && typingStyles.blockId === focusId && typingStyles.at === c.start)) {
+        e.preventDefault(); replaceVisible(focusId, c.start, c.end, chars, false); if (chars.length === 1) afterInsert(focusId, chars); finishInput(started); return;
+      }
+      nativeIntent = { literal: true, data: chars, started: started, host: el, blockId: focusId, source: inputBlock.source,
+        selectionEdit: c && { start: visibleCaret.start, end: visibleCaret.end } };
       return;
     }
     if (t === 'insertParagraph') {
@@ -2390,13 +4202,13 @@
       // position would take the character in front of the break, not the break.
       var afterTail = cb && bb && cb.start === cb.end && cb.start === bb.source.length && /\n$/.test(bb.source);
       if (cb && ((cb.start === 0 && cb.end === 0) || afterTail)) { e.preventDefault(); backspace(focusId); finishInput(started); }
-      else { pushUndo('delete'); nativeIntent = { data: null, started: started }; }
+      else { pushUndo('delete'); nativeIntent = { literal: true, data: null, started: started }; }
       return;
     }
     if (t === 'deleteContentForward' || t === 'deleteWordForward') {
       var cf = caretSource(), bf = blockOf(focusId);
       if (cf && bf && cf.start === bf.source.length && cf.end === cf.start) { e.preventDefault(); forwardDelete(focusId); finishInput(started); }
-      else { pushUndo('delete'); nativeIntent = { data: null, started: started }; }
+      else { pushUndo('delete'); nativeIntent = { literal: true, data: null, started: started }; }
       return;
     }
     // A rich-text format request — the chord we did not catch, a Touch Bar, an
@@ -2415,7 +4227,7 @@
     if (t === 'historyRedo') { e.preventDefault(); redo(); finishInput(started); return; }
     if (t === 'insertFromPaste' || t === 'insertFromDrop') { e.preventDefault(); return; } // handled by the paste/drop listeners
     if (t && t.indexOf('delete') === 0) {
-      pushUndo('delete'); nativeIntent = { data: null, started: started };
+      pushUndo('delete'); nativeIntent = { literal: true, data: null, started: started };
     }
   }
   function onPaste(e) {
@@ -2430,15 +4242,22 @@
     editor.flush();
     var c = caretSource();
     if (!c) return;
-    pushUndo('paste');
-    applyEdit(focusId, c.start, c.end, text.replace(/\r\n?/g, '\n'));
+    var pasted = replaceVisible(focusId, c.start, c.end, text.replace(/\r\n?/g, '\n'), 'paste');
     var b = blockOf(focusId);
-    if (/\n\s*\n/.test(b.source)) {
-      var pastedId = focusId;
+    var parts = /\n\s*\n/.test(b.source) ? MD().parse(b.source).blocks : [];
+    if (parts.length > 1) {
+      var pastedId = focusId, index = idx(pastedId), wanted = pasted ? pasted.caret : b.source.length;
+      var cursor = 0, partIndex = 0, localCaret = wanted;
+      parts.forEach(function (part, i) {
+        var at = b.source.indexOf(part.source, cursor);
+        if (at <= wanted) { partIndex = i; localCaret = clamp(wanted - at, 0, part.source.length); }
+        cursor = at + part.source.length;
+      });
       focusId = null;
       refreshRendered(b);
       renderAll();
-      focusBlock(pastedId, b.source.length);
+      typingStyles = null;
+      focusBlock(blocks[index + partIndex].id, localCaret);
       requestOverlay('snap');
     }
     finishInput(started);
@@ -2570,9 +4389,38 @@
     }
 
     if (/^(Arrow|Home|End|Page)/.test(e.key)) {
+      if (!composing && !e.isComposing && typeof typingStyles !== 'undefined' && typingStyles) {
+        var moved = caretSource();
+        if (!moved || moved.start !== moved.end || typingStyles.blockId !== focusId || typingStyles.at !== moved.start) typingStyles = null;
+      }
       lastUndoKind = '';
       overlayMode = 'navigate';
       requestOverlay('navigate');
+    }
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mod && !e.altKey && !composing) {
+      var arrowHost = editOf(focusId), arrowEnds = arrowHost && arrowHost.querySelector && arrowHost.querySelector('.cw-mk') && selectionEnds(arrowHost);
+      if (arrowHost && arrowHost.querySelector && arrowHost.querySelector('.cw-mk') && arrowEnds) {
+        var backward = e.key === 'ArrowLeft', current = arrowEnds.focus;
+        var visible = interactionRuns(arrowHost), next = null;
+        visible.forEach(function (n) {
+          if (backward && n.at < current) next = n;
+          if (!backward && !next && n.at + n.len > current) next = n;
+        });
+        if (next) {
+          var relative = clamp(current - next.at, 0, next.len);
+          var want = next.atomic ? next.at + (backward ? 0 : next.len) : next.at + selectionStep(next.node.nodeValue, relative, backward, false);
+          if (!e.shiftKey && arrowEnds.anchor !== current) want = backward ? Math.min(current, arrowEnds.anchor) : Math.max(current, arrowEnds.anchor);
+          e.preventDefault();
+          if (e.shiftKey) {
+            var selection = global.getSelection(), a = sourcePoint(arrowHost, arrowEnds.anchor, true), z = sourcePoint(arrowHost, want, !backward);
+            if (selection.setBaseAndExtent) selection.setBaseAndExtent(a.node, a.offset, z.node, z.offset);
+            else setCaret(focusId, Math.min(arrowEnds.anchor, want), Math.max(arrowEnds.anchor, want));
+            frameReads.invalidateSelection();
+          } else setCaret(focusId, want);
+          requestOverlay('navigate');
+          return;
+        }
+      }
     }
     if (e.shiftKey && /^Arrow(?:Left|Right|Up|Down)$/.test(e.key)) {
       if (!composing && !e.isComposing) extendBlockSelection(e);
@@ -2645,14 +4493,16 @@
     var host = editOf(focusId);
     if (e && e.target && (!host || e.target !== host && !host.contains(e.target))) return;
     if (composing) {
-      if (host && crossHostRange(host)) { retireNativeHost(host); return; }
       var range = frameReads.selection().range;
-      if (host && range && host.contains(range.startContainer) && host.contains(range.endContainer) && compositionState && compositionState.host === host) compositionState.source = host.textContent;
+      if (host && crossHostRange(host) || !host || !range || !host.contains(range.startContainer) || !host.contains(range.endContainer) || !compositionState || compositionState.host !== host) { retireNativeHost(host); return; }
+      compositionState.source = host.textContent;
+      compositionState.accepted = true;
+      compositionState.data = e && e.data != null ? e.data : null;
       return;
     }
     if (handledBackspace && e && e.inputType === 'deleteContentBackward') return;
     handledBackspace = false;
-    var intent = nativeIntent || { data: e && e.data, started: global.performance && performance.now ? performance.now() : Date.now() };
+    var intent = nativeIntent || { data: e && e.data, literal: !!(e && 'inputType' in e), started: global.performance && performance.now ? performance.now() : Date.now() };
     // iOS can emit only input for Backspace at a host boundary. Reuse the
     // structural edit only for unchanged text and a collapsed caret at the start.
     if (!nativeIntent && e && e.inputType === 'deleteContentBackward' && !e.isComposing && host) {
@@ -2672,17 +4522,50 @@
       var before = { start: start, end: start + span.end - span.start };
       if (deleting) before.start = before.end = /Backward$/.test(e.inputType) ? before.end : start;
       var saved = lastNativeCaret, raw = host.textContent;
+      var inputText = e && e.data, nativeAt = after && inputText != null ? after.start - inputText.length : -1;
+      var nativeEnd = nativeAt + (inputText == null ? 0 : inputText.length) - (raw.length - current.source.length);
+      var nativeEdit = after && after.start === after.end && nativeAt >= 0 && nativeEnd >= nativeAt && nativeEnd <= current.source.length &&
+        raw.replace(/\u00a0/g, ' ') === (current.source.slice(0, nativeAt) + inputText + current.source.slice(nativeEnd)).replace(/\u00a0/g, ' ');
+      // An input-only valid splice is also a possible deliberate selection
+      // replacement, even at terminal whitespace or a hidden code fence. The
+      // old caret cannot distinguish it from a browser snap. Only repair a DOM
+      // mutation that the current Range cannot explain; beforeinput records the
+      // authoritative pre-edit range for actual browser snaps.
+      var inputRange = frameReads.selection().range, inputParent = inputRange && inputRange.startContainer.parentElement;
+      var codeTail = saved && nativeAt >= 0 && nativeAt < saved.start ? current.source.slice(nativeAt, saved.start) : '';
+      var codeRelocation = !nativeEdit && saved && saved.blockId === focusId && saved.source === current.source && saved.start === saved.end &&
+        /^[ \t]*`+[ \t]*$/.test(codeTail) && inputParent && inputParent.closest && inputParent.closest('code') &&
+        raw.replace(/\u00a0/g, ' ') === current.source.slice(0, nativeAt) + inputText + codeTail.replace(/[ \t]/g, '') + current.source.slice(saved.end);
+      var observedInsertion = inputText != null && (codeRelocation || raw.slice(span.start, span.start + span.insertedLength).replace(/\u00a0/g, ' ') === inputText);
+      var modelInsertion = !nativeEdit && observedInsertion && saved && saved.blockId === focusId && saved.source === current.source && e && e.inputType === 'insertText' && !e.isComposing && e.data != null;
+      if (nativeEdit) { before = { start: nativeAt, end: nativeEnd }; intent.selectionEdit = before; }
+      if (modelInsertion) before = { start: saved.start, end: saved.end };
+
       if (saved && saved.blockId === focusId && saved.source === current.source && after && after.start === after.end) {
         var length = raw.length - (current.source.length - (saved.end - saved.start));
         var inserted = length >= 0 ? raw.slice(saved.start, saved.start + length) : null;
         if (inserted != null && (e.data == null || e.data === inserted) && after.start === saved.start + length &&
             raw === current.source.slice(0, saved.start) + inserted + current.source.slice(saved.end)) {
           before = { start: saved.start, end: saved.end };
+          intent.selectionEdit = { start: saved.start, end: saved.end }; intent.data = inserted;
         }
       }
-      pushUndo(deleting ? 'delete' : span.end > span.start ? 'replace' : 'type', before);
+      pushUndo(modelInsertion ? saved.end > saved.start ? 'replace' : 'type' : deleting ? 'delete' : span.end > span.start ? 'replace' : 'type', before);
+      // A malformed native mutation can still be repaired at the remembered
+      // boundary. Valid splices follow the live Range above.
+      if (modelInsertion) {
+        host.innerHTML = editingHtml(liveHtml(current), current.source);
+        replaceVisible(focusId, saved.start, saved.end, e.data, false);
+        if (e.data && e.data.length === 1) afterInsert(focusId, e.data);
+        requestOverlay('snap'); finishInput(intent.started); nativeIntent = null; return;
+      }
+
     }
-    syncNativeInput(intent, restored);
+    var selectionApplied = syncNativeInput(intent, restored);
+    if (selectionApplied) {
+      if (intent.data && intent.data.length === 1) afterInsert(focusId, intent.data);
+      else if (activePicker && activePicker.blockId === focusId) updatePicker();
+    }
     requestOverlay('snap');
     finishInput(intent.started);
     nativeIntent = null;
@@ -2695,18 +4578,21 @@
     handledBackspace = false;
     composing = true;
     compositionId = focusId;
-    compositionState = { source: host.textContent, host: host };
+    compositionState = { source: host.textContent, original: host.textContent, html: host.innerHTML, host: host,
+      caret: caretSource(), data: null, accepted: false };
     overlayMode = 'snap';
     pushUndo('composition');
-    nativeIntent = { data: null, started: global.performance && performance.now ? performance.now() : Date.now() };
+    nativeIntent = { literal: true, data: null, selectionEdit: compositionState.caret && { start: compositionState.caret.start, end: compositionState.caret.end },
+      started: global.performance && performance.now ? performance.now() : Date.now() };
   }
-  function finishComposition() {
+  function finishComposition(retiring) {
     // Composition owns the text node completely until this event. Only now may
     // the model and mirror observe it, and normalization is a last-resort pass.
     if (!composing) return;
     frameReads.invalidateSelection();
     var host = focusId && editOf(focusId);
     if (host && compositionId === focusId && compositionState && crossHostRange(host)) {
+      retiring = true;
       var text = textOf(host);
       if (text) text.data = compositionState.source;
       else host.textContent = compositionState.source;
@@ -2716,8 +4602,37 @@
     compositionId = null;
     if (!id || focusId !== id) { nativeIntent = null; compositionState = null; return; }
     frameReads.invalidateSelection();
-    var restoredComposition = restoreSingleTextNode(editOf(focusId));
-    syncNativeInput(nativeIntent, restoredComposition);
+    var saved = compositionState;
+    if (retiring && saved && host) {
+      var checkpoint = textOf(host);
+      if (checkpoint) checkpoint.data = saved.source;
+      else host.textContent = saved.source;
+      if (!saved.accepted && saved.data == null) {
+        host.innerHTML = saved.html;
+        blockOf(id).source = saved.original;
+        if (saved.caret) setCaret(id, saved.caret.start, saved.caret.end);
+      }
+    }
+    if (retiring && saved && !saved.accepted && saved.data == null) {
+      // No accepted update exists. Retire without applying rejected native DOM.
+    } else if (saved && saved.caret && saved.data === '' && host && host.textContent === saved.original) {
+      // Cancellation can end with empty data after the browser restores its DOM.
+      // Preserve both the source and the original selection in that case.
+      setCaret(id, saved.caret.start, saved.caret.end);
+    } else if (saved && saved.caret && (saved.caret.end > saved.caret.start || /cw-mk/.test(saved.html) || typeof typingStyles !== 'undefined' && typingStyles && typingStyles.blockId === id && typingStyles.at === saved.caret.start) && host && (saved.accepted || saved.data != null)) {
+      // IME may delete hidden delimiters in its provisional DOM. Commit against
+      // the original visible selection, once, without disrupting composition.
+      var count = saved.source.length - (saved.original.length - (saved.caret.end - saved.caret.start));
+      var committed = retiring ? saved.source : host.textContent;
+      count = committed.length - (saved.original.length - (saved.caret.end - saved.caret.start));
+      var replacement = !saved.accepted && committed === saved.original && saved.data ? saved.data : count >= 0 ? committed.slice(saved.caret.start, saved.caret.start + count) : '';
+      host.innerHTML = saved.html;
+      blockOf(id).source = saved.original;
+      replaceVisible(id, saved.caret.start, saved.caret.end, replacement, false);
+    } else {
+      var restoredComposition = restoreSingleTextNode(editOf(focusId));
+      syncNativeInput(nativeIntent, restoredComposition);
+    }
     compositionState = null;
     requestOverlay('snap');
     finishInput(nativeIntent && nativeIntent.started || (global.performance && performance.now ? performance.now() : Date.now()));
@@ -2728,8 +4643,12 @@
     if (!composing || e && e.target && compositionState && e.target !== compositionState.host && !compositionState.host.contains(e.target)) return;
     var host = focusId && editOf(focusId);
     frameReads.invalidateSelection();
-    if (host && crossHostRange(host)) retireNativeHost(host);
-    else finishComposition();
+    // A source caret exists only when both endpoints belong to this host.
+    if (!host || crossHostRange(host) || !caretSource()) retireNativeHost(host);
+    else {
+      if (e && e.data != null) compositionState.data = e.data;
+      finishComposition();
+    }
   }
   function onFocusOut(e) {
     if (!composing || !focusId || e.target !== editOf(focusId)) return;
@@ -2740,14 +4659,20 @@
   function onDragStart(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
     if (subtitle && subtitle.classList && subtitle.classList.contains('cw-subtitle')) return;
-    var a = selAnchor || anchorFromSelection();
     var sel = global.getSelection();
-    if (!a || !sel || sel.isCollapsed) return;
+    if (!sel || sel.isCollapsed) return;
     var where = caretSource();
+    var a = selAnchor || anchorFromSelection() || (where && { blockId: focusId });
+    if (!a) return;
     dragFrom = (focusId && where && where.end > where.start)
       ? { blockId: focusId, start: where.start, end: where.end } : null;
     try {
-      e.dataTransfer.setData('text/plain', sel.toString());
+      var text = where && focusId ? interactionRuns(editOf(focusId)).map(function (run) {
+        var start = Math.max(where.start, run.at), end = Math.min(where.end, run.at + run.len);
+        return end > start ? run.node.nodeValue.slice(start - run.at, end - run.at) : '';
+      }).join('') : a.quote;
+      if (!a.quote) a.quote = text;
+      e.dataTransfer.setData('text/plain', text);
       e.dataTransfer.setData('application/x-castor-anchor', JSON.stringify(a));
       e.dataTransfer.effectAllowed = 'copyMove';
     } catch (err) { /* older browsers */ }
@@ -2791,6 +4716,12 @@
     var nb = { id: mintId(), type: classify(text), source: text.replace(/\r\n?/g, '\n') };
     var at = id ? idx(id) + (before ? 0 : 1) : blocks.length;
     blocks.splice(at, 0, nb);
+    if (/[\\`*_\[\]()~<>#|=^%&]/.test(nb.source)) {
+      var droppedText = nb.source, dropSurface = document.createElement('div');
+      nb.source = ''; nb.type = 'p';
+      var dropped = replaceVisible(nb.id, 0, 0, droppedText, 'project', dropSurface);
+      nb.source = dropped.source; nb.type = classify(nb.source);
+    }
     var moved = dragFrom && !e.altKey ? dragFrom : null;
     dragFrom = null;
     if (moved && moved.blockId !== nb.id) {
@@ -2799,7 +4730,12 @@
         var s = clamp(moved.start, 0, src.source.length);
         var en = clamp(moved.end, 0, src.source.length);
         if (en > s) {
-          src.source = src.source.slice(0, s) + src.source.slice(en);
+          var surface = editOf(src.id) || document.createElement('div');
+          if (!editOf(src.id)) {
+            surface.innerHTML = editingHtml(liveHtml(src), src.source);
+            if (surface.textContent !== src.source) { surface.textContent = ''; surface.appendChild(document.createTextNode(src.source)); }
+          }
+          src.source = replaceVisible(src.id, s, en, '', 'project', surface).source;
           if (!src.source.trim()) {
             var gone = idx(src.id);
             if (gone >= 0 && blocks.length > 1) blocks.splice(gone, 1);
@@ -2964,40 +4900,22 @@
       var d = WRAPS[id], n = d.length, src = b.source;
 
       if (c.end > c.start) {
-        var s = c.start, e = c.end;
-        while (s < e && /\s/.test(src.charAt(s))) s++;
-        while (e > s && /\s/.test(src.charAt(e - 1))) e--;
-        if (e > s) {
-          var sel = src.slice(s, e);
-          pushUndo('command:' + id);
-          if (src.slice(Math.max(0, s - n), s) === d && src.slice(e, e + n) === d) {
-            applyEdit(focusId, e, e + n, '');                  // marked around it: take it off
-            applyEdit(focusId, s - n, s, '', s - n);
-            setCaret(focusId, s - n, e - n);
-          } else if (sel.length >= n * 2 && sel.slice(0, n) === d && sel.slice(-n) === d) {
-            applyEdit(focusId, s, e, sel.slice(n, sel.length - n), s);
-            setCaret(focusId, s, e - n * 2);
-          } else {
-            applyEdit(focusId, s, e, d + sel + d, s + n + sel.length);
-            setCaret(focusId, s + n, s + n + sel.length);      // the words stay selected
-          }
-          return commandResult(id);
-        }
+        replaceVisible(focusId, c.start, c.end, { kind: 'style', style: id }, 'command:' + id);
+        return commandResult(id);
       }
-
-      var pair = emptyPairAt(src, at, d) ? { open: at - n, close: at } : enclosingPair(src, at, d);
-      if (pair && at === pair.close && pair.close > pair.open + n) {
-        setCaret(focusId, pair.close + n);                     // the end-of-run skip, not a toggle
-        return commandResult(id);                              // nothing changed: nothing to undo
+      var inherited = [], host = editOf(focusId);
+      var node = sourceNodes(host).find(function (n) { return !hiddenSource(n.node) && n.at <= at && n.at + n.len >= at; });
+      for (var p = node && node.node.parentElement; p && p !== host; p = p.parentElement) {
+        var style = { STRONG: 'bold', EM: 'italic', MARK: 'highlight', DEL: 'strike', CODE: 'code', SUP: 'sup', SUB: 'sub', SPAN: 'span' }[p.tagName];
+        if (style) inherited.push(style);
       }
-      pushUndo('command:' + id);
-      if (pair) {
-        applyEdit(focusId, pair.close, pair.close + n, '');
-        applyEdit(focusId, pair.open, pair.open + n, '', Math.max(pair.open, at - n));
-      } else {
-        applyEdit(focusId, at, at, d + d, at + n);
-        for (var pi = 0; pi < n; pi++) pending.push({ blockId: focusId, index: at + n + pi, ch: d.charAt(pi) });
-      }
+      var styles = typingStyles && typingStyles.blockId === focusId && typingStyles.at === at ? typingStyles.styles.slice() : inherited;
+      var has = styles.indexOf(id) >= 0;
+      styles = styles.filter(function (x) { return x !== id; });
+      if (!has) styles.push(id);
+      var run = typingStyles && typingStyles.blockId === focusId && typingStyles.at === at ? typingStyles.run : null;
+      typingStyles = { blockId: focusId, at: at, styles: styles, run: run };
+      setCaret(focusId, c.start, c.end);
       return commandResult(id);
     }
 
@@ -3038,12 +4956,7 @@
     }
 
     if (id === 'link') {
-      pushUndo('command:link');
-      var words = b.source.slice(c.start, c.end);
-      applyEdit(focusId, c.start, c.end, '[[' + words + ']]', c.start + 2 + words.length);
-      pending.push({ blockId: focusId, index: c.start + 2 + words.length, ch: ']' });
-      openPicker('wiki', focusId, c.start, 2);
-      if (activePicker && words) activePicker.handle.update(words, caretRect());
+      openPicker('wiki', focusId, c.start, 0, true, c.end);
       return commandResult(id);
     }
     return null;
@@ -3126,7 +5039,7 @@
         var host = editOf(focusId), focused = host && document.activeElement === host;
         if (host && host.blur) host.blur();
         finishComposition();
-        if (focused && host.focus) host.focus();
+        if (focused && host.focus) host.focus({ preventScroll: true });
       }
       if (focusId) {
         frameReads.invalidateSelection();
@@ -3149,6 +5062,7 @@
       injectBase();
       finishComposition();
       if (reparseTimer) { clearTimeout(reparseTimer); reparseTimer = null; }
+      cancelCaretReveal();
       focusId = null;
       composing = false;
       compositionId = null;
@@ -3156,7 +5070,7 @@
       nativeIntent = null;
       handledBackspace = false;
       pointerSelecting = pointerStartedInPage = pointerCrossed = false; pointerAnchor = null;
-      pending = [];
+      pending = []; literalRun = null;
       // Like CodeMirror 5's Doc history (MIT), undo belongs to this document.
       undoStack.length = redoStack.length = 0;
       lastUndoAt = 0; lastUndoKind = ''; lastUndoBlock = null; lastUndoCaret = lastNativeCaret = null; keyboardCaret = null;
@@ -3193,7 +5107,8 @@
         page.addEventListener('keydown', own(onKeyDown));
         page.addEventListener('keyup', function (e) { if (e.key === 'Backspace') handledBackspace = false; });
         page.addEventListener('paste', own(onPaste));
-        page.addEventListener('copy', onCopy);
+        if (isArticle) document.addEventListener('copy', onCopy);
+        else page.addEventListener('copy', onCopy);
         page.addEventListener('dragstart', own(onDragStart));
         page.addEventListener('dragover', own(onDragOver));
         page.addEventListener('dragleave', own(clearDrop));
@@ -3204,7 +5119,7 @@
         page.addEventListener('focusout', own(onFocusOut));
         page.addEventListener('touchstart', own(onTouchStart), { passive: true });
         page.addEventListener('touchmove', own(onTouchMove), { passive: true });
-        page.addEventListener('touchend', own(onTouchEnd), { passive: true });
+        page.addEventListener('touchend', own(onTouchEnd), { passive: false });
         document.addEventListener('pointerdown', function (e) { if (e.pointerType) touchInput = e.pointerType === 'touch'; }, true);
         document.addEventListener('selectionchange', onSelectionChange);
         if (isArticle) document.addEventListener('keydown', onGlobalKey);   // typing while reading starts the article, never a field
@@ -3214,7 +5129,11 @@
         document.addEventListener('mouseup', onPointerUp, true);
         // A writer's own scroll wins: the typewriter line yields until the
         // caret moves again (setCaret clears the flag).
-        global.addEventListener('scroll', function () { hideSelMenu(); requestOverlay('layout'); }, true);
+        if (global.visualViewport) global.visualViewport.addEventListener('resize', function () {
+          if (revealPending) requestCaretReveal(false);
+        });
+        global.addEventListener('wheel', cancelCaretReveal, { passive: true, capture: true });
+        global.addEventListener('scroll', function () { undoFocusScroll(); hideSelMenu(); requestOverlay('layout'); }, true);
         global.addEventListener('resize', function () { frameReads.invalidateStyles(); hideSelMenu(); requestOverlay('layout'); });
         if (Castor.bus && Castor.bus.on) {
           Castor.bus.on('layout', followLayout);
@@ -3439,6 +5358,7 @@
     },
     world: world,
 
+    pairing: shouldAutoClose,
     _internals: { renderInline: renderInline, classify: classify, markerLen: markerLen }
   };
 

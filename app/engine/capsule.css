@@ -1,39 +1,34 @@
-/* K1-A Capsule (design/DESIGN.md). Loaded after the world, so it arranges what the
-   engine and the world already draw: the page alone, one row on top, one capsule at
-   the bottom that calls the panels, and panels as cards in the margins (computer)
-   or one sheet from the bottom (iPad upright, phone). The panel words stay in
-   #topbar in the DOM, so every module that finds them there keeps working; only
-   their place on screen moves. */
-
 #app {
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
   --surface: var(--surface-raised, #FFFDF8);
   --shadow-raised: 0 1px 2px rgba(27, 25, 21, .06), 0 4px 14px rgba(27, 25, 21, .06);
   --shadow-overlay: 0 2px 6px rgba(27, 25, 21, .06), 0 18px 44px rgba(27, 25, 21, .12);
-  --capsule-h: 48px;
-  --capsule-gap: 16px;
-  --status-h: 40px;
+  --dock-h: 48px;
+  --status-h: var(--dock-h);
+  --format-h: 0px !important;
   --bar-h: 56px;
   --tabs-h: 0px !important;
   --foot-h: 0px;
-  --footline-h: 0px;
+  --footline-h: var(--dock-h);
   --page-pad-top: var(--s8);
-  /* the last line can always scroll clear of the capsule */
-  --page-pad-bot: calc(var(--capsule-h) + var(--capsule-gap) + var(--s7) + var(--status-h));
+  --page-pad-bot: var(--s7);
 }
 :root[data-theme="dark"] #app,
 :root[data-resolved="dark"] #app {
   --shadow-raised: 0 1px 2px #000;
   --shadow-overlay: 0 18px 44px #000;
 }
-#app .page-scroll { scroll-padding-bottom: calc(var(--capsule-h) + var(--capsule-gap) + var(--s5)); }
+#app .page-scroll { scroll-padding-bottom: var(--s5); }
 
 /* ---- the top row: mark, open articles, Share and three tools -------------- */
 #app #topbar.mast {
-  align-items: center;
+  z-index: 30; align-items: center;
   padding: 0 var(--s4) 0 var(--s5);
   gap: var(--s4);
 }
+/* The menu's parent must clear touch sheets, including their closing animation. */
+#app #topbar.mast:has(#more-sheet:not([hidden])) { z-index: 80; }
+#app[data-mode="tablet"] #footline.footline { z-index: 70; }
 #app #topbar.mast::after { content: none; }
 #app #topbar.mast .brand { margin-right: 0; flex: 0 0 auto; }
 #app #topbar.mast .bar-tools { margin: 0 0 0 auto; align-self: center; display: flex; align-items: center; gap: var(--s1); height: 32px; }
@@ -66,9 +61,8 @@
   grid-area: auto; flex: 1 1 auto; min-width: 0; align-self: center;
   display: flex; align-items: center; gap: var(--s1);
   height: 40px; margin: 0; padding: 0; border: 0;
-  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
-          mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+  overflow: hidden;
+  -webkit-mask-image: none; mask-image: none;
 }
 #app #topbar.mast #castor-tabs::-webkit-scrollbar { display: none; }
 #app #castor-tabs .castor-tab-item {
@@ -77,7 +71,8 @@
   color: var(--ink-2); background: transparent;
 }
 #app #castor-tabs .castor-tab-item:hover { background: color-mix(in srgb, var(--wash) 60%, transparent); }
-#app #castor-tabs .castor-tab-item:has(.castor-tab[aria-selected="true"]) { background: var(--wash); color: var(--ink); }
+#app #castor-tabs .castor-tab-item:has(.castor-tab[aria-selected="true"]) { background: var(--wash); color: var(--ink); max-width: none; }
+#app #castor-tabs .castor-tab-item[hidden], #app #castor-tabs .castor-tabs-more[hidden] { display: none; }
 #app #castor-tabs .castor-tab {
   flex: 0 1 auto; max-width: none; overflow: hidden; opacity: 1;
   display: flex; align-items: center; min-width: 0; height: 32px; margin: 0; padding: 0 0 0 var(--s3);
@@ -98,97 +93,153 @@
   -webkit-mask: var(--icon-x) center / contain no-repeat; mask: var(--icon-x) center / contain no-repeat;
 }
 #app #castor-tabs .castor-tab-close:hover { background: var(--wash); color: var(--ink); }
-#app #castor-tabs :is(.castor-tab-plus, .castor-tab-chooser) { flex: 0 0 auto; }
+#app #castor-tabs :is(.castor-tab-new, .castor-tabs-more, .castor-tab-chooser) { flex: 0 0 auto; }
+#app #castor-tabs .castor-tabs-more {
+  min-height: 32px; padding: 0 8px; margin: 0; border: 0; border-radius: 6px;
+  background: none; color: var(--ink-2); font: 400 13px/1 var(--font-ui); white-space: nowrap;
+}
+#app #castor-tabs .castor-tabs-more:hover { background: var(--wash); color: var(--ink); }
 #app .article-knot, #app .folded-article, #app .castor-tabs-fold, #install-hint { display: none !important; }
 
-/* ---- the capsule ------------------------------------------------------------ */
-#app #topbar.mast .nav.topwords {
-  position: fixed; z-index: 30; left: 50%; bottom: calc(var(--capsule-gap) + var(--capsule-lift, 0px)); transform: translateX(-50%);
-  display: flex; align-items: center; gap: 2px; box-sizing: border-box;
-  height: var(--capsule-h); margin: 0; padding: 0 6px;
-  border: 1px solid var(--rule); border-radius: 999px; background: var(--surface);
-  box-shadow: var(--shadow-overlay);
-  font: 400 14px/1 var(--font-ui); letter-spacing: 0;
-  transition: opacity 260ms cubic-bezier(.2, .8, .2, 1);
-}
-#app #topbar.mast .nav.topwords .word {
-  display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box;
-  min-width: 0; min-height: 36px; margin: 0; padding: 0 10px;
-  border-radius: 999px; color: var(--ink-2); text-decoration: none; white-space: nowrap;
-  font: inherit; letter-spacing: 0;
-}
-/* The capsule styles the words but never decides which are shown: the preset tiers (a walkthrough
-   may still reveal one), the More word outside compact mode and [hidden] keep their say. */
-#app[data-preset="minimal"] #topbar.mast .nav.topwords [data-tier]:not(.walkthrough-reveal),
-#app[data-preset="writing"] #topbar.mast .nav.topwords [data-tier="advanced"]:not(.walkthrough-reveal),
-#app #topbar.mast:not([data-compact]) .nav.topwords #more-word,
-#app #topbar.mast .nav.topwords [hidden] { display: none; }
-/* Minimal shows no panel word, so there is no group for a separator to stand between. */
-#app[data-preset="minimal"] #topbar.mast .nav.topwords .capsule-rule { display: none; }
-#app #topbar.mast .nav.topwords .word::before {
-  content: ""; width: 18px; height: 18px; flex: none; background: currentColor;
-  -webkit-mask: var(--icon, none) center / contain no-repeat; mask: var(--icon, none) center / contain no-repeat;
-}
-#app #topbar.mast .nav.topwords .word:hover { background: var(--wash); color: var(--ink); }
-#app #topbar.mast .nav.topwords .word[aria-pressed="true"] { background: var(--wash); color: var(--ink); text-decoration: none; }
-/* The label is trimmed to its capitals, so the box centre is the ink centre. */
-#app #topbar.mast .nav.topwords .word > .word-label { display: block; text-box: trim-both cap alphabetic; }
-#app #topbar.mast .nav.topwords .shortcut-hint { display: none; }
-#app #topbar.mast .nav.topwords [data-panel="outline"]   { --icon: var(--icon-outline); order: 1; }
-#app #topbar.mast .nav.topwords [data-panel="comments"]  { --icon: var(--icon-comment); order: 2; }
-#app #topbar.mast .nav.topwords [data-panel="changes"]   { --icon: var(--icon-changes); order: 3; }
-#app #topbar.mast .nav.topwords [data-panel="files"]     { --icon: var(--icon-files); order: 5; }
-#app #topbar.mast .nav.topwords [data-panel="drafts"]    { --icon: var(--icon-drafts); order: 6; }
-#app #topbar.mast .nav.topwords [data-panel="workspace"] { --icon: var(--icon-workspace); order: 7; }
-#app #topbar.mast .nav.topwords [data-panel="links"]     { --icon: var(--icon-links); order: 8; }
-#app #topbar.mast .nav.topwords [data-panel="for-you"]   { --icon: var(--icon-foryou); order: 9; }
-#app #topbar.mast .nav.topwords #more-word               { --icon: var(--icon-more); order: 10; }
-#app #topbar.mast .nav.topwords .changes-separated { margin-inline-start: 0; }
-/* The secondary panels are icons only; their word stays for screen readers and the tooltip. */
-#app #topbar.mast .nav.topwords :is([data-panel="files"], [data-panel="drafts"], [data-panel="workspace"], [data-panel="links"], [data-panel="for-you"], #more-word) {
-  width: 36px; padding: 0; justify-content: center; font-size: 0; gap: 0;
-}
-#app #topbar.mast .nav.topwords :is([data-panel="files"], [data-panel="drafts"], [data-panel="workspace"], [data-panel="links"], [data-panel="for-you"], #more-word) .word-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-#app #topbar.mast .nav.topwords #more-word :is(.more-label, .more-icon, .more-count) { display: none; }
-#app #topbar.mast .nav.topwords .capsule-rule { order: 4; width: 1px; height: 20px; margin: 0 4px; background: var(--rule); }
-#app #topbar.mast .nav.topwords .capsule-rule.end { order: 11; }
-#app #topbar.mast .nav.topwords .capsule-publish {
-  order: 12; min-height: 36px; padding: 0 var(--s4); margin-left: 2px;
-  background: var(--ink); color: var(--paper); font-weight: 550;
-}
-#app #topbar.mast .nav.topwords .capsule-publish::before { content: none; }
-#app #topbar.mast .nav.topwords .capsule-publish:hover { background: var(--ink); color: var(--paper); opacity: .9; }
-#app #topbar.mast .nav.topwords .count { font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
-/* Typing dims the capsule; the pointer or a pause brings it back (capsule.js). */
-#app[data-capsule="quiet"] #topbar.mast .nav.topwords { opacity: .3; }
-#app[data-capsule="quiet"] #topbar.mast .nav.topwords:hover { opacity: 1; }
-/* The capsule leaves while a sheet, the Changes screen or focus has the room. */
-#app:is([data-mode="tablet"], [data-mode="phone"]):is([data-left-open="1"], [data-right-open="1"]) #topbar.mast .nav.topwords,
-#app[data-focus="on"] #topbar.mast .nav.topwords { opacity: 0; pointer-events: none; }
-@media (prefers-reduced-motion: reduce) { #topbar.mast .nav.topwords { transition: none; } }
-
-/* The More menu (phone) rises above the capsule. */
-#app #topbar.mast #more-sheet {
-  position: fixed; z-index: 31; left: 50%; transform: translateX(-50%); top: auto;
-  bottom: calc(var(--capsule-gap) + var(--capsule-lift, 0px) + var(--capsule-h) + var(--s2));
-  width: min(320px, calc(100vw - 2 * var(--s4))); padding: var(--s2);
-  border: 1px solid var(--rule); border-radius: var(--radius-pane, 12px); background: var(--surface);
-  box-shadow: var(--shadow-overlay);
-}
-
-/* ---- the status corners ------------------------------------------------------ */
+/* The dock is the app grid's last row. The article ends at its top edge. */
 #app #footline.footline {
-  position: fixed; z-index: 20; left: 0; right: 0; bottom: 0; height: var(--status-h);
-  grid-template-columns: auto 1fr; padding: 0 var(--s5);
-  background: linear-gradient(to bottom, color-mix(in srgb, var(--paper) 0%, transparent), var(--paper) 45%);
-  pointer-events: none; overflow: visible;
+  position: relative; grid-area: footline; z-index: 30;
+  display: flex; align-items: center; justify-content: space-between; gap: 24px;
+  width: 100%; height: 100%; min-width: 0; box-sizing: border-box;
+  padding: 0 16px; border-top: 1px solid var(--rule); border-radius: 0;
+  background: var(--paper); box-shadow: none; overflow: visible;
 }
 #app #footline.footline::before { content: none; }
-#app #footline.footline > * { pointer-events: auto; }
-#app #footline :is(.foot-by, .sig) { display: none; }
-#app #footline .foot-meta { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--s4); width: 100%; font: 400 13px/1 var(--font-ui); color: var(--ink-2); }
-#app #footline .descant-live-marker.in-foot { margin-left: auto; }
-#app #footline .foot-meta > :is(.desktop-history) { order: -1; }
+#app #footline .foot-meta {
+  display: flex; align-items: center; justify-content: flex-end; flex: 0 1 auto;
+  gap: 16px; min-width: 0; margin-left: auto; order: 2;
+  font: 400 13px/1 var(--font-ui); color: var(--ink-2);
+}
+#app .topwords {
+  position: static; display: flex; align-items: center; flex: 0 0 auto;
+  gap: 8px; height: 100%; margin: 0; padding: 0; transform: none;
+  border: 0; border-radius: 0; background: none; box-shadow: none;
+  font: 400 14px/1 var(--font-ui); letter-spacing: 0;
+}
+#app :is(.topwords, #more-sheet) .word, #app .capsule-publish {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  gap: 6px; height: 36px; min-height: 36px; min-width: 0; box-sizing: border-box;
+  margin: 0; padding: 0 8px; border: 0; border-radius: 6px;
+  background: none; color: var(--ink-2); white-space: nowrap;
+  font: 400 14px/1 var(--font-ui); letter-spacing: 0; text-decoration: none;
+}
+#app :is(.topwords, #more-sheet) .word::before { content: none; }
+#app :is(.topwords, #more-sheet) .word:hover,
+#app :is(.topwords, #more-sheet) .word[aria-pressed="true"] { color: var(--ink); background: var(--wash); }
+#app :is(.topwords, #more-sheet) .word::after { content: none; }
+#app :is(.topwords, #more-sheet) .word-label,
+#app .capsule-publish .word-label { display: block; text-box: trim-both cap alphabetic; }
+/* Optical ink centres differ from trimmed line boxes, especially the g in
+   Changes. Keep these corrections inside the dock so phone chrome is unchanged. */
+#app #footline .topwords .word-label { translate: 0 1.25px; }
+#app #footline .topwords [data-panel="changes"] .word-label { translate: 0 -.5px; }
+#app #footline #more-word .word-label { translate: 0 .5px; }
+#app #footline .save-signal-label { translate: 0 .333px; }
+/* WebKit's system font raster has a different full-glyph centre, including
+   descenders. Its native body-font support also covers iPad and macOS. */
+@supports (font: -apple-system-body) {
+  #app #footline .topwords .word-label { translate: 0 .5px; }
+  #app #footline .topwords [data-panel="changes"] .word-label { translate: 0 -.5px; }
+  #app #footline #more-word .word-label { translate: 0 .25px; }
+}
+#app .chrome-icon {
+  display: block; width: 18px; height: 18px; flex: none; background: currentColor;
+  mask: var(--icon, var(--icon-more)) center / contain no-repeat;
+  -webkit-mask: var(--icon, var(--icon-more)) center / contain no-repeat;
+}
+#app [data-panel="outline"] { --icon: var(--icon-outline); }
+#app [data-panel="comments"] { --icon: var(--icon-comment); }
+#app [data-panel="changes"] { --icon: var(--icon-changes); }
+#app [data-panel="files"] { --icon: var(--icon-files); }
+#app [data-panel="drafts"] { --icon: var(--icon-drafts); }
+#app [data-panel="workspace"] { --icon: var(--icon-workspace); }
+#app [data-panel="links"] { --icon: var(--icon-links); }
+#app [data-panel="for-you"] { --icon: var(--icon-foryou); }
+#app .topwords [data-panel="outline"] { order: 1; }
+#app .topwords [data-panel="comments"] { order: 2; }
+#app .topwords [data-panel="changes"] { order: 3; }
+#app .topwords #more-word { order: 4; --icon: var(--icon-more); }
+#app #more-word :is(.more-icon, .more-count), #app .topwords .shortcut-hint, #app #more-sheet .shortcut-hint { display: none; }
+#app .topwords .changes-separated { margin-left: 0; }
+#app :is(.topwords, #more-sheet) .count { font: 400 12px/1 var(--font-ui); font-variant-numeric: tabular-nums; text-box: trim-both cap alphabetic; }
+#app .capsule-publish, #app #more-sheet .capsule-publish {
+  background: var(--ink); color: var(--paper); padding: 0 16px; order: 4; font-weight: 550;
+}
+#app .capsule-publish::before { content: none; }
+#app #castor-save-slot { display: flex; align-items: center; }
+#app #castor-save-slot { order: 1; }
+#app #castor-words { order: 2; white-space: nowrap; text-box: trim-both cap alphabetic; }
+#app #castor-session { display: none; }
+#app :is(#castor-save, .descant-live-marker) {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  position: static; margin: 0; padding: 0; min-height: 36px; max-width: none;
+  font: 400 13px/1 var(--font-ui); color: var(--ink-2); background: none;
+  text-box: trim-both cap alphabetic; white-space: nowrap;
+}
+#app #castor-save .save-signal { position: static; width: 18px; height: 18px; flex: 0 0 18px; }
+#app .save-signal-label { text-box: trim-both cap alphabetic; }
+#app .descant-live-marker { order: 3; }
+#app .descant-live-marker::before { content: none; }
+#app .descant-live-marker .live-short { display: none; }
+#app .descant-live-marker .live-long { display: block; text-box: trim-both cap alphabetic; }
+#app #phone-save-slot { display: none; }
+
+/* The same disclosure opens upward on a dock and as a sheet on the phone. */
+#app #topbar.mast #more-sheet {
+  position: fixed; z-index: 80; left: 16px; right: auto; top: auto;
+  bottom: calc(var(--dock-h) + 8px); transform: none;
+  display: flex; flex-direction: column; align-items: stretch; gap: 0;
+  box-sizing: border-box; width: 256px; max-height: calc(100% - 128px); overflow-y: auto;
+  padding: 8px; border: 1px solid var(--rule); border-radius: 12px;
+  background: var(--surface); box-shadow: var(--shadow-overlay);
+}
+#app #topbar.mast #more-sheet .word { justify-content: flex-start; min-height: 44px; height: 44px; padding: 0 12px; gap: 8px; width: 100%; }
+#app #more-sheet h2 { font: 600 17px/1.2 var(--font-ui-heading); margin: 8px 12px; color: var(--ink); }
+#app #more-sheet :is(#menu-publish, #menu-articles) { display: none; }
+#app #more-sheet .menu-tool { display: none; }
+#app #more-sheet #castor-shortcuts { order: 10; }
+#app #more-sheet .foot-by {
+  order: 99; display: flex; align-items: baseline; flex: none; gap: 0;
+  min-height: 44px; box-sizing: border-box; padding: 14px 12px 8px; margin-top: 8px;
+  border-top: 1px solid var(--rule); color: var(--ink-2); text-decoration: none;
+  font: 400 13px/1 var(--font-ui); white-space: pre;
+}
+#app #more-sheet .foot-castor { margin-left: 0; color: inherit; }
+#app #more-sheet .foot-ast { font: inherit; font-variation-settings: inherit; letter-spacing: inherit; color: inherit; transform: none; transition: none; }
+#app #more-sheet .foot-by:hover { color: var(--ink); }
+#app #more-sheet [data-icon="share"] { --icon: var(--icon-share); }
+#app #more-sheet [data-icon="article"] { --icon: var(--icon-files); }
+#app #more-sheet [data-icon="search"] { --icon: var(--icon-search); }
+#app #more-sheet [data-icon="theme"] { --icon: var(--icon-theme); }
+#app #more-sheet [data-icon="settings"] { --icon: var(--icon-settings); }
+#app #more-sheet [data-icon="shortcuts"] { --icon: var(--icon-keyboard); }
+#app #more-sheet [hidden], #app .topwords [hidden], #app .capsule-publish[hidden], #app #topbar.mast #more-sheet[hidden] { display: none; }
+#app[data-preset="minimal"] .topwords [data-tier],
+#app[data-preset="writing"] .topwords [data-tier="advanced"],
+#app[data-preset="minimal"] #more-sheet [data-tier],
+#app[data-preset="writing"] #more-sheet [data-tier="advanced"] { display: none; }
+#app[data-mode="tablet"] { --dock-h: 52px; }
+#app[data-mode="tablet"] #footline { gap: 8px; padding-inline: 8px; }
+#app[data-mode="tablet"] #footline .foot-meta { gap: 8px; }
+#app[data-mode="tablet"] .topwords { gap: 4px; }
+#app[data-mode="tablet"] #footline .topwords .word { min-height: 44px; height: 44px; padding-inline: 6px; font-size: 13px; }
+#app[data-mode="tablet"] #castor-words { font-size: 12px; }
+@media (any-pointer: coarse) {
+  #app #topbar.mast .bar-tools { height: 44px; }
+  #app #topbar.mast :is(.find-lens, .theme-toggle, .settings-toggle) {
+    width: 44px; height: 44px; min-width: 44px; min-height: 44px;
+  }
+  #app #topbar.mast .descant-share { min-width: 44px; min-height: 44px; }
+  #app #footline .topwords .word { min-width: 44px; min-height: 44px; height: 44px; }
+  #app #topbar.mast #castor-tabs { height: 44px; }
+  #app #castor-tabs :is(.castor-tab-item, .castor-tab, .castor-tab-new, .castor-tabs-more) { min-width: 44px; min-height: 44px; height: 44px; }
+  #app #castor-tabs .castor-tab-close { width: 44px; height: 44px; }
+}
 
 /* ---- margin cards (computer) ------------------------------------------------- */
 #app[data-mode="desktop"] {
@@ -232,7 +283,7 @@
   #app[data-mode="tablet"] { grid-template-columns: 0 minmax(0, 1fr) 0; }
   #app[data-mode="tablet"] .page-column { --page-shift: 0px; --page-room-r: 0px; }
   #app[data-mode="tablet"] #dock-left, #app[data-mode="tablet"] #dock-right {
-    grid-area: auto; position: absolute; left: 0; right: 0; bottom: 0; top: auto; z-index: 60;
+    grid-area: auto; position: absolute; left: 0; right: 0; bottom: var(--dock-h); top: auto; z-index: 60;
     height: min(62%, 44rem); border: 0; border-top: 1px solid var(--rule);
     transform: translateY(calc(100% + 8px));
     transition: transform var(--dur, 220ms) var(--ease, cubic-bezier(.2, .8, .2, 1));
@@ -265,12 +316,120 @@
   --icon-x: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6.5 6.5l11 11M17.5 6.5l-11 11'/%3E%3C/svg%3E");
 }
 
-/* ---- phone: the capsule is a floating tab bar, icon over word ------------------ */
-#app[data-mode="phone"] #topbar.mast .nav.topwords {
-  left: var(--s4); right: var(--s4); transform: none; justify-content: space-around;
-  height: 60px; padding: 0 var(--s1); border-radius: 22px;
+/* Phone: mark, save, Comments and Menu in one 52px row. */
+#app[data-mode="phone"] { --bar-h: 52px; --footline-h: 0px; --dock-h: 0px; --page-pad-bot: 32px; }
+#app[data-mode="phone"] #footline { display: none; }
+#app[data-mode="phone"] #topbar.mast { height: 52px; gap: 8px; padding: 0 8px; justify-content: space-between; }
+#app[data-mode="phone"] #topbar.mast :is(#castor-tabs, .bar-tools, .folded-article, .castor-tabs-fold, .descant-share) { display: none !important; }
+#app[data-mode="phone"] #topbar.mast .brand { width: 44px; height: 44px; min-width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; }
+#app[data-mode="phone"] #topbar.mast .brand-name { display: flex; align-items: center; font-size: 0; line-height: 1; }
+#app[data-mode="phone"] #topbar.mast .brand-name .star { display: none; }
+#app[data-mode="phone"] #topbar.mast .descant-mark { display: block; width: 36px; height: 30px; margin: 0; vertical-align: initial; }
+#app[data-mode="phone"] #phone-save-slot { display: flex; align-items: center; margin-right: auto; }
+#app[data-mode="phone"] #castor-save { min-height: 44px; padding: 0 4px; }
+#app[data-mode="phone"] #castor-save .save-signal-label { max-width: 64px; white-space: normal; line-height: 1.15; }
+#app[data-mode="phone"] #topbar.mast .topwords { display: flex; align-items: center; position: static; gap: 8px; height: 52px; }
+#app[data-mode="phone"] #topbar.mast .topwords .word { min-height: 44px; height: 44px; padding: 0 8px; }
+#app[data-mode="phone"] #topbar.mast .topwords [data-panel="comments"] { display: inline-flex; }
+#app[data-mode="phone"] #topbar.mast #more-sheet {
+  top: 60px; bottom: 0; left: 0; right: 0; width: 100%; max-height: none;
+  border: 0; border-top: 1px solid var(--rule); border-radius: 16px 16px 0 0;
+  padding: 12px 16px max(16px, env(safe-area-inset-bottom));
 }
-#app[data-mode="phone"] #topbar.mast .nav.topwords .word { flex-direction: column; justify-content: center; gap: 3px; min-height: 52px; padding: 0 6px; font-size: 11px; border-radius: 14px; }
-#app[data-mode="phone"] #topbar.mast .nav.topwords .capsule-rule { display: none; }
-#app[data-mode="phone"] #topbar.mast .nav.topwords .capsule-publish { min-height: 40px; padding: 0 var(--s3); font-size: 13px; }
-#app[data-mode="phone"] { --capsule-h: 60px; }
+#app[data-mode="phone"] #more-sheet :is(#menu-publish, #menu-articles) { display: block; }
+#app[data-mode="phone"] #more-sheet .menu-tool { display: inline-flex; }
+#app[data-mode="phone"] #more-sheet [data-tier] { display: inline-flex; }
+#app[data-mode="phone"] #more-sheet #menu-publish { order: -1; padding-bottom: 12px; margin-bottom: 8px; border-bottom: 1px solid var(--rule); }
+#app[data-mode="phone"] #more-sheet #menu-publish .descant-live-marker { display: flex; width: 100%; justify-content: flex-start; padding: 0 12px; min-height: 44px; box-sizing: border-box; }
+#app[data-mode="phone"] #more-sheet #menu-publish .capsule-publish { width: auto; margin: 4px 12px; justify-content: center; }
+#app[data-mode="phone"] #more-sheet #menu-articles { order: 11; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--rule); }
+#app[data-mode="phone"] #more-sheet #menu-articles .word { overflow: hidden; }
+#app[data-mode="phone"] #more-sheet #menu-articles .word-label { overflow: hidden; text-overflow: ellipsis; }
+#app[data-mode="phone"] #more-sheet #castor-shortcuts { display: inline-flex; }
+/* Touch keyboards replace, rather than add to, the top row. */
+#app .command-island[data-arrangement="writing"] {
+  grid-area: topbar; position: relative; left: auto; top: auto; bottom: auto;
+  width: 100%; max-width: none; min-width: 0; height: var(--bar-h);
+  border: 0; border-radius: 0; background: var(--paper); box-shadow: none;
+  padding: 0 4px; box-sizing: border-box; z-index: 85; transform: none; transition: none;
+}
+#app .command-island[data-arrangement="writing"][data-open="0"] { display: none; }
+#app .command-island[data-arrangement="writing"] .command-island-close { display: none; }
+#app .command-island[data-arrangement="writing"] .command-island-row { height: 100%; align-items: center; }
+#app .command-island[data-arrangement="writing"] .command-island-word { display: inline-flex; align-items: center; justify-content: center; height: 44px; min-width: 44px; padding: 0 8px; font-size: 16px; }
+#app .command-island[data-arrangement="writing"] .command-island-actions { display: flex; align-items: center; gap: 4px; border-left: 1px solid var(--rule); padding-left: 4px; }
+#app #writing-save-slot { display: flex; align-items: center; }
+#app #writing-save-slot #castor-save { display: flex; min-height: 44px; padding: 0 4px; }
+#app .command-island[data-arrangement="writing"] [data-command="done"] { font: 500 14px/1 var(--font-ui); text-box: trim-both cap alphabetic; }
+#app[data-touch-format="1"][data-keyboard="up"] #topbar.mast { visibility: hidden; pointer-events: none; }
+#app[data-keyboard="up"] { --footline-h: 0px; }
+#app[data-keyboard="up"] #footline { display: none; }
+
+/* The typed asterisk belongs to the word, including its face, weight and ink. */
+#app #topbar.mast .brand { font-family: var(--font-ui-heading); font-weight: 600; font-variation-settings: normal; }
+#app #topbar.mast .brand-name .star { font: inherit; color: inherit; font-variation-settings: inherit; letter-spacing: inherit; }
+
+/* Shared server-pending control: modules keep the label and set aria-busy.
+   The outset ring leaves the control's dimensions unchanged. */
+.castor-pending { position: relative; overflow: visible; }
+.castor-pending::after,
+#app .castor-pending::after,
+#app #topbar.mast :is(.nav, #more-sheet) .word.castor-pending::after {
+  content: ""; display: block; position: absolute; margin: 0; background: none;
+  inset-inline-start: calc(100% + 4px); top: calc(50% - 6px);
+  bottom: auto; right: auto; box-sizing: border-box; width: 12px; height: 12px; pointer-events: none;
+  border: 1.5px solid transparent; border-top-color: currentColor; border-radius: 50%;
+  animation: castor-pending-spin .9s linear infinite;
+}
+@keyframes castor-pending-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .castor-pending::after,
+  #app .castor-pending::after,
+  #app #topbar.mast :is(.nav, #more-sheet) .word.castor-pending::after { animation: none; opacity: .6; }
+}
+
+#app {
+  --icon-search: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%2210%22%20cy%3D%2210%22%20r%3D%227%22%2F%3E%3Cpath%20d%3D%22m15%2015%206%206%22%2F%3E%3C%2Fsvg%3E");
+  --icon-theme: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%229%22%2F%3E%3Cpath%20d%3D%22M12%203v18%22%2F%3E%3C%2Fsvg%3E");
+  --icon-settings: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%224%22%2F%3E%3Cpath%20d%3D%22M12%202v3m0%2014v3M2%2012h3m14%200h3M5%205l2%202m10%2010%202%202M5%2019l2-2M17%207l2-2%22%2F%3E%3C%2Fsvg%3E");
+  --icon-keyboard: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%222%22%20y%3D%225%22%20width%3D%2220%22%20height%3D%2214%22%20rx%3D%222%22%2F%3E%3Cpath%20d%3D%22M6%209h1m4%200h1m4%200h1M6%2013h1m4%200h1m4%200h1M7%2016h10%22%2F%3E%3C%2Fsvg%3E");
+}
+
+#app #topbar.mast .descant-share:has(.chrome-icon)::before { content: none; }
+#app #topbar.mast .descant-share { --icon: var(--icon-share); }
+#app[data-mode="tablet"] #footline :is(#castor-save, .descant-live-marker, .capsule-publish) { min-height: 44px; height: 44px; }
+
+/* A passage preview expands Comments inside its existing row, never the page. */
+#app [data-comment-peek] {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 44px; min-height: 44px;
+  height: 44px; max-width: 224px; overflow: hidden; color: var(--ink); flex: 1 1 160px;
+}
+#app :is(.topwords, #more-sheet, .command-island) [data-comment-peek] :is(.word-label, .count, .shortcut-hint) { display: none; }
+#app .comment-preview { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; font: 13px/1.2 var(--font-ui); }
+#app .comment-preview-author { flex: none; white-space: nowrap; }
+#app .comment-preview-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .comment-preview-more { flex: none; }
+#app [data-comment-peek] > .chrome-icon { flex: none; }
+#app[data-mode="phone"] #topbar.mast:has([data-comment-peek]) .topwords { flex: 1; min-width: 0; }
+#app[data-mode="phone"] #topbar.mast:has([data-comment-peek]) #phone-save-slot { flex: none; margin-right: 0; }
+#app[data-mode="phone"] #topbar.mast .topwords [data-comment-peek] { flex: 1 1 160px; min-width: 44px; }
+#app #footline:has([data-comment-peek]) .topwords { flex: 1; min-width: 0; }
+#app #footline:has([data-comment-peek]) .foot-meta { min-width: 0; }
+#app #footline:has([data-comment-peek]) .descant-live-marker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#app .command-island[data-arrangement="writing"] .command-island-actions { flex: 0 1 auto; min-width: 0; }
+#app .command-island[data-arrangement="writing"] .command-island-clip { flex: 1 1 44px; min-width: 44px; }
+#app .command-island[data-arrangement="writing"] [data-comment-peek] { padding: 0 4px; flex: 1 1 120px; min-width: 68px; max-width: 200px; border: 0; background: transparent; }
+#app [data-comment-peek] > .chrome-icon { display: block; width: 18px; height: 18px; background: currentColor; -webkit-mask: var(--icon-comment) center / contain no-repeat; mask: var(--icon-comment) center / contain no-repeat; }
+
+#app #writing-save-slot { flex: none; }
+
+#app #footline .topwords [data-comment-peek] { flex: 0 0 var(--comment-slot-width); max-width: var(--comment-slot-width); }
+
+/* Phone writing keeps the passage's first words in the accessible name and thread. */
+#app[data-mode="phone"] .command-island[data-arrangement="writing"] [data-comment-peek] { flex: none; min-width: 44px; max-width: 120px; gap: 4px; }
+#app[data-mode="phone"] .command-island[data-arrangement="writing"] .comment-preview-text { display: none; }
+#app[data-mode="phone"] .command-island[data-arrangement="writing"] .comment-preview-author { flex: none; max-width: none; overflow: visible; text-overflow: clip; }
+#app[data-mode="phone"] .command-island[data-arrangement="writing"]:has([data-comment-peek]) .command-island-row > .command-island-word:not([data-command="undo"]):not([data-command="redo"]) { width: 44px; min-width: 44px; max-width: 44px; padding-inline: 0; }
+
+#app[data-mode] :is(#topbar.mast .topwords, #footline .topwords, .command-island) [data-comment-peek] { padding-inline: 4px; gap: 4px; }
+#app #footline .topwords [data-comment-peek] .comment-preview-text { display: none; }

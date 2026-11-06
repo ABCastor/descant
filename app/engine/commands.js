@@ -547,6 +547,12 @@
       if (selIndex < 0) selIndex = 0;
     }
     drawList(listEl, rows, selIndex, function (r, i) { selIndex = i; runRow(r); });
+    if (listMode && listMode.keyboardMap && !q) {
+      var formats = document.createElement('p');
+      formats.className = 'set-hint';
+      formats.textContent = 'Descant saves Markdown. Where Markdown cannot keep what you see, it writes a little HTML instead: spaces at the start of a paragraph, which Markdown would drop or turn into code, and styles that overlap or sit inside a word next to punctuation, such as <strong> or <em>. HTML already in your text is kept.';
+      listEl.insertBefore(formats, listEl.firstChild);
+    }
   }
 
   function drawList(host, list, sel, onActivate) {
@@ -728,6 +734,7 @@
     document.body.appendChild(pickerEl);
 
     var state = { kind: kind, all: items, rows: [], sel: 0, query: null, onPick: o.onPick, onCancel: o.onCancel };
+    state.destroy = destroy;
     picked = state;
     var placeRaf = 0, pendingRect = o.anchorRect;
 
@@ -753,11 +760,31 @@
       placeRaf = requestAnimationFrame(function () {
         placeRaf = 0;
         if (!pickerEl) return;
+        var vv = global.visualViewport;
+        var touch = global.matchMedia && global.matchMedia('(pointer: coarse)').matches;
+        var keyboard = touch && vv && vv.height < (global.innerHeight || vv.height) - 120;
+        var row = document.querySelector('#topbar');
+        var upper = Math.max((vv && vv.offsetTop || 0) + 8, row ? row.getBoundingClientRect().bottom + 8 : 8);
+        // iOS can count its native form accessory as visible viewport space.
+        var lower = (vv && vv.offsetTop || 0) + (vv ? vv.height : global.innerHeight || 768) - (keyboard ? 68 : 8);
+        var width = vv ? vv.width : global.innerWidth || 1024;
+        var x = vv && vv.offsetLeft || 0;
+        var query = pickerEl.querySelector('.cw-link-query');
+        var minimum = (query ? query.getBoundingClientRect().height : 0) + (touch ? 88 : 58) + 26;
+        var above = Math.max(0, pendingRect.top - 6 - upper);
+        var below = Math.max(0, lower - pendingRect.bottom - 6);
+        pickerEl.style.maxHeight = Math.max(0, lower - upper) + 'px';
+        var natural = Math.min(pickerEl.scrollHeight || 272, 272);
+        var useBelow = below >= natural || below >= minimum && below >= above;
+        var available = useBelow ? below : above;
+        // When the caret leaves too little room on either side, use the whole
+        // writing area. Keep the query and two touch rows whenever it permits.
+        if (available < Math.min(minimum, natural)) available = lower - upper;
+        pickerEl.style.maxHeight = Math.max(0, Math.min(natural, available)) + 'px';
         var box = pickerEl.getBoundingClientRect();
-        var vw = global.innerWidth || 1024, vh = global.innerHeight || 768;
-        var left = Math.min(Math.max(8, pendingRect.left), vw - box.width - 8);
-        var top = pendingRect.bottom + 6;
-        if (top + box.height > vh - 8) top = Math.max(8, pendingRect.top - box.height - 6);
+        var left = Math.min(Math.max(x + 8, pendingRect.left), x + width - box.width - 8);
+        var top = useBelow ? pendingRect.bottom + 6 : pendingRect.top - box.height - 6;
+        top = Math.max(upper, Math.min(top, lower - box.height));
         pickerEl.style.left = Math.round(left) + 'px';
         pickerEl.style.top = Math.round(top) + 'px';
       });
@@ -776,6 +803,10 @@
     }
     function destroy() {
       document.removeEventListener('keydown', onKey, true);
+      if (global.visualViewport) {
+        global.visualViewport.removeEventListener('resize', viewportPlace);
+        global.visualViewport.removeEventListener('scroll', viewportPlace);
+      }
       if (placeRaf) cancelAnimationFrame(placeRaf);
       if (pickerEl && pickerEl.parentNode) pickerEl.parentNode.removeChild(pickerEl);
       pickerEl = null; picked = null;
@@ -783,7 +814,7 @@
     // Capture phase, so arrows and Enter belong to the picker while it is open
     // and every other keystroke still reaches the editor and keeps typing.
     function onKey(e) {
-      if (picked !== state) return;
+      if (picked !== state || keys.composing(e)) return;
       // An empty result list leaves editing and navigation with the editor.
       if (!state.rows.length && e.key !== 'Escape') return;
       if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); state.sel = (state.sel + 1) % Math.max(1, state.rows.length); draw(); return; }
@@ -792,6 +823,11 @@
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); return; }
     }
 
+    function viewportPlace() { place(); }
+    if (global.visualViewport) {
+      global.visualViewport.addEventListener('resize', viewportPlace);
+      global.visualViewport.addEventListener('scroll', viewportPlace);
+    }
     filter(o.query || '');
     place(o.anchorRect);
     document.addEventListener('keydown', onKey, true);
@@ -804,6 +840,7 @@
   }
 
   function closePicker() {
+    if (picked && picked.destroy) { picked.destroy(); return; }
     if (pickerEl && pickerEl.parentNode) pickerEl.parentNode.removeChild(pickerEl);
     pickerEl = null; picked = null;
   }

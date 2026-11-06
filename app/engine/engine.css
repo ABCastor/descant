@@ -2577,33 +2577,37 @@ html[data-keys="off"] .shortcut-hint { display: none; }
   .walkthrough-moved { transition: none; }
 }
 
-/* Owner choice, 27 Oct 2026: B only, with a slightly stronger quiet wash. */
-mark.commented[data-by="human"] { --comment-author: var(--human, #C4552A); }
-mark.commented[data-by="agent"] { --comment-author: var(--machine, #006770); }
+/* One author wash in reading and writing. Paint is independent of inline boxes. */
+:root { --comment-rest-tint: 24%; --comment-current-tint: 34%; --comment-human: #C4552A; --comment-agent: #006770; }
+mark.commented[data-by="human"] { --comment-author: var(--comment-human, #C4552A); }
+mark.commented[data-by="agent"] { --comment-author: var(--comment-agent, #006770); }
 mark.commented[data-by="both"] { --comment-author: var(--ink, #23231f); }
 mark.commented[data-by] {
   --comment-person: initial;
   --comment-ink: var(--comment-person, var(--comment-author, var(--ink)));
-  --comment-tint: 11%;
+  --comment-tint: var(--comment-rest-tint);
   background: color-mix(in srgb, var(--comment-ink) var(--comment-tint), transparent);
 }
 /* Teal is the agent's colour whoever it answers for; a person's chosen colour
    marks only that person's own comments (decided 15 Oct, kept 27 Oct). */
 mark.commented[data-by="agent"] { --comment-ink: var(--comment-author); }
-mark.commented.is-paired[data-by] { --comment-tint: 30%; }
-mark.commented.is-lifted[data-by] { --comment-tint: 34%; }
+mark.commented.is-paired[data-by] { --comment-tint: var(--comment-current-tint); }
+mark.commented.is-lifted[data-by] { --comment-tint: var(--comment-current-tint); }
 mark.commented.is-done[data-by] {
   background: var(--pane-hot, rgba(120,120,120,.16));
 }
 mark.commented.is-done:is(.is-lifted, .is-paired) {
   background: color-mix(in srgb, var(--ink) 20%, transparent);
 }
-:root[data-theme="dark"] mark.commented[data-by] { --comment-tint: 15%; }
+:root[data-theme="dark"] { --comment-rest-tint: 30%; --comment-current-tint: 42%; --comment-human: #E27B52; --comment-agent: #2BB0B8; }
 :root[data-theme="dark"] mark.commented:is(.is-lifted, .is-paired) { --comment-tint: 42%; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) mark.commented[data-by] { --comment-tint: 15%; }
+  :root:not([data-theme="light"]) { --comment-rest-tint: 30%; --comment-current-tint: 42%; --comment-human: #E27B52; --comment-agent: #2BB0B8; }
   :root:not([data-theme="light"]) mark.commented:is(.is-lifted, .is-paired) { --comment-tint: 42%; }
 }
+
+/* Semantic marks keep the existing pins and hit areas; one range owns the wash. */
+mark.commented[data-comment-paint] { background: transparent !important; transition: none; }
 
 /* --------------------------------------------------------------- the peek */
 .castor-peek {
@@ -3021,16 +3025,16 @@ mark.commented {
 }
 .castor-comment-pin { position: relative; display: inline; }
 .castor-comment-mark {
-  --comment-hit: 24px;
   position: absolute;
-  right: calc(var(--comment-pin-slot, 0) * var(--comment-hit) - 10px);
-  bottom: .65em;
+  right: -8px;
+  bottom: 1em;
+  pointer-events: none;
   z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: var(--comment-hit);
-  height: var(--comment-hit);
+  width: 16px;
+  height: 16px;
   min-width: 0;
   min-height: 0;
   box-sizing: border-box;
@@ -3045,12 +3049,14 @@ mark.commented {
   font-family: var(--font-ui, system-ui, sans-serif);
   line-height: 1;
 }
-.castor-comment-mark svg { width: 15px; height: 15px; fill: var(--comment-ink); stroke: var(--paper); stroke-width: 1; stroke-linejoin: round; }
+.castor-comment-mark svg { width: 15px; height: 15px; fill: var(--comment-ink); stroke: var(--paper); stroke-width: 1; stroke-linejoin: round; pointer-events: auto; }
 .castor-comment-mark:hover { color: var(--ink); }
 .castor-comment-mark:focus-visible { outline: 2px solid var(--comment-ink, var(--ink)); outline-offset: -2px; background: var(--paper); }
 mark.is-done > .castor-comment-pin .castor-comment-mark svg { stroke-dasharray: 2 1; }
-@media (any-pointer: coarse) {
-  .castor-comment-mark { --comment-hit: 44px; right: calc(var(--comment-pin-slot, 0) * var(--comment-hit) - 20px); bottom: .3em; }
+.castor-comment-mark:not([data-thread-count="1"])::after {
+  content: attr(data-thread-count); position: absolute; left: 12px; top: -6px;
+  padding: 0 2px; background: var(--paper); color: var(--ink);
+  font: 600 10px/12px var(--font-ui, system-ui, sans-serif);
 }
 
 .castor-author-filter summary::after { content: ''; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(45deg); margin: -.2rem 0 0 .45rem; }
@@ -3205,23 +3211,27 @@ mark.is-done > .castor-comment-pin .castor-comment-mark svg { stroke-dasharray: 
 .castor-outline[data-toc="fold"] .castor-group.is-folded { opacity: 0; }
 .castor-outline[data-toc="fold"] .castor-group.is-folded.is-folding-out { height: 0; }
 .castor-outline[data-toc="fold"] .castor-rule > svg { transition-duration: 220ms; transition-timing-function: ease-out; }
-/* The note tray floats above the writing controls and keeps 44px touch targets. */
-.castor-agent-tray{position:fixed;z-index:90;left:50%;bottom:calc(68px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:6px 10px;width:max-content;max-width:calc(100vw - 24px);box-sizing:border-box;border:1px solid var(--rule);border-radius:var(--radius,10px);background:var(--pane-solid,var(--paper));color:var(--ink);font:13px/1.4 var(--font-ui,system-ui,sans-serif);box-shadow:0 6px 20px rgba(0,0,0,.12);flex-wrap:wrap}
+/* Collected notes live inside Comments and keep 44px touch targets. */
+.castor-agent-tray{display:flex;align-items:center;gap:8px;padding:16px 0 0;margin-top:16px;width:100%;min-width:0;box-sizing:border-box;border-top:1px solid var(--rule);color:var(--ink);font:13px/1.4 var(--font-ui,system-ui,sans-serif);flex-wrap:wrap}
 .castor-agent-tray[hidden]{display:none}
-.castor-agent-count{white-space:nowrap;padding:0 4px}
+.castor-agent-count{white-space:nowrap;margin-right:auto}
 .castor-agent-nav{display:flex}
-.castor-agent-tray button,.castor-agent-tray select{font:inherit;color:inherit;min-height:44px;border:0;background:transparent;border-radius:4px;padding:0 10px;cursor:pointer}
-.castor-agent-nav button{width:44px;padding:0}
+.castor-agent-tray button,.castor-agent-tray select{font:inherit;color:inherit;min-height:44px;max-width:100%;border:1px solid var(--rule);background:transparent;border-radius:4px;padding:0 8px;cursor:pointer}
+.castor-agent-nav button{width:44px;padding:0;border:0}
 .castor-agent-nav svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
-.castor-agent-tray button:hover{background:var(--pane-hot)}
+.castor-agent-tray button:hover{background:var(--wash)}
 .castor-agent-tray button:focus-visible,.castor-agent-tray select:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
-.castor-agent-tray .castor-agent-send{background:var(--ink);color:var(--paper);white-space:nowrap}
-.castor-agent-tray .castor-agent-send:hover{opacity:.9}
-.castor-agent-tray button:disabled{opacity:.55;cursor:default}
-.castor-agent-error{flex-basis:100%;margin:0;padding:0 4px 4px}
-.castor-agent-status{position:fixed;inset:auto 1rem calc(var(--footline-h,40px) + 1rem);z-index:25;padding:.75rem 1rem;background:var(--paper);border:1px solid var(--rule);color:var(--ink);font:400 14px/1.4 var(--ui);max-width:34rem}
+.castor-agent-tray .castor-agent-send{white-space:nowrap}
+.castor-agent-tray button:disabled,.castor-agent-tray select:disabled{opacity:.55;cursor:default}
+.castor-agent-help{flex-basis:100%;margin:0;color:var(--ink-2)}
+.castor-agent-preview{flex-basis:100%;min-width:0}
+.castor-agent-preview p{margin:0 0 8px}
+.castor-agent-preview ol{max-height:160px;overflow:auto;overscroll-behavior:contain;padding-left:24px;margin:12px 0;overflow-wrap:anywhere;white-space:pre-wrap}
+.castor-agent-preview li+li{margin-top:8px}
+.castor-agent-error{flex-basis:100%;margin:0}
+.castor-agent-status{margin-top:16px;color:var(--ink);font:400 13px/1.4 var(--font-ui,system-ui,sans-serif)}
 .castor-agent-status[hidden]{display:none}
-@media(max-width:600px){.castor-agent-tray{display:grid;grid-template-columns:1fr auto auto;width:calc(100vw - 24px);gap:4px 6px;padding:6px 8px}.castor-agent-tray>button:not(.castor-agent-send){grid-column:1 / 3;justify-self:start}.castor-agent-error{grid-column:1 / -1}.castor-agent-tray select{min-width:0;padding:0 6px}}
+
 
 /* Versioned comment actions keep exact pending words separate from saved comments. */
 .castor-comment-menu { margin-top:.5rem; }
@@ -3248,7 +3258,7 @@ mark.is-done > .castor-comment-pin .castor-comment-mark svg { stroke-dasharray: 
 .castor-comment-actionrow .castor-comment-reactions { margin-top:0; }
 .castor-comment-actionrow .castor-comment-own { margin:0 0 0 auto; display:flex; gap:0 12px; }
 .castor-comment-actionrow button, .castor-shows button { display:inline-flex; align-items:center; gap:4px; }
-.castor-action-icon { width:14px; height:14px; flex:none; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.castor-action-icon { width:14px; height:14px; flex:none; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
 .castor-comment-older { margin-top:.35rem; }
 .castor-comment-older > summary { min-height:44px; display:flex; align-items:center; cursor:pointer; color:var(--ink); font-size:var(--ui-size-sm,12px); }
 .castor-comment-older-item { padding:.35rem 0; border-top:1px solid var(--rule); }
@@ -3332,16 +3342,10 @@ mark.is-done > .castor-comment-pin .castor-comment-mark svg { stroke-dasharray: 
 #app[data-touch-format="1"] .footline::before { left: 0; right: 0; }
 html #app[data-keyboard="up"] { --footline-h: 0px; }
 html #app[data-keyboard="up"] .footline { display: none; }
-.keyboard-save { display: none; flex: 0 0 auto; align-self: flex-end; margin: -14px 0 -10px .4rem; }
-#app[data-keyboard="up"] .keyboard-save { display: flex; }
-#topbar .keyboard-save .castor-save { box-sizing: border-box; margin: 0; padding: 19px .25rem 5px; min-width: 44px; min-height: 44px; font-size: 13px; line-height: 1; }
-#topbar .keyboard-save .castor-save .save-signal { position: static; flex: 0 0 16px; width: 16px; height: 16px; }
 #app[data-keyboard="up"][data-mode="phone"] #topbar .brand { margin-right: 0; }
 #app[data-keyboard="up"][data-mode="phone"] #topbar .nav { display: none; }
 #app[data-keyboard="up"][data-mode="phone"][data-tabs="folded"] #topbar :is(.folded-article, .castor-tabs-fold) { display: none; }
 #app[data-keyboard="up"] #topbar .bar-tools { margin-left: auto; }
-#app[data-save-position="compact"] #topbar .keyboard-save .castor-save { font-size: 11px; }
-#app[data-save-position="quiet"] .keyboard-save .save-signal-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 #descant-versions { box-sizing: border-box; width: min(30rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 1px solid var(--rule); padding: 1.25rem; background: var(--paper); color: var(--ink); font: 15px/1.4 var(--font-ui); }
 #descant-versions::backdrop { background: #0005; }
 #descant-versions h2 { margin-top: 0; font: inherit; font-weight: 600; }
@@ -3379,7 +3383,6 @@ html[data-keyhint="on"] .castor-tab-item:has(.word-key) .castor-tab-close { visi
 .cw-subtitle:focus-visible { outline:1px solid var(--rule); outline-offset:4px; }
 /* The title edits in place with its resting look: the heading marker hangs
    outside the column, unseen, and the sentence light leaves the title alone. */
-.page-column .cw-block.cw-title-area { --focus-sentence: off; }
 .page-column .cw-block.cw-title-area .cw-editor-stack > :where(.cw-edit, .cw-mirror) { text-indent: calc(-1 * var(--title-mark, 0px)); }
 .page-column .cw-block.cw-title-area .cw-mirror .cw-mk-block { visibility: hidden; }
 
@@ -3401,12 +3404,12 @@ html[data-keyhint="on"] .castor-tab-item:has(.word-key) .castor-tab-close { visi
 .descant-live-popover button, .descant-publish-sheet button { min-height:44px; padding:.45rem .65rem; margin:.25rem .25rem .25rem 0; border:1px solid var(--rule); border-radius:var(--radius-button,4px); font:inherit; color:inherit; background:transparent; cursor:pointer; }
 .descant-publish-sheet input, .descant-publish-sheet select { display:block; width:100%; min-height:44px; margin:.5rem 0; padding:.5rem; font:inherit; border:1px solid var(--rule); border-radius:var(--radius-field,4px); color:inherit; background:var(--paper); }
 .descant-tags { margin-top:1rem; min-width:0; }
-.descant-tag-row { display:flex; align-items:center; gap:.3rem; padding:.15rem .35rem; border:1px solid var(--rule); border-radius:var(--radius-field, 4px); }
+.descant-tag-row { display:flex; flex-direction:column; align-items:stretch; gap:.3rem; padding:.15rem .35rem; border:1px solid var(--rule); border-radius:var(--radius-field, 4px); }
 .descant-tag-row:focus-within { border-color:var(--ink); }
-.descant-tag-chips { display:flex; align-items:center; gap:.3rem; flex:0 1 auto; min-width:0; overflow-x:auto; scrollbar-width:thin; scrollbar-color:var(--ink-2) transparent; }
+.descant-tag-chips { display:flex; flex-wrap:wrap; align-items:center; gap:.3rem; min-width:0; }
 .descant-tag-chip { display:inline-flex; align-items:center; flex:none; gap:.25rem; padding-left:.45rem; border:1px solid var(--rule); border-radius:var(--radius-chip, var(--radius-mark, 2px)); font-size:.8rem; white-space:nowrap; }
 .descant-publish-sheet .descant-tag-remove { display:inline-flex; align-items:center; justify-content:center; min-width:32px; min-height:36px; margin:0; padding:0; border:0; }
-.descant-publish-sheet .descant-tag-row input { flex:1 0 7rem; width:7rem; min-width:0; margin:0; padding:.3rem; border:0; outline:none; background:transparent; caret-color:var(--ink); }
+.descant-publish-sheet .descant-tag-row input { box-sizing:border-box; flex:none; width:100%; min-width:0; min-height:44px; margin:0; padding:.3rem; border:0; outline:none; background:transparent; caret-color:var(--ink); }
 .descant-tag-row input::placeholder { color:var(--ink-2); opacity:1; }
 .descant-tag-row input::selection { color:var(--paper); background:var(--ink); }
 .descant-tag-list { max-height:14rem; overflow-y:auto; border:1px solid var(--rule); border-top:0; background:var(--paper); }
@@ -3535,3 +3538,98 @@ html[data-keyhint="on"] .castor-tab-item:has(.word-key) .castor-tab-close { visi
 .changes-screen[data-full="0"] .changes-legend { margin: .75rem 0; }
 .changes-screen[data-full="0"] .changes-control > span { display: none; }
 #app:has(.changes-screen[data-full="1"]:not([hidden])) #topbar { z-index: 91; }
+
+/* Comments: a quiet status row, then one aligned column of conversation. */
+.castor-comments .castor-filter {
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 8px;
+  padding: 0 0 8px; background: var(--surface, var(--paper));
+}
+.castor-status-tabs { display: flex; flex: 1; min-width: 0; align-items: center; gap: 0; }
+.castor-filter .castor-status-tabs button {
+  flex: 0 1 auto; min-width: 0; min-height: 32px; padding: 4px 16px; text-align: center;
+  border-radius: 4px; font: 12px var(--font-ui, system-ui, sans-serif); color: var(--ink-2);
+}
+.castor-filter .castor-status-tabs button[aria-pressed="true"] { background: var(--wash); color: var(--ink); text-decoration: none; }
+.castor-comments .castor-author-filter { flex: 0 0 32px; }
+.castor-comments .castor-author-filter summary { display: flex; justify-content: center; padding: 0; min-height: 32px; width: 32px; border-radius: 4px; }
+.castor-comments .castor-author-filter[open] summary, .castor-comments .castor-author-filter summary[data-filtered="true"] { background: var(--wash); }
+.castor-author-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.castor-comments .castor-author-menu { background: var(--surface, var(--paper)); border: 1px solid var(--rule); border-radius: 6px; }
+.castor-thread { padding: 12px 16px; }
+.castor-thread .castor-msg[data-by] { position: relative; border-left: 0; padding-left: 28px; background: transparent; }
+.castor-thread .castor-prov { margin: 0 0 8px; font: 13px/20px var(--font-ui, system-ui, sans-serif); }
+.castor-thread .castor-prov-author { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; position: relative; min-width: 0; }
+.castor-thread .castor-comment-name { flex: 1 0 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.castor-thread .castor-person-dot {
+  position: absolute; left: -28px; top: 0; width: 20px; height: 20px;
+  color: #1B1915; background: color-mix(in srgb, var(--human) 35%, white); font: 600 11px/20px var(--font-ui, system-ui, sans-serif);
+}
+.castor-thread .castor-person-dot:not([data-agent])::after { content: attr(data-initial); }
+.castor-thread .castor-person-dot[data-agent] { color: #1B1915; background: color-mix(in srgb, var(--machine) 35%, white); }
+.castor-thread .castor-comment-date { flex: 0 1 auto; max-width: 100%; min-width: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 400; }
+.castor-thread .castor-comment-time { display: inline; margin: 0; font-size: 13px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.castor-thread .castor-comment-model { display: block; max-width: 100%; width: fit-content; margin-top: 4px; font: 11px/16px var(--font-ui, system-ui, sans-serif); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; }
+.castor-thread .castor-prov-author:has(.castor-comment-model) { padding-bottom: 0; }
+.castor-thread .castor-prov-author .castor-comment-model { position: static; margin: 0; }
+.castor-thread .castor-comment-context { color: var(--ink-3); margin-top: 4px; }
+.castor-thread .castor-msg-text { font: 15px/1.45 var(--font-reading, Georgia, serif); }
+.castor-thread .castor-quote { margin: 0 0 8px; font-size: 13px; font-style: italic; }
+.castor-thread .castor-quote summary { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+.castor-thread > .castor-acts { margin-left: 28px; margin-top: 8px; }
+.castor-thread .castor-acts button, .castor-peek-reply { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; }
+.castor-thread .castor-comment-actionrow { gap: 0 8px; margin-top: 8px; }
+.castor-thread .castor-comment-own { gap: 8px; }
+.castor-thread .castor-comment-own button { font-size: 12.5px; width: auto; min-width: 44px; min-height: 32px; justify-content: center; }
+.castor-thread .castor-action-hint { margin: 4px 0 0; font: 12px/1.4 var(--font-ui, system-ui, sans-serif); color: var(--ink-3); }
+.castor-comment-undo { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 5; display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: var(--surface, var(--paper)); border: 1px solid var(--rule); border-radius: 6px; font: 13px var(--font-ui, system-ui, sans-serif); }
+.castor-comment-undo button { background: none; border: 0; color: var(--ink); font: inherit; text-decoration: underline; min-height: 32px; cursor: pointer; }
+.castor-composer > button { background: transparent; border: 1px solid var(--rule); border-radius: 6px; color: var(--ink); font: 13px var(--font-ui, system-ui, sans-serif); min-height: 32px; padding: 4px 8px; cursor: pointer; }
+.castor-peek .castor-peek-reply { border: 0; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
+@media (pointer: coarse) {
+  .castor-comments .castor-filter .castor-status-tabs button, .castor-comments .castor-author-filter summary,
+  .castor-thread .castor-acts button, .castor-thread .castor-comment-own button, .castor-composer > button, .castor-comment-undo button { min-height: 44px; }
+}
+
+.castor-comments .castor-lost { max-height: 50%; overflow-y: auto; overscroll-behavior: contain; background: var(--surface, var(--paper)); }
+.castor-peek:has(.castor-peek-reply) { pointer-events: auto; }
+
+.castor-thread > .castor-quote { margin-left: 28px; }
+.castor-reply-sending { display: inline-flex; align-items: center; min-height: 32px; background: transparent; border: 0; color: var(--ink-2); font: 13px var(--font-ui, system-ui, sans-serif); }
+
+/* Detached comments keep their explanation available without taking the first view. */
+.castor-comments .castor-burst { padding: 0 8px; }
+.castor-comments .castor-burst > summary { min-height: 44px; align-content: center; cursor: pointer; font: 12px/20px var(--font-ui, system-ui, sans-serif); color: var(--ink-2); }
+.castor-comments .castor-burst[open] { padding-bottom: 8px; }
+.castor-comments .castor-lost:has(.castor-burst:not([open])) { padding-bottom: 8px; }
+.panel-head .castor-shows { gap: 12px; padding: 0; margin: 0; }
+.castor-comments .castor-filter { padding-bottom: 4px; }
+
+/* Comments alone have a second header row. Keep both rows at touch height. */
+#app .panel-head:has(> .castor-shows) { min-height: 0; padding: 0 12px; gap: 0 12px; }
+#app .panel-head:has(> .castor-shows) > .panel-title { min-height: 44px; display: flex; align-items: center; }
+#app .panel-head:has(> .castor-shows) > .panel-close { min-height: 44px; }
+#app .panel-body:has(> .castor-comments) { padding: 8px 12px; }
+
+/* In list mode the panel is the one scroll surface, through the last thread
+   and its agent footer. The beside layout retains its passage-aligned canvas. */
+[data-comment-layout="list"] .castor-comments { height: auto; }
+[data-comment-layout="list"] .castor-comments :is(.castor-filter, .castor-lost, .castor-canvas-wrap) { position: relative; inset: auto; }
+[data-comment-layout="list"] .castor-canvas-wrap { overflow: visible; }
+[data-comment-layout="list"] .castor-comments .castor-lost { max-height: none; overflow: visible; }
+
+/* iOS zooms focused editables below 16px, including comment editor hosts. */
+@media (pointer: coarse) {
+  .castor-composer .cw-field, .castor-comment-editor .cw-field,
+  .castor-composer textarea, .castor-comment-editor textarea { font-size: 16px; }
+}
+
+/* Let the active touch writing task use the keyboard-reduced sheet. Focus-within
+   restores the secondary rows as soon as the writer leaves either field. */
+@media (any-pointer: coarse) {
+  #app .dock:has(.castor-comment-editor:focus-within, .castor-composer:focus-within) .castor-shows,
+  #app .dock:has(.castor-comment-editor:focus-within, .castor-composer:focus-within) .castor-filter,
+  #app .dock:has(.castor-comment-editor:focus-within, .castor-composer:focus-within) .castor-lost:not(:focus-within) { display: none; }
+}
+
+/* A code-span source newline paints as the normalized reader space. */
+.cw-code-newline { white-space: normal; }

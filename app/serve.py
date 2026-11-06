@@ -453,7 +453,10 @@ def save_evidence(path, sha):
                 history = {"sha": rows[0], "at": rows[1]}
     shared = {"ok": False, "at": "", "reason": "Waiting for the article’s save."}
     if history:
+        if SYNC["push_at"]:
+            shared["last_confirmed_at"] = SYNC["push_at"]
         if not SYNC["on"]:
+            shared["failed"] = True
             shared["reason"] = "Shared backup is off on this server. The commit stays here."
         else:
             upstream = _git_raw("rev-parse", "--verify", "@{upstream}")
@@ -468,6 +471,7 @@ def save_evidence(path, sha):
                 shared["reason"] = ("The shared server has not confirmed this commit. Retrying automatically."
                                     if SYNC["push_pending"] else "The shared server has not confirmed this commit. The next save sends it again.")
                 if SYNC["push_error"]:
+                    shared["failed"] = True
                     shared["reason"] = "The shared server could not take the backup. Retrying automatically."
     return {"path": path, "history": history, "shared": shared}
 
@@ -3510,8 +3514,10 @@ class Handler(SimpleHTTPRequestHandler):
                 changes.append((target, target.read_bytes() if target.exists() else None, rendered))
 
             if not changes:
-                threads = comment_projected_threads(path, events=events)
-                return self.reply(200, {"ok": True, "threads": threads, "changed": 0})
+                # Append receipts must carry the same actor-bound controls as a
+                # read. Polling deliberately pauses while another edit is open.
+                document = comment_action_document(path, str(self._comment_actor).strip().lower(), events=events) if self._comment_actor else {"threads": comment_projected_threads(path, events=events)}
+                return self.reply(200, dict(document, ok=True, changed=0))
 
             written = []
             before_sha = git("rev-parse", "HEAD").stdout.strip()
@@ -3553,9 +3559,9 @@ class Handler(SimpleHTTPRequestHandler):
 
             # Never return the validation snapshot after a commit/push/rebase.
             events = comment_action_events(path, committed_only=True)
-            refreshed = comment_projected_threads(path, events=events)
-            return self.reply(200, {"ok": True, "threads": refreshed,
-                                    "changed": len(changes), "sha": git("rev-parse", "HEAD").stdout.strip()})
+            document = comment_action_document(path, str(self._comment_actor).strip().lower(), events=events) if self._comment_actor else {"threads": comment_projected_threads(path, events=events)}
+            return self.reply(200, dict(document, ok=True, changed=len(changes),
+                                       sha=git("rev-parse", "HEAD").stdout.strip()))
         except CommentRefused as refused:
             # Raised only by the hooks, which all run while `changes` is being built,
             # so a refusal always arrives before the first file is touched.

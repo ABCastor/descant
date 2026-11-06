@@ -14,8 +14,6 @@
   --sel-handle: var(--ink, #1a1a18);
 
   /* the shade behind the writing */
-  --focus-wash: transparent;             /* a world lights the live sentence */
-  --wash-glide: 240ms;                   /* compositor motion and fade */
   --focus-paragraph: off;                /* on: everything but this paragraph dims */
   --ink-dim: color-mix(in srgb, var(--ink, #1a1a18) 45%, transparent);
   --focus-fade: 320ms;                   /* slow enough not to flicker while typing */
@@ -123,21 +121,6 @@
 }
 
 /* --- the shade behind the writing ------------------------------------------ */
-
-.cw-wash-layer { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
-.cw-focus-wash {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 1px;
-  height: 1px;
-  transform-origin: 0 0;
-  will-change: transform, opacity;
-  transition: transform var(--wash-glide) var(--caret-ease), opacity var(--wash-glide) ease;
-}
-.cw-focus-wash[hidden] { display: none; }
-/* A scroll moves the text itself, so its shade must follow without trailing. */
-.cw-focus-wash[data-snap="1"] { transition: opacity var(--wash-glide) ease; }
 
 /* Paragraph focus: the block the caret is in keeps full ink, the rest recede.
    The class is moved, never repainted, so the fade cannot re-trigger on a
@@ -248,8 +231,59 @@
     animation: none !important;
     opacity: 1;
   }
-  .cw-focus-wash, .cw-selection-rect, .cw-focus-paragraph .cw-block {
+  .cw-selection-rect, .cw-focus-paragraph .cw-block {
     transition: none !important;
     animation: none !important;
+  }
+}
+
+/* Source runs share the reader's exact block/inline layout. Only Markdown marks
+   disappear; they retain textContent and source offsets without an advance. */
+.cw-mk { display: none !important; }
+.cw-atom[data-label]::after { content: attr(data-label); }
+.page-column .cw-block .cw-editor-stack > .cw-edit,
+.page-column .cw-block .cw-editor-stack > .cw-mirror {
+  font: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  text-indent: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  white-space: normal;
+}
+.page-column .cw-block .cw-editor-stack > .cw-edit {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+.page-column .cw-editor-stack > :is(.cw-edit,.cw-mirror) > :first-child { margin-top: 0; }
+.page-column .cw-editor-stack > :is(.cw-edit,.cw-mirror) > :last-child { margin-bottom: 0; }
+.page-column .cw-mirror strong { font-weight: bold; text-shadow: none; }
+.page-column .cw-mirror em { font-style: italic; }
+.page-column .cw-mirror :is(code,.cw-code) { font-family: var(--font-mono, ui-monospace, monospace); }
+.cw-edit::after { content: none !important; }
+.page-column .cw-mirror mark:not(.commented):not(.in-workspace) { padding: 0 .12em; }
+.page-column .cw-mirror code { font-size: .88em; line-height: inherit; }
+.cw-definition-gap::after { content: ' '; }
+/* Comment pins remain real controls above the transparent editing surface. */
+.page-column .cw-block .cw-mirror { z-index: auto; }
+.page-column .cw-mirror .castor-comment-mark { z-index: 3; pointer-events: auto; }
+/* A nested paragraph's trailing margin must not start contributing height when
+   its quote moves into the editing grid. The block owns the paragraph gap. */
+.page-column .cw-block blockquote > :last-child { margin-bottom: 0; }
+
+/* The Link command queries here, without inserting an empty hidden run. */
+.cw-link-query {
+  box-sizing: border-box; width: 100%; min-height: 44px; flex-shrink: 0;
+  padding: 12px 16px; border: 0; border-bottom: 1px solid var(--rule);
+  border-radius: 0; background: var(--surface); color: var(--ink);
+  font: 16px var(--font-ui, system-ui, sans-serif); outline-offset: -2px;
+}
+.cw-link-query::placeholder { color: var(--ink-2); }
+.cw-picker:has(.cw-link-query) { display: flex; flex-direction: column; }
+.cw-picker:has(.cw-link-query) .cw-picker-list { min-height: 0; overflow-y: auto; }
+@media (pointer: coarse) {
+  .cw-picker .cw-row, .cw-picker .palette-item {
+    box-sizing: border-box; min-height: 44px; display: flex; align-items: center;
   }
 }

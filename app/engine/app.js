@@ -648,12 +648,53 @@
   function revealTab() {
     var strip = tabEls.strip;
     if (!strip || tabsFolded()) return;
+    if (Castor.capsule) { fitArticleTabs(); return; }
     var active = strip.querySelector('[aria-selected="true"]');
     if (active && strip.clientWidth && active.getBoundingClientRect) {
       var box = active.getBoundingClientRect(), bounds = strip.getBoundingClientRect();
       if (box.right > bounds.right - 32) strip.scrollLeft += box.right - bounds.right + 32;
       else if (box.left < bounds.left + 16) strip.scrollLeft -= bounds.left + 16 - box.left;
     }
+  }
+
+  /* Keep complete tabs in the row. Overflow stays open, just behind N more. */
+  function fitArticleTabs() {
+    var strip = tabEls.strip;
+    if (!Castor.capsule || !strip || !strip.clientWidth) return;
+    var items = Array.prototype.slice.call(strip.querySelectorAll('.castor-tab-item'));
+    var more = strip.querySelector('.castor-tabs-more');
+    if (!more) return;
+    items.forEach(function (item) { item.hidden = false; });
+    more.hidden = false;
+    more.textContent = items.length + ' more';
+    var gap = parseFloat(global.getComputedStyle(strip).columnGap) || 0;
+    var plus = strip.querySelector('.castor-tab-new');
+    var available = strip.clientWidth - (plus ? plus.getBoundingClientRect().width + gap : 0);
+    var widths = items.map(function (item) { return item.getBoundingClientRect().width; });
+    var total = widths.reduce(function (sum, width) { return sum + width + gap; }, 0);
+    if (total <= available) { more.hidden = true; strip.scrollLeft = 0; return; }
+    available -= more.getBoundingClientRect().width + gap;
+    var current = items.filter(function (item) { return item.querySelector('.castor-tab[aria-selected="true"]'); })[0];
+    if (current) available -= widths[items.indexOf(current)] + gap;
+    var hidden = 0;
+    items.forEach(function (item, i) {
+      if (item === current) return;
+      item.hidden = widths[i] + gap > available;
+      if (item.hidden) hidden++;
+      else available -= widths[i] + gap;
+    });
+    more.textContent = hidden + ' more';
+    more.hidden = !hidden;
+    strip.scrollLeft = 0;
+  }
+
+  function moreArticleTabs() {
+    var hidden = Array.prototype.slice.call(tabEls.strip.querySelectorAll('.castor-tab-item[hidden] .castor-tab'));
+    if (Castor.commands && Castor.commands.openList) {
+      Castor.commands.openList({ title: 'More articles', items: hidden.map(function (tab) {
+        return { id: tab.dataset.path, label: tab.querySelector('.castor-tab-name').textContent };
+      }), onPick: function (item) { openPiece(item.id); } });
+    } else openChooser();
   }
 
   /* The strip and its chevron, created once. JS says the strip exists and
@@ -688,6 +729,8 @@
         title.setAttribute('aria-hidden', 'true'); app.appendChild(title); tabEls.title = title;
         strip.addEventListener('scroll', function () { queueKnot(false); }, { passive: true });
         global.addEventListener('resize', function () { revealTab(); queueKnot(false); }, { passive: true });
+        if (global.ResizeObserver) new global.ResizeObserver(revealTab).observe(strip);
+        if (document.fonts) document.fonts.ready.then(revealTab);
       }
     }
     paintFold(recall('tabs') === 'folded', false);
@@ -1337,6 +1380,12 @@
     });
     if (chooser) strip.appendChild(chooserTab());
     if (!reviewing() && liveState && liveState.path) strip.appendChild(plusButton());
+    if (Castor.capsule) {
+      var more = document.createElement('button');
+      more.type = 'button'; more.className = 'castor-tabs-more'; more.hidden = true;
+      more.addEventListener('click', moreArticleTabs);
+      strip.insertBefore(more, strip.querySelector('.castor-tab-new'));
+    }
     } else {
       strip.querySelectorAll('.castor-tab').forEach(function (b) {
         if (b.classList.contains('castor-tab-chooser')) return;
@@ -3140,6 +3189,9 @@
     var bar = els.topbar;
     if (!bar || !bar.clientWidth || bar.clientWidth === headerWidth) return;
     headerWidth = bar.clientWidth;
+    // The capsule has its own room: its secondary words always live in More.
+    // Other worlds still fit their inline header below.
+    if (Castor.capsule) { applyPhoneChrome(true); return; }
     // Return the same tools before measuring another layout, including desktop.
     if (moreEls && moreEls.tools && moreEls.tools.parentNode === moreEls.sheet) bar.appendChild(moreEls.tools);
     bar.removeAttribute('data-folded-tools');
@@ -3181,7 +3233,7 @@
     word.type = 'button';
     word.className = 'word';
     word.id = 'more-word';
-    word.innerHTML = '<span class="more-label">More</span><svg class="more-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg><span class="more-count" aria-hidden="true" hidden></span>';
+    word.innerHTML = '<span class="more-label word-label">More</span><svg class="more-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg><span class="more-count" aria-hidden="true" hidden></span>';
     word.setAttribute('aria-label', 'More');
     word.setAttribute('aria-expanded', 'false');
     word.setAttribute('aria-controls', 'more-sheet');
@@ -3210,12 +3262,37 @@
     });
 
     word.addEventListener('click', function () { setMore(!moreIsOpen()); });
+    word.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault(); setMore(true);
+      var items = moreItems();
+      if (items.length) items[e.key === 'ArrowUp' ? items.length - 1 : 0].focus();
+    });
+    sheet.addEventListener('keydown', function (e) {
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].indexOf(e.key) < 0) return;
+      var items = moreItems(), i = items.indexOf(e.target);
+      if (!items.length) return;
+      e.preventDefault();
+      if (e.key === 'Home') i = 0;
+      else if (e.key === 'End') i = items.length - 1;
+      else i = (i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items[i].focus();
+    });
+    // Tab uses native button order; leaving the disclosure closes it.
+    sheet.addEventListener('focusout', function (e) {
+      if (e.relatedTarget && !sheet.contains(e.relatedTarget) && e.relatedTarget !== word) closeMore();
+    });
     /* A sheet is a menu: choosing something in it puts it away. */
     sheet.addEventListener('click', function (e) {
       var hit = e.target.closest && e.target.closest('.word');
       var tool = e.target.closest && e.target.closest('.bar-tools button');
       if (hit || tool) {
+        var moveFocus = Castor.capsule && hit && hit.dataset.panel && sheet.contains(document.activeElement);
         closeMore();
+        if (moveFocus) {
+          var head = document.querySelector('.panel[data-panel-id="' + hit.dataset.panel + '"] .panel-head');
+          (head || word).focus();
+        }
         if (tool && !tool.hasAttribute('popovertarget') && Castor.popovers) Castor.popovers.returnFocus(tool, true);
       }
     });
@@ -3227,6 +3304,9 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && moreIsOpen()) { e.preventDefault(); e.stopPropagation(); closeMore(); word.focus(); }
     }, true);
+    if (Castor.capsule && global.MutationObserver && els.app) {
+      new global.MutationObserver(closeMore).observe(els.app, { attributes: true, attributeFilter: ['data-preset'] });
+    }
 
     moreEls = { word: word, sheet: sheet, type: type, rule: null };
     return moreEls;
@@ -3235,15 +3315,45 @@
   /* The open state is READ OFF THE SHEET, never held beside it, so nothing else
      touching the element can leave a second copy of "is it open" wrong. */
   function moreIsOpen() { return !!(moreEls && !moreEls.sheet.hidden); }
+  function moreItems() {
+    if (!moreEls) return [];
+    return Array.prototype.slice.call(moreEls.sheet.querySelectorAll('button'))
+      .concat(Array.prototype.slice.call(moreEls.sheet.querySelectorAll('a[href]'))).filter(function (n) {
+      return !n.hidden && !n.disabled && global.getComputedStyle(n).display !== 'none' && (!n.getClientRects || n.getClientRects().length > 0);
+    });
+  }
   function setMore(on) {
     if (!moreEls) return;
+    // On a phone, Menu replaces the current tool sheet. Its header lives in
+    // a lower stacking context than the docks, so raising the child cannot help.
+    if (on && Castor.capsule && els.app && els.app.dataset.mode === 'phone' && Castor.panels) {
+      Castor.panels.ids.forEach(function (id) { Castor.panels.close(id); });
+    }
+    // Unhide before measuring the real preset-filtered rows.
+    moreEls.sheet.hidden = !on;
+    var items = on && Castor.capsule ? moreItems() : [];
+    if (Castor.capsule) on = !!(on && items.length);
     moreEls.sheet.hidden = !on;
     moreEls.word.setAttribute('aria-expanded', String(!!on));
     moreEls.word.setAttribute('aria-pressed', String(!!on));
+    if (on && items.length) items[0].focus();
   }
   function closeMore() { setMore(false); }
 
   function applyPhoneChrome(on) {
+    if (Castor.capsule) {
+      var menu = buildMore();
+      if (Castor.capsule.layoutMenu) { Castor.capsule.layoutMenu(menu); return; }
+      var nav = els.topbar && els.topbar.querySelector('.topwords');
+      if (!nav) return;
+      if (menu.word.parentNode !== nav) nav.appendChild(menu.word);
+      if (menu.sheet.parentNode !== els.topbar) els.topbar.appendChild(menu.sheet);
+      PHONE_SHEET_WORDS.forEach(function (id) {
+        var button = nav.querySelector('[data-panel="' + id + '"]');
+        if (button) menu.sheet.appendChild(button);
+      });
+      return;
+    }
     if (on === phoneChrome) return;
     phoneChrome = on;
     var m = buildMore();
@@ -3471,19 +3581,6 @@
     return applyDim();
   }
 
-  function sentenceOn() { return recall('sentence') !== '0'; }
-  function applySentence() {
-    var on = sentenceOn();
-    if (Castor.editor && Castor.editor.setWritingMode) Castor.editor.setWritingMode('--focus-sentence', on);
-    var sw = document.getElementById('set-sentence');
-    if (sw) sw.checked = on;
-    return on;
-  }
-  function setSentence(on) {
-    store('sentence', (on === undefined ? !sentenceOn() : !!on) ? '1' : '0');
-    return applySentence();
-  }
-
   function writingPreference(name, allowed, fallback) {
     var value = recall(name); return allowed.indexOf(value) >= 0 ? value : fallback;
   }
@@ -3527,7 +3624,7 @@
     paintReaderColor();
     var format = document.getElementById('set-touch-format'); if (format) format.checked = recall('touchFormat') !== '0';
     var focus = document.getElementById('set-focus'); if (focus) focus.checked = Castor.panels.isFocus();
-    applyDim(); applySentence();
+    applyDim();
     var spell = document.getElementById('set-spell'); if (spell) spell.checked = recall('spellcheck') !== '0';
     var width = document.getElementById('set-width'); if (width) width.value = writingPreference('textWidth', ['60', '68', '74'], '60');
     var size = document.getElementById('set-size'); if (size) size.value = writingPreference('textSize', ['18', '20', '22'], '20');
@@ -3661,7 +3758,6 @@
     textSize: { values: ['18', '20', '22'], read: function () { return writingPreference('textSize', ['18', '20', '22'], '20'); },
       write: function (v) { store('textSize', v); } },
     dim: { values: [true, false], read: dimOn, write: function (v) { store('dim', v ? '1' : '0'); } },
-    sentence: { values: [true, false], read: sentenceOn, write: function (v) { store('sentence', v ? '1' : '0'); } },
     spellcheck: { values: [true, false], read: function () { return recall('spellcheck') !== '0'; },
       write: function (v) { store('spellcheck', v ? '1' : '0'); } },
     touchFormat: { values: [true, false], read: function () { return yesNo('touchFormat', true); },
@@ -3703,7 +3799,7 @@
       field.write(profile.preferences[name]);
       applied.push(name);
     });
-    applyWritingPreferences(); applyDim(); applySentence(); applyPreset(); paintSettings();
+    applyWritingPreferences(); applyDim(); applyPreset(); paintSettings();
     return { ok: true, applied: applied };
   }
   Castor.prefs = { preset: presetNow, setPreset: setPreset, exportProfile: exportProfile, importProfile: importProfile };
@@ -3810,7 +3906,7 @@
     wireSettingsTabs(panel);
     var gear = document.getElementById('castor-settings-gear');
     if (Castor.popovers) Castor.popovers.bind(gear, panel, paintSettings);
-    [['set-focus', setFocus], ['set-dim', setDim], ['set-sentence', setSentence]].forEach(function (pair) {
+    [['set-focus', setFocus], ['set-dim', setDim]].forEach(function (pair) {
       var control = document.getElementById(pair[0]);
       if (control) control.addEventListener('change', function () { pair[1](control.checked); });
     });
@@ -3958,12 +4054,23 @@
     function fit() {
       raf = 0;
       els.frame.style.setProperty('--viewport-height', (vv ? vv.height : global.innerHeight) + 'px');
-      els.frame.style.setProperty('--viewport-top', (vv ? vv.offsetTop : 0) + 'px');
+      els.frame.style.setProperty('--viewport-top', '0px');
+      resetWindow();
       bus.emit('layout');
     }
     function schedule() {
       if (!raf) raf = global.requestAnimationFrame(fit);
     }
+    function resetWindow() {
+      // iOS pans the outer document after focus, even with preventScroll. The
+      // article has its own scrollport; a keyboard must never move the window.
+      var touch = global.matchMedia && global.matchMedia('(pointer: coarse)').matches;
+      if ((global.scrollY || global.scrollX) && global.scrollTo &&
+          (touch || document.activeElement && document.activeElement.closest && document.activeElement.closest('.cw-edit'))) {
+        global.scrollTo({ left: 0, top: 0, behavior: 'instant' });
+      }
+    }
+    global.addEventListener('scroll', resetWindow);
     global.addEventListener('resize', schedule);
     if (vv) {
       vv.addEventListener('resize', schedule);
@@ -4059,7 +4166,7 @@
 
     mountModules();
     applyWritingPreferences();
-    applySentence();
+
     if (!reviewing()) {
       var defaults = defaultPanels();
       if (defaults) BAR_ORDER.forEach(function (id) { if (defaults.indexOf(id) >= 0) Castor.panels.open(id); else Castor.panels.close(id); });
@@ -4101,6 +4208,26 @@
       if (document.fonts) Promise.resolve(document.fonts.ready).then(settledLayout);
     });
   }
+
+  /* Native focus scrolling can miss links in the article's nested scroller.
+     Mouse caret placement stays with the editor; only keyboard focus reveals. */
+  var pageKeyboardFocus = false;
+  function revealPageFocus(event) {
+    var target = event.target;
+    if (!pageKeyboardFocus || !target.matches || !target.matches(':focus-visible') || target.classList && target.classList.contains('cw-edit')) return;
+    var scroll = target.closest('.page-scroll');
+    if (!scroll) return;
+    global.requestAnimationFrame(function () {
+      if (!pageKeyboardFocus || document.activeElement !== target || !target.matches(':focus-visible')) return;
+      var box = target.getBoundingClientRect(), bounds = scroll.getBoundingClientRect();
+      var delta = box.bottom > bounds.bottom - 8 ? box.bottom - bounds.bottom + 8
+        : box.top < bounds.top + 8 ? box.top - bounds.top - 8 : 0;
+      if (delta) scroll.scrollBy({ top: delta, behavior: 'instant' });
+    });
+  }
+  document.addEventListener('keydown', function () { pageKeyboardFocus = true; }, true);
+  document.addEventListener('pointerdown', function () { pageKeyboardFocus = false; }, true);
+  document.addEventListener('focusin', revealPageFocus);
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();

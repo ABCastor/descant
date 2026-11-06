@@ -132,6 +132,10 @@ html[data-world="typewell"] #frame:not([data-ready]) #app{transition:none}
   line-height:1;text-box:trim-both cap alphabetic;color:var(--ink);white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none}
 .mast .brand-name{display:inline-block}
 .mast .brand .star{display:inline-block;margin-left:.1em;line-height:.88;font-size:1em;font-weight:650;color:var(--human)}
+@media (pointer:coarse){
+  #topbar.mast .brand{min-width:44px;min-height:44px;display:flex;align-items:center}
+  #topbar.mast .brand-name{transform:translateY(-.06em)}
+}
 @media (prefers-reduced-motion:no-preference){
   .mast .brand .star{transition:transform var(--t-move) var(--ease)}
   @media (hover:hover){.mast .brand-name:hover .star{transform:rotate(90deg)}}

@@ -20,24 +20,32 @@
     var device = !!s.deviceAt;
     var history = current && !!(s.history && s.history.sha && s.history.at);
     var shared = history && !!(s.shared && s.shared.ok === true && s.shared.at);
+    var sharedFailed = history && !shared && !!(s.shared && s.shared.failed === true);
+    var lastConfirmed = s.shared && s.shared.last_confirmed_at;
     var word = s.saving ? 'Saving…' : !current ? (device ? 'Kept on this device' : 'Saving…')
-      : !history ? 'Checking…' : !shared ? 'Not yet backed up' : !device ? 'Kept in history' : 'Saved';
+      : !history ? 'Checking…' : !shared ? (sharedFailed ? 'Not backed up' : 'Checking backup…') : !device ? 'Kept in history' : 'Saved';
     var rows = [
       { ok: device, label: 'On this device', detail: device ? time(s.deviceAt) : 'Waiting for this browser to keep a copy.' },
       { ok: history, label: 'In the article’s history', detail: history ? s.history.sha.slice(0, 7) + ' · ' + time(s.history.at) : 'Waiting for the article’s save.' },
       { ok: shared, label: 'Copied to the shared server', detail: shared ? (s.shared.checked ? 'Checked ' : '') + time(s.shared.at)
-        : (s.shared && s.shared.reason) || 'Waiting for the server to confirm the backup.' }
+        : ((s.shared && s.shared.reason) || 'Waiting for the server to confirm the backup.')
+          + (lastConfirmed ? ' Last confirmed ' + time(lastConfirmed) + '.' : '') }
     ];
     /* Amber only for a known failure; a receipt still on its way is part of saving, not a fault. */
-    var failed = !!(s.warning || s.problem || (s.shared && s.shared.ok === false));
+    var failed = !!(s.warning || s.problem || sharedFailed);
     var onDevice = s.offline && device && !s.warning;
     if (onDevice) word = 'On device';
     var state = onDevice ? 'device' : failed ? 'partial' : pending || s.saving || !rows.every(function (row) { return row.ok; }) ? 'saving' : 'saved';
     var missing = rows.filter(function (row) { return !row.ok; }).map(function (row) { return row.label + ': ' + row.detail; });
     if (s.warning) missing.push(s.warning);
     if (s.problem) missing.push(s.problem);
-    var label = state === 'device' ? 'Kept on this device. Waiting to sync when the connection returns.' : state === 'saving' ? 'Saving' : state === 'saved' ? 'Saved: all three copies confirmed' : 'Save incomplete. ' + missing.join(' ');
-    return { word: word, state: state, label: label, rows: rows };
+    var label = state === 'device' ? 'Kept on this device. Waiting to sync when the connection returns.' : state === 'saving' ? (history && !shared ? 'Checking the shared backup. ' + rows[2].detail : 'Saving') : state === 'saved' ? 'Saved: all three copies confirmed' : 'Save incomplete. ' + missing.join(' ');
+    return { word: word, state: state, label: label, rows: rows, sharedFailed: sharedFailed };
+  }
+  function shortWord(view) {
+    return view.state === 'device' ? 'On device' : view.state === 'saved' ? 'Saved'
+      : view.sharedFailed ? 'Not backed up' : view.state === 'partial' ? 'Not saved'
+      : /^Checking/.test(view.word) ? 'Checking' : 'Saving';
   }
   function render(button, view) {
     var icon = button.querySelector('.save-signal'), label = button.querySelector('.save-signal-label');
@@ -58,13 +66,12 @@
     var shapes = { device: 'M3 4h14v12H3z M7 13h6', saved: 'M4 10l4 4 8-8', partial: 'M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16 M10 6v5 M10 14v.01',
       saving: 'M10 2a8 8 0 1 1-8 8' };
     icon.firstChild.setAttribute('d', shapes[view.state]);
-    var word = view.state === 'device' ? 'On device' : view.state === 'saved' ? 'Saved' : view.state === 'saving' ? 'Saving'
-      : view.rows[2] && !view.rows[2].ok ? 'Not backed up' : 'Not saved';
+    var word = shortWord(view);
     if (label.textContent !== word) label.textContent = word;
     button.setAttribute('aria-label', view.label);
     if (button.title !== view.label) button.title = view.label;
   }
-  var api = { describe: describe, render: render, track: track };
+  var api = { describe: describe, render: render, track: track, shortWord: shortWord };
   (global.Castor || (global.Castor = {})).saveStatus = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
