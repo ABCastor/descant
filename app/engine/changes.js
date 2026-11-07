@@ -347,7 +347,7 @@
           : count + noun + ' changed since your last check here on ' + saveTime(v.base);
         var summary = element('p', 'changes-summary', sentence);
         main.insertBefore(summary, control);
-        // Plain notes under the list, no disclosure triangle (27 Oct).
+        // Plain notes under the list, no disclosure triangle.
         var about = element('div', 'changes-about');
         about.appendChild(element('p', 'changes-help', 'Body text only. Formatting, link addresses and publication fields are not compared.'));
 

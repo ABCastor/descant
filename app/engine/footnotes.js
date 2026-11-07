@@ -193,9 +193,9 @@
     measure.className = 'footnote-margin-measure';
     measure.setAttribute('aria-hidden', 'true');
     measure.textContent = value + '\n';
-    // A side note is written with the article's editor (round 1030, I1). It grows
-    // with its text, keeps its own undo, and the article ignores its keys, so it
-    // needs neither the measuring copy nor the stopped events a textarea needed.
+    // A side note is written with the article's editor. It grows with its text,
+    // keeps its own undo, and the article ignores its keys, so it needs neither a
+    // measuring copy nor stopped events.
     var editorField = Castor.editorField && typeof global.HTMLElement === 'function' && DOC.createElement('div') instanceof global.HTMLElement;
     var field = editorField
       ? Castor.editorField({ name: 'note', className: 'footnote-margin-edit', label: 'Footnote ' + label + ', editable', value: value })

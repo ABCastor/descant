@@ -53,7 +53,7 @@ def config_dir():
 
 def people_file():
     """CASTOR_PEOPLE, else the space's .descant/people.json, else people.json beside the app
-    (where installs made before round 1030 keep it)."""
+    (where an install may still keep it)."""
     named = os.environ.get("CASTOR_PEOPLE")
     if named:
         return Path(named)

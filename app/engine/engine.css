@@ -583,7 +583,7 @@ body {
   padding: var(--page-pad-top, 3.5rem) var(--page-pad-x, 1.25rem) var(--page-pad-bot, 8rem);
 }
 
-/* The article stays still when a panel opens (round 1030, I8). The column is
+/* The article stays still when a panel opens. The column is
    centred on the window, not on the room between the docks: --page-shift moves it
    back by half the difference of the two dock widths. It reads the same animated
    --dock-*-w the grid does, so it holds still through the dock's animation too.
@@ -909,6 +909,18 @@ body {
   font-size: .86em;
   opacity: 1;
 }
+/* a link's reference definition (`[r]: /url`), shown to the writer as its source. The
+   block sets the size and the face, so its painted and its editable text keep one
+   layout; the painted text holds the colour, as a writer note's own span does, so it
+   stays dimmed with the caret in it. Never under 16 px: iOS zooms the page into an
+   editable text smaller than that, and the phone's text is 18 px. */
+.page-column .cw-block.cw-writer-source {
+  font-style: italic;
+  font-size: max(.86em, 16px);
+  opacity: 1;
+}
+.page-column .cw-block.cw-writer-source > p,
+.page-column .cw-block.cw-writer-source .cw-mirror { color: var(--ink-3, #9b9b93); }
 .page-column .cw-writer-only .writer-note {
   color: inherit;
   font-style: inherit;
@@ -996,9 +1008,9 @@ body {
   outline: 1px solid var(--accent-text, var(--accent, #8a6a45));
   outline-offset: 3px;
 }
-/* --- a field written with the article's editor (round 1030, I1) ------------
-   Comments, replies and edits wear the box their textarea wore, with the page's
-   own type, caret and punctuation inside. A side note keeps the note's size and
+/* --- a field written with the article's editor -----------------------------
+   Comments, replies and edits sit in a field's box, with the page's own type,
+   caret and punctuation inside. A side note keeps the note's size and
    no box. */
 .cw-field {
   display: block;
@@ -2097,8 +2109,8 @@ html[data-keys="off"] .shortcut-hint { display: none; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* Centred by its line box, the label's lowercase sat 1.4 px under its node on the
-     vein (round 1030, I6): the face's ascent is taller than its descent. Lifting it
+  /* Centred by its line box, the label's lowercase would sit 1.4 px under its node
+     on the vein: the face's ascent is taller than its descent. Lifting it
      by a tenth of its size puts the x-height's middle on the node at every size. */
   position: relative;
   top: -.1em;
@@ -2510,8 +2522,8 @@ html[data-keys="off"] .shortcut-hint { display: none; }
 .walkthrough-move { cursor: move; touch-action: none; }
 .walkthrough-try { margin-top: .7rem; }
 .walkthrough-try[hidden] { display: none; }
-/* One rule for every step with a target: the ring and its shade together
-   (27 Oct). A menu opened on top of the ring hides both until it closes. */
+/* One rule for every step with a target: the ring and its shade together.
+   A menu opened on top of the ring hides both until it closes. */
 .walkthrough[data-covered="1"] .walkthrough-spotlight { opacity: 0; }
 .walkthrough-status { margin: .7rem 0 0; color: var(--ink-2, #6a6a63); font-size: var(--note-size, 12.5px); }
 .walkthrough-status:empty { display: none; }
@@ -2589,7 +2601,7 @@ mark.commented[data-by] {
   background: color-mix(in srgb, var(--comment-ink) var(--comment-tint), transparent);
 }
 /* Teal is the agent's colour whoever it answers for; a person's chosen colour
-   marks only that person's own comments (decided 15 Oct, kept 27 Oct). */
+   marks only that person's own comments. */
 mark.commented[data-by="agent"] { --comment-ink: var(--comment-author); }
 mark.commented.is-paired[data-by] { --comment-tint: var(--comment-current-tint); }
 mark.commented.is-lifted[data-by] { --comment-tint: var(--comment-current-tint); }
@@ -3011,7 +3023,7 @@ div.castor-prov { margin: 0 0 .45rem; font-size: .78rem; line-height: 1.4; overf
 @media (pointer: coarse) { .castor-shows button { min-height: 44px; } }
 .panel-head .castor-shows { gap: 1rem; align-items: center; }
 /* The view toggles are the panel's own content: a second header row, so the title row
-   reads like every panel's. They start on the content edge, above the filter words (I5). */
+   reads like every panel's. They start on the content edge, above the filter words. */
 .panel-head .castor-shows { order: 1; flex: 1 0 100%; padding-left: 0; }
 /* Never outline cloned inline fragments: that turns a highlighter into boxes.
    The little control, not another rule around the words, identifies a comment. */
@@ -3142,8 +3154,8 @@ mark.is-done > .castor-comment-pin .castor-comment-mark svg { stroke-dasharray: 
 #topbar[data-compact] #more-sheet .word { text-align: left; padding: .45em .6em; }
 #topbar[data-compact] #more-sheet #size-switch { display: flex; }
 #topbar[data-compact] #more-sheet .more-rule { height: 1px; background: var(--rule, #d9dad6); margin: .25rem 0; }
-  /* inside the sheet the harness is no longer competing with the product, so it
-     is read at the same weight as everything else in there */
+  /* inside the sheet the harness does not compete with the product, so it is
+     read at the same weight as everything else in there */
 #topbar[data-compact] #more-sheet .topbar-right {
     display: contents;
   }
@@ -3294,7 +3306,7 @@ mark.is-done > .castor-comment-pin .castor-comment-mark svg { stroke-dasharray: 
 .castor-tab-menu-keys { color: var(--ink-2); font-size: var(--ui-size-sm, 11.5px); }
 #page-article[hidden] { display: none !important; }
 .castor-empty { margin: 3rem auto; padding: 1rem; max-width: 32rem; font-family: var(--font-ui); color: var(--ink); }
-/* F7: the + after the last tab, and the chooser it opens in the sheet. */
+/* The + after the last tab, and the chooser it opens in the sheet. */
 .castor-tab-new { position: sticky; right: 0; z-index: 1; flex: 0 0 auto; min-width: 32px; height: 32px; border: 0; border-radius: 5px; background: none; color: var(--ink-3); font: inherit; font-size: 1.05rem; line-height: 1; cursor: pointer; padding: 0 .4rem; }
 .castor-tab-new { background: var(--paper); box-shadow: -.6rem 0 .5rem -.3rem var(--paper); }
 .castor-tab-new:hover, .castor-tab-new:focus-visible { color: var(--ink); background: var(--pane-solid); }
@@ -3345,12 +3357,12 @@ html #app[data-keyboard="up"] .footline { display: none; }
 .descant-offline-action { display: block; box-sizing: border-box; width: 100%; min-height: 44px; margin: 0 0 .5rem; padding: .6rem .75rem; border: 1px solid var(--ink); border-radius: 3px; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .descant-offline-action:disabled { opacity: .65; }
 .descant-offline-note { margin: .25rem 0 .75rem; font-size: 12px; color: var(--ink-2); }
-/* A tab is its title and its close mark, read as one (round 1030, I6). On the
-   4 px scale: the mark sits 8 px after its title and the next title starts 40 px
-   after the mark, so neighbouring titles no longer run together. The room once
-   kept after every title for the held-⌘ number is gone: the number takes the
-   close mark's place while it shows. The tab is static so the number and the
-   current tab's underline are placed on the item, past the title's clipping. */
+/* A tab is its title and its close mark, read as one. On the 4 px scale: the
+   mark sits 8 px after its title and the next title starts 40 px after the mark,
+   so neighbouring titles do not run together. No room is kept after a title for
+   the held-⌘ number: the number takes the close mark's place while it shows. The
+   tab is static so the number and the current tab's underline are placed on the
+   item, past the title's clipping. */
 .castor-tab-item { --tab-close-w: 28px; }
 #app:is([data-mode="tablet"], [data-mode="phone"]) .castor-tab-item { --tab-close-w: 44px; }
 .castor-tab-item .castor-tab { position: static; padding-right: 8px; }
@@ -3466,7 +3478,7 @@ html[data-keyhint="on"] .castor-tab-item:has(.word-key) .castor-tab-close { visi
 .changes-words mark { color: inherit; background: var(--sel, var(--wash)); border-radius: var(--radius-mark); }
 .changes-screen ::selection { color: var(--paper); background: var(--ink); }
 .changes-done { margin-top: 1rem; font-weight: 600 !important; text-decoration: underline; text-underline-offset: .25em; }
-/* Saved versions read like the article list in Files: plain rows, a wash on hover (27 Oct). */
+/* Saved versions read like the article list in Files: plain rows, a wash on hover. */
 .changes-screen .changes-save { display: flex; width: 100%; box-sizing: border-box; padding: .3rem .35rem; border: 0 !important; border-radius: var(--radius-mark, 2px); background: none; text-align: left; text-decoration: none; color: var(--ink, #23231f); }
 .changes-screen .changes-save:hover, .changes-screen .changes-save:focus-visible { background: var(--pane-hot, rgba(127, 127, 127, .08)); }
 .changes-menu {
@@ -3507,7 +3519,7 @@ html[data-keyhint="on"] .castor-tab-item:has(.word-key) .castor-tab-close { visi
 .changes-side:last-child { padding: .5rem .65rem; }
 .changes-side:last-child h4 { text-decoration: underline; text-underline-offset: .25em; }
 #page-article [data-change-target="1"] { outline: 1px solid var(--ink-2); outline-offset: 6px; border-radius: var(--radius-mark); }
-/* Changes stays last, set apart by space alone (the divider line was removed on 27 Oct). */
+/* Changes stays last, set apart by space alone, with no divider line. */
 .topwords .changes-separated { margin-inline-start: .5rem; }
 #more-sheet .changes-separated { margin-inline-start: 0; margin-block-start: .6rem; padding-block-start: .75rem; border-inline-start: 0; border-top: 1px solid var(--rule); }
 #descant-offline { margin-block-start: 1.75rem; padding-block-start: 1.25rem; border-top: 1px solid var(--rule); }

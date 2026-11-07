@@ -5,7 +5,7 @@ import { json, sameSite } from './web.ts';
 import { isWriter } from './writers.ts';
 import { ARTICLE_RE, PER_MINUTE, PER_DAY, readerMessage } from './rules.ts';
 import { randomId, sha256Hex } from './session.ts';
-export const REACTIONS = ['agree']; // 'question' removed in round 1030: a reply asks better
+export const REACTIONS = ['agree']; // the only reaction: a question is asked better as a reply
 export interface Actor { kind: 'reader'|'founder-capability'; id: string }
 interface Event { seq:number; id:string; actorKey:string; opId:string; requestHash:string; request:string; actor:string; target:string; threadId:number; path:string; slot:string; resultRev:number; state:string; created:string; gitDurable:number }
 // JSON property order is transport detail, not a different operation.

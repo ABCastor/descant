@@ -624,7 +624,7 @@
 
   /* Nothing is shown until the rectangle it is drawn from has stopped moving.
      A panel slide is ~220ms of transition that fires no resize and no scroll,
-     which is exactly what the old single-frame measurement walked into. The
+     which a single-frame measurement would catch mid-slide. The
      loop stops as soon as the box repeats, and stops regardless after 1.8s so a
      world with a forever-running animation cannot hold it open. */
   function settle() {

@@ -567,7 +567,7 @@
   }
 
   /* The chord that switches articles on this machine (commands.js, section 0).
-     A shell without commands.js keeps the old Control chord. */
+     A shell without commands.js falls back to Control plus a number. */
   var cachedTabChord = null, chordSource = null;
   function tabChord() {
     var source = Castor.keys && Castor.keys.tabChord;
@@ -3972,7 +3972,7 @@
        beat of nothing. If the server cannot answer, the embedded block still boots.
        Who is asking is asked in the same beat, because what mounts depends on it. */
     /* The article is asked for as soon as the server has said who is asking, while
-       the offline storage check below still runs (round 1030, I9). What comes back
+       the offline storage check below still runs. What comes back
        is shown only if the writer is the same once that check settles; otherwise it
        is dropped and the article is read again, as it was before. */
     var whoami = askRole().then(function (payload) { applyRole(Castor.roleFrom(payload)); return payload; });

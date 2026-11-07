@@ -1,4 +1,4 @@
-/* Versions (round 1035). A is the article, the only text that publishes; other
+/* Versions. A is the article, the only text that publishes; other
    versions are whole texts kept beside it in drafts/<writer>/, or a saved point
    from history. Versions are read side by side in aligned rows, and a paragraph
    taken from one is an ordinary save of the article. Finish puts unused
@@ -162,7 +162,7 @@
     P.entries.forEach(function (entry) {
       var c = fileVersion(entry), row = versionRow(c, letter(c.key), list.indexOf(c.key) >= 0), tools = node('div', null, 'versions-tools');
       tools.appendChild(button('Edit', function () { return act(function () { return saved().then(function () { return open(entry.path); }); }); }, 'versions-link'));
-      // Only the writer's own, and never the file open in the editor (review 1035 #2).
+      // Only the writer's own, and never the file open in the editor.
       if (mine(entry) && entry.path !== path() && Date.now() - new Date(entry.date).getTime() >= STALE) {
         tools.appendChild(node('span', 'Open since ' + day(entry.date) + '.', 'versions-note'));
         tools.appendChild(button('Put away?', function () { return act(function () { return putAway(entry); }); }, 'versions-link'));

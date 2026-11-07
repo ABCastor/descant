@@ -554,7 +554,7 @@
       '.cw-type-retired-item:first-of-type{margin-top:7px}',
       '.cw-type-retired-item strong{font-weight:600;color:var(--ink,#23231f)}',
       '.cw-type-retired-item span{color:var(--ink-2,rgba(0,0,0,.7))}',
-      '.cw-type-swatches{display:flex;flex-wrap:wrap;gap:8px}',  // touch-sized swatches wrap in a narrow panel (I7)
+      '.cw-type-swatches{display:flex;flex-wrap:wrap;gap:8px}',  // touch-sized swatches wrap in a narrow panel
       '.cw-type-swatch{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;opacity:.75}',
       '.cw-type-swatch input{width:34px;height:22px;padding:0;border:1px solid var(--rule,rgba(0,0,0,.18));',
       'border-radius:4px;background:transparent}',

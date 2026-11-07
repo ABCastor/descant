@@ -1789,7 +1789,7 @@
 
   function cardClicked(event, thread) {
     // Only a control inside the card keeps the click; an article foldout around the
-    // card does not, now that the card itself is the way to its passage (I4).
+    // card does not, now that the card itself is the way to its passage.
     var control = event.target.closest && event.target.closest('button, a, input, textarea, select, summary, details, [contenteditable="true"]');
     var card = event.currentTarget;
     if (control && (!card || !card.contains || card === control || card.contains(control))) return;
@@ -1841,7 +1841,7 @@
        a system that can only record agreement loses every disagreement, and the
        reasoning behind a no never lands in the artifact the way a yes does. */
 
-    // Every message of the thread is shown; a thread has no collapse of its own (I4).
+    // Every message of the thread is shown; a thread has no collapse of its own.
     var replies = thread.replies || [];
     card.appendChild(messageNode(thread,thread,true));
     for (var i = 0; i < replies.length; i++) card.appendChild(messageNode(replies[i], thread, false));
@@ -1892,7 +1892,7 @@
   function pendingControl(button,busy,label){button.classList.toggle('castor-pending',!!busy);button.setAttribute('aria-busy',String(!!busy));button.disabled=!!busy;if(busy)button.textContent=label;return button;}
   function actionBusy(thread,msg,action){return actionRecords().some(function(r){return r.threadId===thread.id&&r.messageRef===(msg&&msg.actions&&msg.actions.messageRef||'')&&r.request.action===action&&S.actionSending[r.opId];});}
 
-  // One unfinished edit per message and writer (F4). Records are ordered by their
+  // One unfinished edit per message and writer. Records are ordered by their
   // last change, or by the time in their id for those written before it was kept.
   function draftTime(r){if(typeof r.updated==='number')return r.updated;var m=/^(?:a|draft)([0-9a-z]+)-/.exec(r.opId||'');return m?parseInt(m[1],36):0;}
   function editDrafts(thread,messageRef){return actionRecords().filter(function(r){return r.threadId===thread.id&&r.messageRef===(messageRef||'')&&!r.submitted&&r.request&&r.request.action==='edit'&&!acknowledgedAction(r,false);}).sort(function(a,b){return draftTime(b)-draftTime(a);});}
@@ -1953,7 +1953,7 @@
     S.actionEditor=editor;editor.persisted=journalAction(record);layout();focusPanelCard(thread.id,textarea);if(textarea.setSelectionRange)try{textarea.setSelectionRange(textarea.value.length,textarea.value.length);}catch(e){}scheduleCommentFocus();
   }
   function messageActions(box,msg,thread,root){var c=actionCapability(),a=msg.actions;function button(row,label,run){var b=el('button',null,label);b.type='button';b.addEventListener('click',function(e){e.stopPropagation();run();});row.appendChild(b);return b;}
-    // One row: reactions and Done, then the message's own Edit and Delete, all in view (F8).
+    // One row: reactions and Done, then the message's own Edit and Delete, all in view.
     var actionRow=el('div','castor-comment-actionrow'),own=null;
     if(c&&a){own=el('div','castor-comment-menu castor-comment-own');if(authorKind(msg)==='human'&&a.permissions.edit&&!a.withdrawn)withIcon(button(own,'Edit',function(){openActionEditor(thread,msg);}),'edit');if(authorKind(msg)==='human'&&a.permissions.withdraw)withIcon(button(own,a.withdrawn?'Restore':'Delete',function(){sendAction(newAction(thread,msg,a.withdrawn?'restore':'withdraw'));}),a.withdrawn?'restore':'delete');if(!own.children.length)own=null;}
     var canResolve=c&&root&&thread.statusActions&&thread.statusActions.canResolve&&c.actor.kind==='founder-capability';
@@ -2439,7 +2439,7 @@
       if (event.relatedTarget && !chooser.contains(event.relatedTarget)) chooser.removeAttribute('open');
     });
     var menu = el('div', 'castor-author-menu');
-    // The menu opens inside the panel and the window (I7): toward whichever side has
+    // The menu opens inside the panel and the window: toward whichever side has
     // room, and never wider than the room there is.
     chooser.addEventListener('toggle', function () {
       if (!chooser.open || !menu.getBoundingClientRect) return;
@@ -3147,7 +3147,7 @@
 
   // "@" completion. The menu owns Enter and Escape while it is open; the composer
   // gets them back the moment it closes, so Enter still means "save".
-  /* Comments, replies and edits are written with the article's editor (I1): same
+  /* Comments, replies and edits are written with the article's editor: same
      type, caret and punctuation as the page. Where that editor cannot run (the
      engine's own tests, which have no real document) the box is a textarea. */
   function writingField(label, placeholder, value) {
@@ -3545,7 +3545,7 @@
   }
 
   /* A quick pass finds exact words only. A comment whose words were since edited
-     would stay unmarked until the panel opened (I3), so once typing pauses a full
+     would stay unmarked until the panel opened, so once typing pauses a full
      pass marks it. It only marks: the panel and the margins are not laid out. */
   function scheduleFullMarks() {
     if (!visibleThreads().some(function (t) { var c = S.resolutionCache[t.id]; return c && c.provisional && !c.result; })) return;
@@ -3913,9 +3913,9 @@
       applyMarks(true, event.blockId);
       global.requestAnimationFrame(syncTouchPeek);
     });
-    // A repainted block comes back without its marks (I3: they vanished until the
-    // paragraph was clicked again). One block is marked at once; a whole page waits
-    // for the next layout.
+    // A repainted block comes back without its marks, so they are drawn again here
+    // rather than when the paragraph is next clicked. One block is marked at once; a
+    // whole page waits for the next layout.
     on('editor:paint', function (event) {
       if (!S.threads.length && !S.workspace.length) return;
       if (!event || !event.blockId) { schedule(); return; }

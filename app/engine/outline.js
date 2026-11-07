@@ -312,8 +312,8 @@
     if (control) control.title = folded ? 'Open this section' : 'Fold this section';
     if (!group) return render(restoreFocus || heading.id);
 
-    /* The hidden-count badge belongs to the folded state, so it is written here
-       rather than waiting for a render that no longer happens. */
+    /* The hidden-count badge belongs to the folded state, so it is written here:
+       this path does not render the outline again. */
     var badge = row && row.querySelector('.hidden-count');
     if (folded && row && !badge) {
       row.appendChild(el('span', 'hidden-count', countUnder(heading) + ' hidden'));

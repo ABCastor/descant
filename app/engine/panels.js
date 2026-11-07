@@ -599,7 +599,7 @@
     var grab = inner.querySelector('.sheet-grabber');
     var ids = visibleIds(side);
     /* Collapse exists to share a column between stacked panels. A panel alone in
-       its column always shows its body and offers no Collapse (round 1030). */
+       its column always shows its body and offers no Collapse. */
     var stacked = ids.length > 1;
     if (!stacked) ids.forEach(function (id) { delete state.collapsed[id]; });
 

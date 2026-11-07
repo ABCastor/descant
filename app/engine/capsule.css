@@ -250,7 +250,7 @@
 }
 #app[data-mode="desktop"] .page-column { --page-shift: 0px; }
 
-/* Side notes leave the right margin while a right card is open (L3): the left
+/* Side notes leave the right margin while a right card is open: the left
    margin takes them, and the article stays where it is. With cards on both
    sides there is no margin left, so the notes leave the margin altogether and a
    tap on the number opens the note under its paragraph (footnotes.js reads the
@@ -439,7 +439,7 @@
 #app[data-mode] :is(#topbar.mast .topwords, #footline .topwords, .command-island) [data-comment-peek] { padding-inline: 4px; gap: 4px; }
 #app #footline .topwords [data-comment-peek] .comment-preview-text { display: none; }
 
-/* ---- Versions: the panel and the comparison (round 1035) -------------------
+/* ---- Versions: the panel and the comparison ---------------------------------
    A is the article; B and C sit beside it in aligned rows, one scroll for all.
    Open versions show the Versions word in every preset. */
 #app[data-preset] .topwords [data-panel="drafts"][data-open]:not([hidden]) { display: inline-flex; }

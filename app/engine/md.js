@@ -223,7 +223,9 @@
     const line = lines[index] || '';
     return Boolean(
       headingMatch(line) || fenceMatch(line) || (listMatch(line) && (paragraphStart == null || listMatch(line).indent < 4)) || (isHr(line) && !/^(?: {4}| {0,3}\t)/.test(line)) ||
-      /^\s{0,3}>/.test(line) || /^\[\^[^\]]+\]:/.test(line) || (referenceMatch(line) && !referenceInsideCode(lines, paragraphStart, index)) ||
+      /^\s{0,3}>/.test(line) || /^\[\^[^\]]+\]:/.test(line) ||
+      // A link reference definition cannot interrupt a paragraph (CommonMark, and the site).
+      (paragraphStart == null && referenceMatch(line) && !referenceInsideCode(lines, paragraphStart, index)) ||
       isTableStart(lines, index) || htmlBlockEnd(line, true) || /^\s*!\[\[[\s\S]+\]\]\s*$/.test(line)
     );
   }
@@ -311,7 +313,11 @@
         continue;
       }
 
-      const reference = referenceMatch(lines[index]);
+      // Right under a table row or a footnote definition, with no blank line between,
+      // the line is that table's row or that note's text on the site: not a definition.
+      const continues = start > 0 && lines[start - 1].trim() !== '' && blocks.length > 0 &&
+        (blocks[blocks.length - 1].type === 'table' || blocks[blocks.length - 1].type === 'footnote-def');
+      const reference = !continues && referenceMatch(lines[index]);
       if (reference) {
         index += 1;
         blocks.push({ type: 'reference-def', source: lines[start], text: '', meta: reference });

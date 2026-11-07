@@ -169,8 +169,8 @@
   function el(tag, text) { var n = D.createElement(tag); if (text != null) n.textContent = text; return n; }
   function button(text, fn) { var n = el('button', text); n.type = 'button'; n.addEventListener('click', fn); return n; }
   // A founder is whoever the server confirmed, even before "Who's writing?" is answered:
-  // the public writer is already signed in as one founder (10 Oct: the marker never
-  // appeared there until the dialog was answered).
+  // the public writer is already signed in as one founder, so the marker shows there
+  // before the dialog is answered.
   function isWriter(id) { return !!(C.people && C.people.isWriter(id)); }
   function founder() {
     var role = C.role || {};

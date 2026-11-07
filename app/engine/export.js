@@ -3,7 +3,7 @@
   'use strict';
   var Castor = global.Castor || (global.Castor = {});
   var OMIT = ['cw-mirror', 'cw-mk', 'footnote-ref', 'cw-fnref', 'footnote-definition', 'footnote-margin', 'footnote-inline',
-    'footnote-back', 'writer-note', 'castor-thread', 'castor-inline', 'castor-comments', 'cw-selmenu', 'cw-picker'];
+    'footnote-back', 'writer-note', 'cw-writer-source', 'castor-thread', 'castor-inline', 'castor-comments', 'cw-selmenu', 'cw-picker'];
 
   function currentSource() {
     var editor = Castor.editor;

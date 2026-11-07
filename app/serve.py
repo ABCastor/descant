@@ -1376,7 +1376,7 @@ def comment_threads(path):
 
 # Comment actions use immutable per-operation Git records. Shared thread revisions
 # belong to Descant; importing its event is a later durability boundary.
-COMMENT_REACTIONS = ("agree",)  # "question" was removed in round 1030: it carried no meaning a reply does not
+COMMENT_REACTIONS = ("agree",)  # the only reaction: a question is asked better as a reply
 
 
 def valid_comment_action_json(value):
@@ -3293,7 +3293,7 @@ class Handler(SimpleHTTPRequestHandler):
             header = draft_header(text)
             if action == "away":
                 if b"\r" in target.read_bytes():
-                    return self.reply(422, {"error": CRLF_VERSION})  # it could never be brought back (review 2 N3)
+                    return self.reply(422, {"error": CRLF_VERSION})  # it could never be brought back
                 # Put away: the file leaves the list in one commit; its text stays one commit back.
                 sha = commit_files({target: None}, "Put away version " + target.name, writing_session(who))
                 return self.reply(200, {"path": path, "ok": True, "sha": sha})
@@ -3713,7 +3713,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.reply(400, {"ok": False, "reason": "invalid-taken",
                                     "error": "taken names up to three versions of this article as path@commit"})
         if taken:
-            # A take never brings a CR into the article (review 2 N1); the page compares LF text.
+            # A take never brings a CR into the article; the page compares LF text.
             here = REPO_ROOT / path
             if markdown.count("\r") > (here.read_text("utf-8").count("\r") if here.is_file() else 0):
                 return self.reply(400, {"ok": False, "reason": "taken-line-endings",

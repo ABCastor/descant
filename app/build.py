@@ -107,8 +107,7 @@ def heading_presets(world):
     if ramp is None:
         raise SystemExit(
             "%s/theme.css must declare --level-1..6 in BOTH themes; that ramp is the "
-            "world's own and nothing else may state it. (A hand-written table used to "
-            "live here and disagreed with two themes.)" % world)
+            "world's own and nothing else may state it." % world)
     out = []
     for i, name in enumerate(ramp["names"]):
         out.append({

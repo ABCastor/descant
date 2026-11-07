@@ -283,7 +283,7 @@
     return result;
   }
 
-  /* --- versions side by side (round 1035) ---------------------------------------
+  /* --- versions side by side ---------------------------------------------------
      Rows for reading the article (A) beside up to two other versions. Each row
      holds a run of A's paragraphs and, per version, the paragraphs that answer
      them: one to one, a split (one A paragraph, two in B), a join (two in A, one

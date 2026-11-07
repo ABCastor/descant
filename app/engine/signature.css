@@ -165,7 +165,7 @@ html[data-resolved="light"] .find{color:var(--human)}
 .find > *{background:none;border:0;padding:.35rem;color:inherit;font:inherit;cursor:pointer;display:flex;align-items:center}
 .find svg{display:block;width:1.15rem;height:1.15rem}
 .bar-tools :is(.settings-toggle,.find-lens,.theme-toggle){position:relative;box-sizing:border-box;padding:0;width:24.4px;min-width:24.4px;height:44px;display:flex;align-items:flex-end;justify-content:center;padding-bottom:8.5px;border-radius:2px;opacity:1;color:inherit}
-/* Touch keeps the desktop spacing (round 1029); each tool answers across its slot, gaps included, 44px tall. */
+/* Touch keeps the desktop spacing; each tool answers across its slot, gaps included, 44px tall. */
 .bar-tools :is(.settings-toggle,.find-lens,.theme-toggle)::after{content:"";position:absolute;inset:0 -3px}
 .bar-tools{color:var(--human)}
 html[data-resolved="dark"] .bar-tools{color:var(--machine)}
@@ -412,7 +412,7 @@ html[data-keys="off"] :is(#set-shortcuts,#castor-shortcuts,.shortcut-row kbd){di
 
 /* Chip stands ON the line: his drawing's ground (y 88 of 92) lands on the rule's centre. "by Castor" sits 8px
    beside him; Castor's asterisk is typed, not drawn: the Literata glyph at the word's own size and weight, in
-   --human, on the word's baseline, exactly where typing "Castor*" puts it (16 September 2026). Under the line,
+   --human, on the word's baseline, exactly where typing "Castor*" puts it. Under the line,
    bottom-left like a footnote, "we give a dam*": the words start 2px from Chip's left edge with their cap line
    10px under the rule's centre, and the drawn underline lives inside the words, 1px past each end, never under
    the asterisk. No arrow. Vertical geometry rides the browser's cap and baseline edges (text-box: trim-both
@@ -434,11 +434,11 @@ html[data-keys="off"] :is(#set-shortcuts,#castor-shortcuts,.shortcut-row kbd){di
 .sig .by{display:flex;align-items:flex-end;gap:6px}
 .sig .byt{font-size:14px;color:var(--quiet)}
 .sig .lock{display:flex;align-items:baseline}
-.sig a.lock{color:inherit;text-decoration:none}  /* the lockup is the way to the studio, on every product (16 September 2026) */
+.sig a.lock{color:inherit;text-decoration:none}  /* the lockup is the way to the studio, on every product */
 .sig .wordmark{font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;letter-spacing:-.055em;font-size:30px;color:var(--ink)}
 .sig .ast{display:block;flex:0 0 auto}
 .sig .quip .ast{width:8.89px;height:8.89px;margin:-1.2px 0 0 .5px}  /* a typed asterisk's size in Rando Sans at 17px: a 7.04px span, its top on the ascender; six arms hold at 1x from a 6.8px span */
-.sig .lock .ast{display:inline;font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;font-size:30px;font-style:normal;line-height:1;color:var(--human);margin:0;text-box:trim-both cap alphabetic}  /* a typed asterisk, as everywhere on the site since 16 September 2026: the glyph, the word's size, on the baseline. It carries the word's own trim so both boxes are cap-to-baseline: without it the untrimmed glyph box hangs a descender below the baseline, and "by" and the line itself move with it */
+.sig .lock .ast{display:inline;font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;font-size:30px;font-style:normal;line-height:1;color:var(--human);margin:0;text-box:trim-both cap alphabetic}  /* a typed asterisk, as everywhere on the site: the glyph, the word's size, on the baseline. It carries the word's own trim so both boxes are cap-to-baseline: without it the untrimmed glyph box hangs a descender below the baseline, and "by" and the line itself move with it */
 .sig .ast svg{display:block;width:100%;height:100%}
 .sig .ast .star{fill:var(--human)}
 .sig .ast .key{fill:var(--paper);stroke:var(--paper)}

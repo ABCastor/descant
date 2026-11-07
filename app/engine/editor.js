@@ -50,7 +50,7 @@
       };
     })();
   }
-  /* One editor, mounted as often as it is needed (round 1030, I1): the article,
+  /* One editor, mounted as often as it is needed: the article,
      and every comment, reply and side note, so they all write the same way. Each
      call below has its own blocks, history, caret and overlays. Only the article
      ('article') talks on Castor.bus, so a comment being typed never reads as the
@@ -139,7 +139,57 @@
   function liveHtml(block) {
     var parsed = MD().parse(block.source, { editSource: true, showWriterNotes: opts.showWriterNotes !== false,
       footnoteNumbers: doc && doc.footnoteNumbers, footnotes: doc && doc.footnotes, references: currentReferences() });
+    // A reference definition is all Markdown, so it would be all hidden marks: the
+    // writer edits its plain source, dimmed by its block (definitionSource below).
+    if (definitionsOnly(parsed)) return standsAsDefinition(block) ? WRITER_LINE + esc(block.source) + '</p>' : strandedHtml(block, true);
     return (parsed.blocks.map(function (b) { return b.html; }).join('') || '<p><br></p>').replace(/ data-block-id="[^"]*"/g, '');
+  }
+  // Only link reference definitions (`[r]: /url`): lines that draw nothing in the article.
+  var WRITER_LINE = '<p class="cw-writer-line">';
+  function definitionsOnly(parsed) {
+    return !!(parsed && parsed.blocks.length) && parsed.blocks.every(function (b) { return b.type === 'reference-def'; });
+  }
+  /* A block of reference definitions is shown to the writer as its source, dimmed like
+     a writer note, whether or not the caret is in it. The block carries the dimming, so
+     the painted text and the editable text have one size and one face. */
+  function markWriterSource(wrap, on) {
+    var list = wrap && wrap.classList, change = list && list[on ? 'add' : 'remove'];
+    if (change) change.call(list, 'cw-writer-source');
+  }
+  function definitionSource(source) {
+    source = String(source || '');
+    if (source.indexOf(']:') < 0) return false;
+    try { return definitionsOnly(MD().parse(source)); } catch (e) { return false; }
+  }
+  /* A block of definitions stands as one only if it still is once the lines joined to
+     it from above by single line breaks are read with it: a definition cannot
+     interrupt a paragraph, a table or a footnote, which then print it on the site. */
+  function standsAsDefinition(b, text) {
+    if (!b) return false;
+    text = text == null ? b.source : text;
+    if (!definitionSource(text)) return false;
+    var at = idx(b.id), above = '';
+    for (var i = at; i > 0; i--) {
+      var gap = typeof blocks[i].sep === 'string' ? blocks[i].sep : '\n\n';
+      if (!gap || /\n[ \t]*\n/.test(gap)) break;
+      above = blocks[i - 1].source + gap + above;
+    }
+    if (!above) return true;
+    try {
+      var all = MD().parse(above + text).blocks, own = MD().parse(text).blocks.length;
+      return all.length >= own && all.slice(-own).every(function (x) { return x.type === 'reference-def'; });
+    } catch (e) { return false; }
+  }
+  // The paragraph text the site prints for such a stranded line.
+  function strandedHtml(b, editing) {
+    return '<p>' + MD().renderInline(b.source, { editSource: !!editing, references: doc && doc.references }) + '</p>';
+  }
+  /* Such a block is written as source, like a code fence: what the writer types is
+     what is saved, with no escape, no white-space span and no auto-closed pair. Only
+     while the result is still a definition: the moment an edit would leave prose,
+     that edit goes through the paragraph path and is escaped like any paragraph. */
+  function editedAsSource(b, after) {
+    return typeof standsAsDefinition === 'function' && standsAsDefinition(b, after);
   }
 
   function editingHtml(html, source) {
@@ -153,7 +203,7 @@
     // A plain paragraph needs no formatting nodes. Keep its native text node
     // across keystrokes; the mirror still owns the reader's paragraph box.
     if (html === '<p><br></p>') return '';
-    var plain = /^<p>([^<]*)<\/p>$/.exec(html);
+    var plain = /^<p(?: class="cw-writer-line")?>([^<]*)<\/p>$/.exec(html);
     return plain ? plain[1] : html;
   }
 
@@ -317,7 +367,7 @@
       // box without adding a child node, so `textOf(host)` still sees exactly
       // one browser-owned text node.
       '.cw-edit::after,.cw-mirror .cw-live:not(.cw-lines)::after{content:"\\200B"}',
-      '.cw-writer-only{opacity:.45;font-style:italic}',
+      '.cw-writer-only,.cw-writer-source{opacity:.45;font-style:italic}',
       '.cw-line{min-height:1em}',
       '.cw-lines{white-space:pre-wrap}',
       '.cw-t-table,.cw-t-code{font-family:var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}',
@@ -393,6 +443,10 @@
 
   function writerOnly(b) {
     if (!b || /^#{1,6}[ \t]*$/.test(b.source) || b.type === 'code' || b.type === 'frontmatter') return false;
+    /* A block that renders nothing at all, such as a link's reference definition, is
+       still in the file: the caret, a click and Backspace reach it, so the writer
+       must see it. One not rendered yet is not one that renders nothing. */
+    if (rendered[b.id] === '') return /[^\s]/.test(String(b.source || ''));
     var html = String(rendered[b.id] || '');
     if (!html || DRAWS_WITHOUT_TEXT.test(html)) return false;
     if (/[^\s]/.test(html.replace(/<[^>]*>/g, ''))) return false;
@@ -474,6 +528,11 @@
     reconcileIds(blocks, fresh.blocks);
     doc = fresh;
     fresh.blocks.forEach(function (b) { rawHtml[b.id] = null; rendered[b.id] = renderFor(b, md); });
+    // A block of definitions an edit has left joined to prose is that prose's text on
+    // the site. Until the next mount draws the boundaries again, it reads as text here.
+    blocks.forEach(function (b) {
+      if (definitionSource(b.source) && !standsAsDefinition(b)) { rawHtml[b.id] = null; rendered[b.id] = strandedHtml(b, false); }
+    });
     syncHeadings();
     return fresh;
   }
@@ -539,7 +598,8 @@
     var md = MD(), out = '';
     try { out = md.blockToHtml(b, { showWriterNotes: true }) || ''; } catch (e) { out = ''; }
     if (out.replace(/<[^>]*>/g, '').trim()) return out;
-    return esc(String(b.source || '').replace(/%%/g, '').trim());
+    // An empty note (`%%%%`) shows its markers, so the writer sees what the caret reaches.
+    return esc(String(b.source || '').replace(/%%/g, '').trim() || String(b.source || '').trim());
   }
 
   function focusedContents(wrap, b) {
@@ -577,6 +637,9 @@
     var mirror = wrap.querySelector('.cw-mirror');
     if (mirror) {
       var html = liveHtml(b), host = wrap.querySelector('.cw-edit');
+      // A reference definition's block is dimmed while it is written, too.
+      var writerLine = /^<p class="cw-writer-line">/.test(html), marks = wrap.classList;
+      if (marks && marks[writerLine ? 'add' : 'remove']) marks[writerLine ? 'add' : 'remove']('cw-writer-source');
       if (host && host.childNodes && !composing) {
         var next = document.createElement('div'); next.innerHTML = editingHtml(html, b.source);
         // A plain insertion only changes text. Keep WebKit's live nodes and IME
@@ -612,6 +675,8 @@
     } else {
       wrap.classList.remove('cw-focused');
       var html = rendered[b.id] != null ? rendered[b.id] : MD().blockToHtml(b);
+      var shown = writerOnly(b) && opts.showWriterNotes !== false && standsAsDefinition(b);
+      markWriterSource(wrap, shown);
       // Frontmatter and %%writer notes%% render as nothing for a reader. For a
       // WRITER they must still be visible and clickable, or a block exists in
       // the file that cannot be reached in the page. Show the source, dimmed.
@@ -620,6 +685,7 @@
          string and an empty paragraph on the page. */
       wrap.innerHTML = !writerOnly(b) ? html
         : (opts.showWriterNotes === false ? ''
+          : shown ? '<p>' + esc(b.source) + '</p>'
           : '<div class="cw-writer-only">' + writerNoteHtml(b) + '</div>');
     }
     wrap.setAttribute('data-type', b.type);
@@ -635,9 +701,11 @@
       // One HTML parse mounts every reading block; all blocks can accept typing immediately.
       page.innerHTML = blocks.filter(visible).map(function (b) {
         var html = rendered[b.id] != null ? rendered[b.id] : MD().blockToHtml(b);
+        var shown = writerOnly(b) && opts.showWriterNotes !== false && standsAsDefinition(b);
         if (writerOnly(b)) html = opts.showWriterNotes === false ? ''
+          : shown ? '<p>' + esc(b.source) + '</p>'
           : '<div class="cw-writer-only">' + writerNoteHtml(b) + '</div>';
-        return '<div class="cw-block" data-block-id="' + esc(b.id) + '" data-type="' + esc(b.type) + '">' + html + '</div>';
+        return '<div class="cw-block' + (shown ? ' cw-writer-source' : '') + '" data-block-id="' + esc(b.id) + '" data-type="' + esc(b.type) + '">' + html + '</div>';
       }).join('');
       if (bus && bus.emit) bus.emit('editor:paint', {});
       return;
@@ -1673,6 +1741,14 @@
       var nativeText = raw.slice(nativeSpan.start, nativeEnd);
       if (nativeText.replace(/\u00a0/g, ' ') === intent.data) raw = raw.slice(0, nativeSpan.start) + intent.data + raw.slice(nativeEnd);
     }
+    // A block shown as its source keeps its spaces: WebKit repaints the space beside a
+    // deleted character as NBSP, which the writer never typed. That holds for the edit
+    // that leaves a definition too, or retyping its colon would save the NBSP in its URL.
+    if (raw.includes('\u00a0') && !(intent && intent.data && intent.data.includes('\u00a0')) && typeof editedAsSource === 'function') {
+      var paintedSpan = changedSpan(b.source, raw), paintedEnd = paintedSpan.start + paintedSpan.insertedLength;
+      var spaced = raw.slice(0, paintedSpan.start) + raw.slice(paintedSpan.start, paintedEnd).replace(/\u00a0/g, ' ') + raw.slice(paintedEnd);
+      if (spaced !== raw && (editedAsSource(b, spaced) || typeof standsAsDefinition === 'function' && standsAsDefinition(b))) raw = spaced;
+    }
     var intendedEdit = intent && intent.selectionEdit;
     var intendedSource = intendedEdit && intent.data != null ? b.source.slice(0, intendedEdit.start) + intent.data + b.source.slice(intendedEdit.end) : null;
     if (raw === b.source && (intendedSource == null || intendedSource === b.source)) { if (restoreOffset != null) setCaret(b.id, restoreOffset); return; }
@@ -1777,6 +1853,8 @@
     var b = blockOf(id), c = caretSource();
     if (!b || !c) return false;
 
+    // In a block written as source, every character is itself: no auto-close.
+    if (typeof editedAsSource === 'function' && editedAsSource(b, b.source.slice(0, c.start) + ch + b.source.slice(c.end))) { replaceVisible(id, c.start, c.end, ch, history === false ? false : 'type'); return true; }
     // Style delimiters are literal writer input, never an implicit command.
     if (ch === '*' || ch === '_' || ch === '`') {
       replaceVisible(id, c.start, c.end, ch, history === false ? false : 'type'); return true;
@@ -2586,8 +2664,26 @@
       }
     }
     // A fenced block has one body. Its fences and info string are structural,
-    // never inline Markdown and never candidates for a paragraph split.
-    if (b.type === 'code' || b.type === 'frontmatter' || b.type === 'table' || /^ {0,3}</.test(source) && MD().parse(source).blocks[0]?.meta.htmlBlock) {
+    // never inline Markdown and never candidates for a paragraph split. A block
+    // of reference definitions is written as source too (editedAsSource).
+    var asSource = !surface && (action.kind === 'text' || action.kind === 'split') && typeof editedAsSource === 'function' &&
+      (action.kind === 'text' ? editedAsSource(b, source.slice(0, start) + (action.text || '') + source.slice(end))
+        : editedAsSource(b, source.slice(0, start)) && (!source.slice(end).trim() || definitionSource(source.slice(end))));
+    // An edit that turns every definition of the block into prose removes their labels.
+    // Escape the paragraph against the references the page will have, so `[r]` is not
+    // escaped against the very definition this edit takes away.
+    var after = action.kind === 'text' && source.slice(0, start) + (action.text || '') + source.slice(end);
+    if (!asSource && !surface && after !== false && typeof standsAsDefinition === 'function' && standsAsDefinition(b) &&
+        !MD().parse(after).blocks.some(function (x) { return x.type === 'reference-def'; })) {
+      var leftBehind = '';
+      for (var li = 0; li < blocks.length; li++) {
+        var other = blocks[li], otherSource = other.id === b.id ? after : other.source;
+        if (other.empty && !otherSource) continue;
+        leftBehind += (typeof other.sep === 'string' ? other.sep : (li === 0 ? '' : '\n\n')) + otherSource;
+      }
+      try { doc.references = MD().parse(leftBehind + tail).references || {}; } catch (e) { /* keep the page's */ }
+    }
+    if (asSource || b.type === 'code' || b.type === 'frontmatter' || b.type === 'table' || /^ {0,3}</.test(source) && MD().parse(source).blocks[0]?.meta.htmlBlock) {
       if (action.kind !== 'text' && action.kind !== 'split') {
         if (b.type === 'table' && action.kind === 'style' && end > start) {
           // Project just one cell through the ordinary inline transaction.
@@ -4244,7 +4340,9 @@
     if (!c) return;
     var pasted = replaceVisible(focusId, c.start, c.end, text.replace(/\r\n?/g, '\n'), 'paste');
     var b = blockOf(focusId);
-    var parts = /\n\s*\n/.test(b.source) ? MD().parse(b.source).blocks : [];
+    // Pasted paragraphs become blocks, and so do pasted definitions, one line each as
+    // when the file is opened: an edit to one of them is then judged on its own line.
+    var parts = /\n\s*\n/.test(b.source) || b.source.indexOf('\n') >= 0 && typeof standsAsDefinition === 'function' && standsAsDefinition(b) ? MD().parse(b.source).blocks : [];
     if (parts.length > 1) {
       var pastedId = focusId, index = idx(pastedId), wanted = pasted ? pasted.caret : b.source.length;
       var cursor = 0, partIndex = 0, localCaret = wanted;
@@ -5398,7 +5496,7 @@
   Castor.createEditor = function (name) { instanceCount += 1; return createEditor(String(name || 'field') + instanceCount); };
   createEditor('article');
 
-  /* A field written with the article's editor (I1): a comment, a reply, a side
+  /* A field written with the article's editor: a comment, a reply, a side
      note. To its caller it is the textarea it replaces -- value, placeholder,
      focus(), and keydown/input/blur on its element -- so their flows stay as they
      were. Two event details make that true: the caller's keydown runs before the

@@ -74,7 +74,7 @@ def update(space):
         fail("%s has no Descant app to update. Install it first, without --update." % space)
     old_people = descant / "app" / "people.json"
     if old_people.is_file() and not (descant / "people.json").exists():
-        shutil.copy2(old_people, descant / "people.json")      # installs made before round 1030
+        shutil.copy2(old_people, descant / "people.json")      # an install that kept people.json beside the app
     fresh, previous = descant / "app.new", descant / "app.previous"
     for leftover in (fresh, previous):
         if leftover.exists():
