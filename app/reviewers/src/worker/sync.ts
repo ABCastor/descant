@@ -12,7 +12,7 @@ import { actionSync } from "./actions.ts";
 import { sharing } from './sharing.ts';
 import { ARTICLE_RE, carriesNotes, isTestArticle, testArticle } from "./rules.ts";
 import { newToken, sameText, sha256Hex } from "./session.ts";
-import { sharedPaths, type Env } from "./store.ts";
+import { anchorParts, sharedPaths, type Env } from "./store.ts";
 import { json } from "./web.ts";
 import { WRITER_KEY, isWriter } from "./writers.ts";
 
@@ -100,7 +100,8 @@ function threadOf(v: unknown, env: Env): string | undefined {
   });
   return JSON.stringify({
     ...display(t), id: "",
-    anchor: { quote: s(a.quote), prefix: s(a.prefix), suffix: s(a.suffix), blockText: s(a.blockText), version: s(a.version) },
+    anchor: { quote: s(a.quote), prefix: s(a.prefix), suffix: s(a.suffix), blockText: s(a.blockText), version: s(a.version),
+      ...(anchorParts(a.more).length ? { more: anchorParts(a.more).map((p) => ({ quote: s(p.quote), suffix: s(p.suffix), blockText: s(p.blockText) })) } : {}) },
     messageRef:s(t.messageRef),writer:s(t.writer),author: s(t.author), by: t.by === "agent" ? "agent" : t.by === "human" ? "human" : "", text: s(t.text), created: s(t.created),
     replies: replies.map((r) => {
       const m = (r && typeof r === "object" ? r : {}) as Record<string, unknown>;

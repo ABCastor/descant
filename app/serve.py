@@ -1349,6 +1349,13 @@ def comment_document(target, text=None):
         thread["writer"] = str(meta["writer"])
     if meta.get("client_id"):
         thread["clientId"] = str(meta["client_id"])
+    if anchor.get("more"):
+        try:
+            parts = comment_parts(json.loads(anchor["more"]))
+        except ValueError:
+            parts = []
+        if parts:
+            thread["anchor"]["more"] = parts
     if anchor.get("chosen_place"):
         try:
             place = comment_place(json.loads(anchor["chosen_place"]))
@@ -1956,6 +1963,7 @@ def canonical_comment(thread, identifier, previous=None):
             "blockText": str(anchor.get("blockText") or ""),
             "version": str(anchor.get("version") or ""),
             **({"chosenPlace": comment_place(anchor.get("chosenPlace"))} if comment_place(anchor.get("chosenPlace")) else {}),
+            **({"more": comment_parts(anchor.get("more"))} if comment_parts(anchor.get("more")) else {}),
         },
         "author": str(thread.get("author") or "You"),
         "by": "agent" if thread.get("by") == "agent" else (
@@ -1987,6 +1995,35 @@ def comment_quote(value):
     return json.dumps(str(value or ""), ensure_ascii=False)
 
 
+def comment_parts(value):
+    """A passage's later parts, tidied as comments.js anchorParts() tidies them: at most
+    ten {quote, suffix, blockText}, each with words."""
+    if not isinstance(value, list):
+        return []
+    parts = [part for part in value if isinstance(part, dict) and isinstance(part.get("quote"), str) and part["quote"]][:10]
+    return [{"quote": part["quote"], "suffix": part["suffix"] if isinstance(part.get("suffix"), str) else "",
+             "blockText": part["blockText"] if isinstance(part.get("blockText"), str) else ""} for part in parts]
+
+
+def reader_anchor(anchor, limits):
+    """A reviewer's or reader's anchor with every string bounded (a number, or a limit per
+    field). A passage's parts are bounded like its paragraph, its first part's quote too.
+    A chosen place is kept as comment_place() reads it, its strings bounded the same way."""
+    if not isinstance(limits, dict):
+        limits = dict.fromkeys(("quote", "prefix", "suffix", "blockText", "version"), limits)
+    if anchor.get("more"):
+        limits = dict(limits, quote=limits["blockText"])
+    out = {key: reviewer_string(value, limits[key], "the quoted passage") for key, value in anchor.items() if key not in ("more", "chosenPlace")}
+    place = comment_place(anchor.get("chosenPlace"))
+    if place:
+        out["chosenPlace"] = dict(place, **{key: reviewer_string(place[key], limits[limit], "the chosen place")
+                                            for key, limit in (("blockId", "prefix"), ("blockText", "blockText"))})
+    if anchor.get("more"):
+        out["more"] = [{key: reviewer_string(part[key], limits[key], "the quoted passage") for key in ("quote", "suffix", "blockText")}
+                       for part in anchor["more"]]
+    return out
+
+
 def render_comment(document, thread):
     """Render the fixture grammar canonically; parsing it yields the same UI object."""
     anchor = thread["anchor"]
@@ -2008,6 +2045,8 @@ def render_comment(document, thread):
     ]
     if anchor.get("chosenPlace"):
         lines.append("  chosen_place: %s" % comment_quote(json.dumps(anchor["chosenPlace"], ensure_ascii=False)))
+    if anchor.get("more"):
+        lines.append("  more: %s" % comment_quote(json.dumps(anchor["more"], ensure_ascii=False)))
     if thread.get("reanchoredFrom"):
         lines.append("  reanchored_from: %s" % comment_quote(thread["reanchoredFrom"]))
     if thread.get("refersTo"):
@@ -2896,7 +2935,8 @@ class Handler(SimpleHTTPRequestHandler):
             for owner, old in list(self._offline_packs.items()):
                 if old['until'] < now: del self._offline_packs[owner]
             retained = self._offline_packs.get(principal)
-            if retained and retained['snapshot'] == generation:
+            identity = writer_origin.identity(principal, self.headers)
+            if retained and retained['snapshot'] == generation and retained['identity'] == identity:
                 records, total, articles, drafts, threads = (retained[k] for k in
                     ('records', 'total', 'articles', 'drafts', 'threads'))
             else:
@@ -2933,8 +2973,6 @@ class Handler(SimpleHTTPRequestHandler):
                     return capture('/write/api/' + route + ('?' + urlencode(sorted(params.items())) if params else ''), method)
 
                 # whoami is intentionally constructed identically to the writer gate.
-                identity = {"role": "founder", "id": "founder:" + principal,
-                            "who": principal, "publicWriter": True}
                 body = json.dumps(identity).encode('utf-8')
                 records.append(('/write/api/whoami', body, {'Content-Type': 'application/json; charset=utf-8'}))
                 total += len(body)
@@ -2982,7 +3020,7 @@ class Handler(SimpleHTTPRequestHandler):
                                 drafts += 1
                 if writer_origin.snapshot(source_app) != generation:
                     return self.reply(409, {"error": "offline-snapshot-changed"})
-                self._offline_packs[principal] = dict(snapshot=generation, until=time.monotonic() + 120,
+                self._offline_packs[principal] = dict(snapshot=generation, identity=identity, until=time.monotonic() + 120,
                     records=records, total=total, articles=articles, drafts=drafts, threads=threads)
             # Byte cursor is bounded by total data; empty objects still get rows.
             offset, end, chunks = int(cursor), min(int(cursor) + page_size, total), []
@@ -4465,8 +4503,7 @@ class ReviewerHandler(Handler):
         if previous is None:
             # A new thread is wholly the reviewer's: their name, open, dated by the
             # server, and no note or re-anchoring record, which only the founders keep.
-            anchor = {key: reviewer_string(value, REVIEW_ANCHOR_MAX, "the quoted passage")
-                      for key, value in thread["anchor"].items()}
+            anchor = reader_anchor(thread["anchor"], REVIEW_ANCHOR_MAX)
             thread.pop("writer", None)
             thread.pop("messageRef", None)
             thread.update(anchor=anchor, author=name, by="human",
@@ -4956,8 +4993,7 @@ def descant_commit(path, name, email, batch):
                                                 **comment_display_fields(comment.get("author") or {}),
                                                 "text": "", "created": created, "replies": [],
                                                 "status": "open", "done": False}, number)
-                    thread["anchor"] = {key: reviewer_string(value, DESCANT_LIMITS[key], "the quoted passage")
-                                        for key, value in thread["anchor"].items()}
+                    thread["anchor"] = reader_anchor(thread["anchor"], DESCANT_LIMITS)
                     thread["text"] = reviewer_string(reviewer_message(comment.get("text")), DESCANT_TEXT_MAX, "the comment")
                     thread["refersTo"] = reviewer_string(comment.get("refersTo"), 500, "what the comment points at")
                     document = {"thread": thread, "slug": comment_slug(thread["text"]),

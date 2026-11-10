@@ -12,6 +12,8 @@ export interface Env {
   SHARE_TOKEN_SHA256: string;
   /** The public origin, for the links this Worker hands out. */
   APP_URL?: string;
+  /** "off" where the plan cannot derive passwords (Workers Free): sign-in is by email code only. */
+  PASSWORD_SIGNIN?: string;
   /** Fixed HTTPS tunnel origin of the separate authenticated writer listener. Off if absent. */
   WRITER_ORIGIN?: string;
   /** The writers' founder keys, comma separated (writers.ts). None if absent: no one is a writer. */
@@ -85,6 +87,23 @@ export interface Anchor {
   suffix: string;
   blockText: string;
   version: string;
+  more?: AnchorPart[];
+}
+
+/** A passage's part in one following paragraph (comments.js anchorParts()). */
+export interface AnchorPart {
+  quote: string;
+  suffix: string;
+  blockText: string;
+}
+
+/** The later parts tidied as comments.js anchorParts() and serve.py comment_parts() tidy them:
+ *  at most ten, each with words. None at all is an anchor of before, with no `more`. */
+export function anchorParts(v: unknown): AnchorPart[] {
+  const list = Array.isArray(v) ? (v as unknown[]) : [];
+  return list.filter((p): p is Record<string, unknown> => !!p && typeof p === "object" && typeof (p as Record<string, unknown>).quote === "string" && !!(p as Record<string, unknown>).quote)
+    .slice(0, 10)
+    .map((p) => ({ quote: p.quote as string, suffix: typeof p.suffix === "string" ? p.suffix : "", blockText: typeof p.blockText === "string" ? p.blockText : "" }));
 }
 
 /** A thread in the exact shape serve.py's comment_document gives the page. */
@@ -204,8 +223,8 @@ const EMPTY_ANCHOR: Anchor = { quote: "", prefix: "", suffix: "", blockText: "",
 
 export function anchorOf(raw: string | null): Anchor {
   try {
-    const a = JSON.parse(raw ?? "{}") as Partial<Anchor>;
-    return { quote: a.quote ?? "", prefix: a.prefix ?? "", suffix: a.suffix ?? "", blockText: a.blockText ?? "", version: a.version ?? "" };
+    const a = JSON.parse(raw ?? "{}") as Partial<Anchor>, more = anchorParts(a.more);
+    return { quote: a.quote ?? "", prefix: a.prefix ?? "", suffix: a.suffix ?? "", blockText: a.blockText ?? "", version: a.version ?? "", ...(more.length ? { more } : {}) };
   } catch {
     return { ...EMPTY_ANCHOR };
   }

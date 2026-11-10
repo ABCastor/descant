@@ -1074,6 +1074,7 @@
             if (end >= 0) key = text.slice(labelEnd + 2, end) || key;
           }
           const reference = end >= 0 && opts.references[referenceLabel(key)];
+          if (reference && opts.usedReferences) opts.usedReferences.add(referenceLabel(key));
           if (reference) {
             const label = text.slice(labelStart, labelEnd), url = literalHref(reference.destination);
             if (opts.referenceSpans) opts.referenceSpans.push({ start: (opts.referenceOffset || 0) + index, end: (opts.referenceOffset || 0) + end + 1, label, image: imageStart });
@@ -1607,7 +1608,8 @@
     for (const block of scanned.blocks) {
       if (block.type === 'footnote-def') footnoteBodies[block.meta.footnoteKey] = block.meta.body;
     }
-    const context = { editSource: Boolean(opts.editSource), references, footnotes: footnoteBodies, showWriterNotes: Boolean(opts.showWriterNotes), figures: opts.figures || null };
+    // usedReferences: the definitions some link or image of the page resolves to.
+    const context = { editSource: Boolean(opts.editSource), references, footnotes: footnoteBodies, showWriterNotes: Boolean(opts.showWriterNotes), figures: opts.figures || null, usedReferences: new Set() };
     /* A caller re-parsing ONE block of a page it already parsed passes the page's
        numbers back in, so a block that loses focus keeps the number it had. */
     if (opts.footnoteNumbers) {
@@ -1646,7 +1648,7 @@
       cursor = at + block.source.length;
     }
     const trailing = /\S/.test(text.slice(cursor)) ? '' : text.slice(cursor);
-    return { blocks, references, footnotes, footnoteNumbers, footnoteOrder, frontmatter: scanned.frontmatter, headings, trailing };
+    return { blocks, references, footnotes, footnoteNumbers, footnoteOrder, frontmatter: scanned.frontmatter, headings, trailing, usedReferences: context.usedReferences };
   }
 
   function makeAnchor(doc, blockId, start, end) {

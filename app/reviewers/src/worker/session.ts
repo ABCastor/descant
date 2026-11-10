@@ -3,19 +3,22 @@
 //
 // Two kinds of session, each signed over its own prefix so one can never pass for the other:
 //   reader   __Host-descant=v1.<personId>.<expiry>.<signature>          30 days, refreshed while in use
-//   founder  __Host-descant_founder=f2.<key>.<email digest>.<generation>.<auth ms>.<expiry>.<signature> 30 days
+//   founder  __Host-descant_founder=f2.<key>.<email digest>.<generation>.<auth ms>.<expiry>.<sign-in ms>.<signature>
+//            30 days, renewed while in use, never past a year from the sign-in. An f2 cookie from
+//            before sign-in times were kept has no <sign-in ms>; its issue time stands in.
 // Old f1 cookies retain their original 12h expiry, until a password change revokes them.
 // The __Host- prefix makes the browser keep each cookie for this exact host, over https only, so no
 // other host on the same site can set or overwrite one.
 
 import { WRITER_KEY, WRITER_KEY_SOURCE } from './writers.ts';
 
-const FOUNDER_SESSION = new RegExp('^(f2\\.(' + WRITER_KEY_SOURCE + ')\\.([a-f0-9]{64})\\.([\\w-]+)\\.(\\d+)\\.(\\d+))\\.([\\w-]+)$');
+const FOUNDER_SESSION = new RegExp('^(f2\\.(' + WRITER_KEY_SOURCE + ')\\.([a-f0-9]{64})\\.([\\w-]+)\\.(\\d+)\\.(\\d+)(?:\\.(\\d+))?)\\.([\\w-]+)$');
 
 const enc = new TextEncoder();
 export const READER_DAYS = 30;
 export const FOUNDER_HOURS = 12;
 export const FOUNDER_DAYS = 30;
+export const FOUNDER_YEAR_DAYS = 365;
 export const READER_COOKIE = "__Host-descant";
 export const FOUNDER_COOKIE = "__Host-descant_founder";
 export type Kind = "v1" | "f1";
@@ -106,20 +109,26 @@ function fromB64url(s: string): Uint8Array | undefined {
   }
 }
 
-export interface FounderSession { subject: string; emailSha256: string; generation: string; authenticatedAt: number; expires: number }
-/** New founder sessions carry their actual authentication time and credential generation. */
-export async function signFounderSession(secret: string, subject: string, emailSha256: string, generation: string, authenticatedAt: number, now = Date.now()): Promise<string> {
+export interface FounderSession { subject: string; emailSha256: string; generation: string; authenticatedAt: number; signedInAt: number; expires: number }
+/** Seconds a session whose writer signed in at signedInAt may still be given: thirty days, never past its year. */
+export const founderMaxAge = (signedInAt: number, now = Date.now()): number =>
+  Math.min(FOUNDER_DAYS * 86400, Math.floor(signedInAt / 1000) + FOUNDER_YEAR_DAYS * 86400 - Math.floor(now / 1000));
+/** New founder sessions carry their actual authentication time, credential generation and sign-in time. */
+export async function signFounderSession(secret: string, subject: string, emailSha256: string, generation: string, authenticatedAt: number, now = Date.now(), signedInAt = now): Promise<string> {
   // The key's format only: whether it names a writer is checked against WRITERS by the callers.
-  if (!WRITER_KEY.test(subject) || !/^[a-f0-9]{64}$/.test(emailSha256) || !/^[\w-]+$/.test(generation)) throw new Error('Invalid founder identity');
-  const payload = `f2.${subject}.${emailSha256}.${generation}.${authenticatedAt}.${Math.floor(now / 1000) + FOUNDER_DAYS * 86400}`;
+  if (!WRITER_KEY.test(subject) || !/^[a-f0-9]{64}$/.test(emailSha256) || !/^[\w-]+$/.test(generation) || !Number.isSafeInteger(signedInAt) || signedInAt < 0 || signedInAt > now) throw new Error('Invalid founder identity');
+  const payload = `f2.${subject}.${emailSha256}.${generation}.${authenticatedAt}.${Math.floor(now / 1000) + founderMaxAge(signedInAt, now)}.${signedInAt}`;
   return `${payload}.${b64url(new Uint8Array(await crypto.subtle.sign('HMAC', await key(secret), enc.encode(payload))))}`;
 }
 export async function verifyFounderSession(secret: string, value: string | undefined, now = Date.now()): Promise<FounderSession | undefined> {
   const m = FOUNDER_SESSION.exec(value ?? '');
   if (!m) return undefined;
   const authenticatedAt = Number(m[5]), expires = Number(m[6]) * 1000;
+  const signedInAt = m[7] === undefined ? expires - FOUNDER_DAYS * 86400000 : Number(m[7]);
   if (!Number.isSafeInteger(authenticatedAt) || authenticatedAt > now || !Number.isSafeInteger(expires) || expires <= now || expires > now + FOUNDER_DAYS * 86400000) return undefined;
-  const sig = fromB64url(m[7]);
+  // However often it was renewed, a session ends a year after its writer signed in.
+  if (!Number.isSafeInteger(signedInAt) || signedInAt > now || now - signedInAt >= FOUNDER_YEAR_DAYS * 86400000) return undefined;
+  const sig = fromB64url(m[8]);
   if (!sig || !await crypto.subtle.verify('HMAC', await key(secret), sig, enc.encode(m[1]))) return undefined;
-  return { subject: m[2], emailSha256: m[3], generation: m[4], authenticatedAt, expires };
+  return { subject: m[2], emailSha256: m[3], generation: m[4], authenticatedAt, signedInAt, expires };
 }

@@ -98,10 +98,13 @@
       if (Castor.role && Castor.role.reviewer) return;
       if (Castor.panels && Castor.panels.open) Castor.panels.open('files', 'left');
     });
-    name.addEventListener('pointerdown', function (e) {
-      if (e.pointerType === 'mouse') return;
-      name.classList.add('brand-play');
-      setTimeout(function () { name.classList.remove('brand-play'); }, 900);
+    // A tap drops the asterisk, as a hover does: the name's and the credit's.
+    [name].concat(Array.prototype.slice.call(document.querySelectorAll('.foot-by'))).forEach(function (target) {
+      target.addEventListener('pointerdown', function (e) {
+        if (e.pointerType === 'mouse') return;
+        target.classList.add('brand-play');
+        setTimeout(function () { target.classList.remove('brand-play'); }, 900);
+      });
     });
   }
 

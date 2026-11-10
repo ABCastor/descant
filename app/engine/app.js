@@ -185,6 +185,7 @@
       var founder = { reviewer: false, confirmed: !!payload && payload.role === 'founder', name: '' };
       if (founder.confirmed && payload.publicWriter === true && !!(Castor.people && Castor.people.isWriter(payload.who)) && payload.id === 'founder:' + payload.who) {
         founder.publicWriter = true; founder.id = payload.id; founder.who = payload.who; founder.offline = payload.offline === true;
+        if (payload.passwords === false) founder.passwords = false;
       }
       if (PUBLIC_WRITER) {
         founder.publicWriter = true;
@@ -199,26 +200,86 @@
   function reviewing() { return !!(Castor.role && Castor.role.reviewer); }
 
   /* A slow server still lets the page open, with no authenticated replay grant. */
-  var ROLE_WAIT = 8000;
+  var ROLE_WAIT = 8000, roleStatus = 0;
   function askRole() {
     if (!servedOverHttp() || !global.fetch) return Promise.resolve(null);
     return new Promise(function (resolve) {
       var settled = false;
       function finish(payload) { if (settled) return; settled = true; clearTimeout(timer); resolve(payload); }
-      var timer = setTimeout(function () { finish(null); }, ROLE_WAIT);
+      var timer = setTimeout(function () { roleStatus = 0; finish(null); }, ROLE_WAIT);
       function ask(retries) {
         if (settled) return;
         global.fetch('/api/whoami', { cache: 'no-store' })
           .then(function (r) {
+            roleStatus = r.status;
             // A first-load font may bind the new worker client before whoami
             // returns. Reconfirm once without weakening the worker's boundary.
             if (PUBLIC_WRITER && r.status === 409 && retries) { ask(retries - 1); return; }
             return (r.ok ? r.json() : Promise.resolve(null)).then(finish);
-          }).catch(function () { finish(null); });
+          }).catch(function () { roleStatus = 0; finish(null); });
       }
       ask(1);
     });
   }
+
+  /* A writer page whose sign-in could not be confirmed is never left stuck. It asks
+     again when it comes back to the screen, when the network returns and every 20 s;
+     once the writer is confirmed it reopens, since everything typed here is kept on
+     this device (the journal, comment drafts) and reopening binds it to that writer.
+     A session that has ended is said in plain words, with the way back in. */
+  var signedOut = false, recheck = null, recheckTimer = 0, roleSettled = false, openingCheck = null;
+  function reconfirm(now) {
+    // A Post before the opening check settles is answered by that check: a page it confirms
+    // has nothing to reopen. Otherwise only after it settles, and never on a reader's page.
+    if (!roleSettled && now && openingCheck && !PUBLIC_REVIEWER) return openingCheck.then(function () { return reconfirm(now); });
+    if (!roleSettled || PUBLIC_REVIEWER || reviewing() || Castor.role.confirmed) return Promise.resolve(!!Castor.role.confirmed);
+    if (!recheck) recheck = askRole().then(function (payload) {
+      recheck = null;
+      if (Castor.roleFrom(payload).confirmed) { reopen(now); return true; }
+      unconfirmed();
+      return false;
+    });
+    return recheck;
+  }
+  // What an unconfirmed answer means: an ended session is said; anything else is asked again
+  // in 20 s while the page is on screen (coming back to the screen asks at once).
+  function onScreen() { return document.visibilityState === 'visible'; }
+  function unconfirmed() {
+    if (PUBLIC_WRITER && (roleStatus === 401 || roleStatus === 403)) showSignedOut();
+    // 409: this page's writer is no longer the one signed in in this browser. A reload would open
+    // the other writer, so the way back as himself is the sign-in page.
+    else if (PUBLIC_WRITER && roleStatus === 409) showSignedOut('Another writer is signed in in this browser. Everything you typed stays on this device. To go on writing as yourself, sign in again; to write as them, open Descant in a new tab.', 'Another writer', '/signin?write=1');
+    else if (!recheckTimer && onScreen()) recheckTimer = setTimeout(function () { recheckTimer = 0; if (onScreen()) reconfirm(); }, 20000);
+  }
+  function reopen(now) {
+    var field = document.activeElement;
+    if (!now && field && field !== document.body && (field.isContentEditable || /^(INPUT|TEXTAREA)$/.test(field.tagName || ''))) {
+      field.addEventListener('blur', function () { setTimeout(function () { reopen(true); }, 0); }, { once: true });
+      return;
+    }
+    try { global.location.reload(); } catch (e) { /* the next check reopens it */ }
+  }
+  var signinAt = '';
+  function showSignedOut(detail, word, at) {
+    signedOut = true; signinAt = at || '';
+    setSave('locked', detail || 'Your sign-in has ended. Everything you typed stays on this device. Sign in again to go on writing.', word || 'Signed out');
+  }
+  Castor.reconfirm = function (reason) { return reconfirm(reason === 'comment'); };
+  // A send that finds the session ended keeps the writer named, marked ended: his threads and
+  // pending comments stay in view, read-only, and nothing is sent as him until he signs in again.
+  Castor.signedOut = function () {
+    if (!PUBLIC_WRITER) return;
+    Castor.role = Castor.role.confirmed ? Object.assign({}, Castor.role, { confirmed: false, ended: true }) : Castor.roleFrom(null);
+    reconfirm();
+  };
+  // Reopening is the way back in: the server sends a page without a session to its sign-in,
+  // and a page whose session is fine simply opens again.
+  Castor.signin = function () { try { if (signinAt) global.location.assign(signinAt); else global.location.reload(); } catch (e) { /* nothing to reopen */ } };
+  if (global.addEventListener) {
+    global.addEventListener('online', function () { reconfirm(); });
+    global.addEventListener('pageshow', function () { reconfirm(); });
+  }
+  if (document.addEventListener) document.addEventListener('visibilitychange', function () { if (!document.hidden) reconfirm(); });
 
   var REVIEWER_WITHHELD = ['files', 'beside', 'changes', 'drafts', 'workspace', 'live', 'assist', 'for-you', 'links'];
   /* The palette rows a reader has a use for: going somewhere, the panels still
@@ -252,7 +313,9 @@
      the live version before confirming a baseline. Account/role changes cannot
      reuse a snapshot. Eight MiB of serialized UTF-16 bounds the retained payloads
      (including history); closed tabs and least recently used entries go first. */
-  var PIECE_CACHE_BYTES = 8 * 1024 * 1024, PIECE_CACHE_AGE = 30000;
+  // The open article is re-read every 30 s; other open tabs every five minutes, so a
+  // phone and a tablet on one network stay well inside the server's request limit.
+  var PIECE_CACHE_BYTES = 8 * 1024 * 1024, PIECE_CACHE_AGE = 30000, PREFETCH_AGE = 300000;
   var pieceCache = new Map(), pieceCacheBytes = 0, pieceEpoch = {}, pieceRead = {};
   var prefetchPending = false, prefetchFlight = null, prefetchTried = {}, pieceSaveActivity = 0;
   function cacheablePiece(path) {
@@ -324,8 +387,8 @@
         var now = Date.now();
         var next = visiblePieces().find(function (p) {
           var entry = pieceCache.get(p.path);
-          return p.path !== displayedPath && (!entry || now - entry.at >= PIECE_CACHE_AGE) &&
-            (!prefetchTried[p.path] || now - prefetchTried[p.path] >= PIECE_CACHE_AGE);
+          return p.path !== displayedPath && (!entry || now - entry.at >= PREFETCH_AGE) &&
+            (!prefetchTried[p.path] || now - prefetchTried[p.path] >= PREFETCH_AGE);
         });
         if (!next) return;
         prefetchTried[next.path] = now;
@@ -1934,6 +1997,7 @@
     if (saver.state === 'unsaved') return kept ? SAVE_WORDS.unsaved : 'Not saved yet';
     if (saver.state === 'offline') return kept ? SAVE_WORDS.offline : 'Not saved: can’t reach the server';
     if (saver.state === 'refused' && saver.short) return 'Not saved: ' + saver.short;
+    if (saver.state === 'locked' && saver.short) return saver.short;
     return SAVE_WORDS[saver.state] || '';
   }
   function saveDescription() {
@@ -1993,6 +2057,7 @@
     }
     if (saver.state === 'conflict') panel.appendChild(pick('Compare versions', showConflict));
     if (saver.state === 'stale') panel.appendChild(pick('Open current article', function () { reloadLive(); }));
+    if (signedOut) panel.appendChild(pick('Sign in again', Castor.signin));
   }
   function renderSaveState() {
     if (reviewing() && Castor.readerShell) { Castor.readerShell.render(); return; }
@@ -2271,7 +2336,7 @@
     clearTimeout(savePoll);
     if (PUBLIC_WRITER && !Castor.role.confirmed) {
       if (Castor.editor && Castor.editor.setReadOnly) Castor.editor.setReadOnly(true);
-      setSave('locked', 'Your writer identity could not be checked. Unsent writing is preserved; reconnect and reopen this page.');
+      if (!signedOut) setSave('locked', 'Checking your sign-in. Everything you type stays on this device; the page reopens by itself once you are confirmed.', 'Checking sign-in');
       return Promise.resolve();
     }
     /* A reviewer never saves text, so there is nothing to ask the server: the
@@ -3632,7 +3697,7 @@
     document.querySelectorAll('.set-panels input').forEach(function (b) { b.checked = ids ? ids.indexOf(b.value) >= 0 : Castor.panels.isOpen(b.value); });
     var writer = document.getElementById('set-writer-name'); if (writer) writer.textContent = sessionNow().map(personName).join(', ') || 'Choose';
     var writerControl = document.getElementById('set-writer'); if (writerControl) writerControl.hidden = reviewing() || PUBLIC_WRITER;
-    var passwordControl = document.getElementById('set-writing-password'); if (passwordControl) passwordControl.hidden = !PUBLIC_WRITER || !Castor.role.confirmed;
+    var passwordControl = document.getElementById('set-writing-password'); if (passwordControl) passwordControl.hidden = !PUBLIC_WRITER || !Castor.role.confirmed || Castor.role.passwords === false;
     applyPreset();
     var tray = document.getElementById('set-agent-tray');
     if (tray) {
@@ -3976,6 +4041,7 @@
        is shown only if the writer is the same once that check settles; otherwise it
        is dropped and the article is read again, as it was before. */
     var whoami = askRole().then(function (payload) { applyRole(Castor.roleFrom(payload)); return payload; });
+    openingCheck = whoami.then(function () { roleSettled = true; if (PUBLIC_WRITER && !Castor.role.confirmed) unconfirmed(); });
     var role = whoami.then(function (payload) {
       if (PUBLIC_WRITER && Castor.role.confirmed && Castor.offline) {
         var original = Castor.role.id;

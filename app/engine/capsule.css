@@ -201,7 +201,7 @@
 }
 #app #topbar.mast #more-sheet .word { justify-content: flex-start; min-height: 44px; height: 44px; padding: 0 12px; gap: 8px; width: 100%; }
 #app #more-sheet h2 { font: 600 17px/1.2 var(--font-ui-heading); margin: 8px 12px; color: var(--ink); }
-#app #more-sheet :is(#menu-publish, #menu-articles) { display: none; }
+#app #more-sheet :is(#menu-publish, #menu-articles, .menu-group) { display: none; }
 #app #more-sheet .menu-tool { display: none; }
 #app #more-sheet #castor-shortcuts { order: 10; }
 #app #more-sheet .foot-by {
@@ -211,7 +211,7 @@
   font: 400 13px/1 var(--font-ui); white-space: pre;
 }
 #app #more-sheet .foot-castor { margin-left: 0; color: inherit; }
-#app #more-sheet .foot-ast { font: inherit; font-variation-settings: inherit; letter-spacing: inherit; color: inherit; transform: none; transition: none; }
+#app #more-sheet .foot-ast { letter-spacing: inherit; }
 #app #more-sheet .foot-by:hover { color: var(--ink); }
 #app #more-sheet [data-icon="share"] { --icon: var(--icon-share); }
 #app #more-sheet [data-icon="article"] { --icon: var(--icon-files); }
@@ -325,7 +325,13 @@
 #app[data-mode="phone"] { --bar-h: 52px; --footline-h: 0px; --dock-h: 0px; --page-pad-bot: 32px; }
 #app[data-mode="phone"] #footline { display: none; }
 #app[data-mode="phone"] #topbar.mast { height: 52px; gap: 8px; padding: 0 8px; justify-content: space-between; }
-#app[data-mode="phone"] #topbar.mast :is(#castor-tabs, .bar-tools, .folded-article, .castor-tabs-fold, .descant-share) { display: none !important; }
+#app[data-mode="phone"] #topbar.mast :is(#castor-tabs, .folded-article, .castor-tabs-fold, .descant-share) { display: none !important; }
+/* Search always sits at the top right (S2): the bar's own lens, alone, after Menu. */
+#app[data-mode="phone"] #topbar.mast .bar-tools { display: flex; align-items: center; order: 9; gap: 0; margin: 0; height: 44px; }
+#app[data-mode="phone"] #topbar.mast .bar-tools > :not(.find) { display: none; }
+#app[data-mode="phone"] #topbar.mast .find-lens { width: 44px; height: 44px; }
+#app[data-mode="phone"] #topbar.mast #more-word { width: 44px; padding: 0; justify-content: center; }
+#app[data-mode="phone"] #topbar.mast #more-word .word-label { display: none; }
 #app[data-mode="phone"] #topbar.mast .brand { width: 44px; height: 44px; min-width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; }
 #app[data-mode="phone"] #topbar.mast .brand-name { display: flex; align-items: center; font-size: 0; line-height: 1; }
 #app[data-mode="phone"] #topbar.mast .brand-name .star { display: none; }
@@ -344,10 +350,19 @@
 #app[data-mode="phone"] #more-sheet :is(#menu-publish, #menu-articles) { display: block; }
 #app[data-mode="phone"] #more-sheet .menu-tool { display: inline-flex; }
 #app[data-mode="phone"] #more-sheet [data-tier] { display: inline-flex; }
-#app[data-mode="phone"] #more-sheet #menu-publish { order: -1; padding-bottom: 12px; margin-bottom: 8px; border-bottom: 1px solid var(--rule); }
+#app[data-mode="phone"] #more-sheet #menu-publish { order: -1; display: grid; grid-template-columns: 1fr auto; align-items: center; }
+#app[data-mode="phone"] #more-sheet #menu-publish > :is(h2, .menu-tool) { grid-column: 1 / -1; }
+#app[data-mode="phone"] #more-sheet #menu-publish > .menu-tool { order: 9; }
 #app[data-mode="phone"] #more-sheet #menu-publish .descant-live-marker { display: flex; width: 100%; justify-content: flex-start; padding: 0 12px; min-height: 44px; box-sizing: border-box; }
 #app[data-mode="phone"] #more-sheet #menu-publish .capsule-publish { width: auto; margin: 4px 12px; justify-content: center; }
-#app[data-mode="phone"] #more-sheet #menu-articles { order: 11; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--rule); }
+#app[data-mode="phone"] #more-sheet :is(#menu-articles, .menu-group:has(> .word:not([hidden]))) { display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--rule); }
+/* Settings opens as the same sheet as the Menu, with the same heading (S2). */
+#app[data-mode="phone"] .castor-settings {
+  inset: 60px 0 0 0; width: 100%; height: auto; max-height: none; box-sizing: border-box;
+  border: 0; border-top: 1px solid var(--rule); border-radius: 16px 16px 0 0;
+  padding: 12px 16px max(16px, env(safe-area-inset-bottom)); background: var(--surface); box-shadow: var(--shadow-overlay);
+}
+#app[data-mode="phone"] .castor-settings .settings-title { font: 600 17px/1.2 var(--font-ui-heading); margin: 8px 12px; color: var(--ink); letter-spacing: 0; text-transform: none; }
 #app[data-mode="phone"] #more-sheet #menu-articles .word { overflow: hidden; }
 #app[data-mode="phone"] #more-sheet #menu-articles .word-label { overflow: hidden; text-overflow: ellipsis; }
 #app[data-mode="phone"] #more-sheet #castor-shortcuts { display: inline-flex; }
@@ -370,9 +385,10 @@
 #app[data-keyboard="up"] { --footline-h: 0px; }
 #app[data-keyboard="up"] #footline { display: none; }
 
-/* The typed asterisk belongs to the word, including its face, weight and ink. */
-#app #topbar.mast .brand { font-family: var(--font-ui-heading); font-weight: 600; font-variation-settings: normal; }
-#app #topbar.mast .brand-name .star { font: inherit; color: inherit; font-variation-settings: inherit; letter-spacing: inherit; }
+/* The name and its typed asterisk share one face, Literata, the face of every Castor product's
+   name; the asterisk is Castor's own glyph in --human, and it drops (castor-identity SIGNATURE.md). */
+#app #topbar.mast .brand { font-family: Word, Georgia, serif; font-weight: 560; font-variation-settings: 'opsz' 72; }
+#app #topbar.mast .brand-name .star { font: inherit; font-variation-settings: inherit; letter-spacing: inherit; color: var(--human); }
 
 /* Shared server-pending control: modules keep the label and set aria-busy.
    The outset ring leaves the control's dimensions unchanged. */

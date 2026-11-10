@@ -60,6 +60,9 @@
      edits and other mutations require server-confirmed per-target capabilities. */
   function reviewing() { return !!(Castor.role && Castor.role.reviewer); }
   function roleConfirmed() { return !!(Castor.role && Castor.role.confirmed); }
+  /* The session ended while this writer's page was open (app.js Castor.signedOut): his threads
+     and pending comments stay in view in his place, read-only, until he signs in again. */
+  function ended() { return !!(Castor.role && Castor.role.ended && Castor.role.id); }
 
   // One structural stylesheet, inserted as the FIRST child of <head> so that engine.css
   // and a world's theme.css (loaded after) win every tie. Positioning only; each colour
@@ -186,6 +189,7 @@
     serverCopies: {},        // article key -> last server response
     composer: null,          // {node, textarea, record, submit}
     composerJournal: {},     // includes the latest input if browser storage fails
+    journalStored: {},       // the journal keys this page knows browser storage holds
     closedComposers: {},
     canvas: null, wrap: null, leaders: null, lostBox: null, filterBox: null,
     items: [], raf: 0, placeRaf: 0,
@@ -206,7 +210,7 @@
     return 'castor.' + S.world + '.comments' + (path ? '.' + path : '');
   }
   function key() {
-    if (!roleConfirmed()) return legacyKey() + '.unconfirmed';
+    if (!roleConfirmed() && !ended()) return legacyKey() + '.unconfirmed';
     if (!reviewing()) return legacyKey() + (Castor.role.publicWriter ? '.writer.' + encodeURIComponent(Castor.role.id) : '');
     var identity = reviewerIdentity(Castor.role);
     return legacyKey() + (identity ? '.reader.' + encodeURIComponent(identity.id) : '.unconfirmed');
@@ -351,8 +355,56 @@
   }
   function canonicalAnchor(anchor) {
     anchor = anchor || {};
-    return { quote: anchor.quote || '', prefix: anchor.prefix || '', suffix: anchor.suffix || '', blockText: anchor.blockText || '', version: anchor.version || '' };
+    var out = { quote: anchor.quote || '', prefix: anchor.prefix || '', suffix: anchor.suffix || '', blockText: anchor.blockText || '', version: anchor.version || '' };
+    var more = anchorParts(anchor.more);
+    if (more.length) out.more = more;
+    return out;
   }
+  /* A passage over paragraphs. Its part in the first paragraph is an ordinary one-paragraph
+     anchor, so a reader that knows only those still places it there; `more` holds one part per
+     following paragraph, {quote, suffix, blockText}, at most ten. serve.py comment_parts() and
+     the Worker's anchorParts() keep the same parts. */
+  function anchorParts(more) {
+    return (Array.isArray(more) ? more : []).filter(function (p) { return p && typeof p.quote === 'string' && p.quote; }).slice(0, 10)
+      .map(function (p) { return { quote: p.quote, suffix: typeof p.suffix === 'string' ? p.suffix : '', blockText: typeof p.blockText === 'string' ? p.blockText : '' }; });
+  }
+  // The passage's words, one paragraph per line.
+  function passageOf(anchor) {
+    return [anchor.quote || ''].concat(anchorParts(anchor.more).map(function (p) { return p.quote; })).join('\n');
+  }
+  // `texts`: the rendered paragraphs from the first to the last; `from` and `to`: where the
+  // selection starts in the first and ends in the last. An empty end part (a triple click ends
+  // at the start of the next paragraph) is no part: one part left is the anchor of before.
+  function spanAnchor(texts, from, to, version) {
+    var parts = [];
+    texts.forEach(function (text, i) {
+      var raw = text.slice(i ? 0 : from, i === texts.length - 1 ? to : text.length), quote = raw.trim();
+      if (quote) parts.push({ quote: quote, at: (i ? 0 : from) + raw.indexOf(quote), text: text });
+    });
+    if (!parts.length) return null;
+    function after(p) { return p.text.slice(p.at + p.quote.length, p.at + p.quote.length + 32); }
+    var first = parts[0], more = anchorParts(parts.slice(1).map(function (p) { return { quote: p.quote, suffix: after(p), blockText: p.text }; }));
+    var anchor = { quote: first.quote, prefix: first.text.slice(Math.max(0, first.at - 32), first.at), suffix: after(first), blockText: first.text, version: version };
+    if (more.length) anchor.more = more;
+    return anchor;
+  }
+  // A passage's later parts, each in one of the next three paragraphs after the part before it.
+  // A part no longer there ends the passage at the part before it.
+  function resolveParts(more, blocks, firstId) {
+    var out = [], at = -1;
+    for (var i = 0; i < blocks.length; i++) if (blocks[i].id === firstId) { at = i; break; }
+    if (at < 0) return out;
+    anchorParts(more).every(function (part) {
+      for (var j = at + 1; j < blocks.length && j <= at + 3; j++) {
+        var start = blocks[j].text.indexOf(part.quote);
+        if (start >= 0) { out.push({ blockId: blocks[j].id, start: start, end: start + part.quote.length }); at = j; return true; }
+      }
+      return false;
+    });
+    return out;
+  }
+  // Where a resolved passage ends: its last part, or its only one.
+  function passageEnd(r) { return r && r.more && r.more.length ? r.more[r.more.length - 1] : r; }
   function legacyCandidate(kind, thread, message, index, original) {
     if (kind === 'reply') return { kind: kind, threadId: thread.id, index: index,
       ...(original ? { original: original } : {}),
@@ -428,7 +480,7 @@
       function retain(message, reply) {
         if (!message.id || !composerIdentityKnown(message)) return;
         var head = Object.assign({}, t, { replies: reply ? [message] : [] });
-        var input = S.composer && S.composer.record.id === message.id ? S.composer.record.text : message.text;
+        var input = S.composer && sentId(S.composer.record) === message.id ? S.composer.record.text : message.text;
         var record = { thread: head, message: reply ? message : head, reply: reply, input: input };
         var journal = storageKey + '.submitted.' + encodeURIComponent(message.id);
         var previous = global.localStorage.getItem(journal);
@@ -743,7 +795,8 @@
     /* A reviewer is not asked and sends no name: the server records their
        comments under the name they signed in with, whatever the page says. */
     if (!roleConfirmed()) {
-      if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unsaved', { path: path, reason: 'Your sign-in could not be confirmed. Your words remain on this device. Reload when you are connected.' });
+      if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unsaved', { path: path, reason: 'Checking your sign-in. Your words stay on this device and are sent once you are confirmed.' });
+      if (!reviewer && Castor.reconfirm) Castor.reconfirm();
       return true;
     }
     if (S.migrationBlocked === storageKey || holdLegacy(threads, storageKey)) return true;
@@ -802,7 +855,12 @@
         .forEach(function (t) { knownIds[t.id] = true; });
       function post(retried) {
         var authenticate = global.fetch('/api/whoami', { cache: 'no-store' }).then(function (response) {
-          if (!response.ok) throw new Error('Your reader identity could not be confirmed. Your words remain on this device.');
+          if (!response.ok) {
+            // Cards repaint without Reply and actions once the session has ended (S.ended in their signatures).
+            if (!reviewer && (response.status === 401 || response.status === 403) && Castor.signedOut) { Castor.signedOut(); S.ended = ended(); }
+            throw new Error(reviewer ? 'Your reader identity could not be confirmed. Your words remain on this device.'
+              : 'Your sign-in could not be confirmed just now. Your words stay on this device and are sent again.');
+          }
           return response.json();
         }).then(function (role) {
           if (!reviewer) {
@@ -1187,7 +1245,7 @@
     for (var i = 0; i < S.threads.length; i++) {
       var t = S.threads[i];
       var anchor = t.anchor || {};
-      var signature = [anchor.quote, anchor.prefix, anchor.suffix, anchor.blockText, JSON.stringify(anchor.chosenPlace || null)].join('\u0000');
+      var signature = [anchor.quote, anchor.prefix, anchor.suffix, anchor.blockText, JSON.stringify(anchor.chosenPlace || null), JSON.stringify(anchor.more || null)].join('\u0000');
       var cached = S.resolutionCache[t.id];
       var sameAnchor = cached && cached.signature === signature;
       var sameBlock = sameAnchor && cached.result && byId[cached.result.blockId] &&
@@ -1225,6 +1283,7 @@
       var block = r && !r.ambiguous && byId[r.blockId];
       var range = block ? (Number.isInteger(r.start) ? r : domRange(block.el, anchor)) : null;
       var result = block ? { blockId: r.blockId, start: range ? range.start : -1, end: range ? range.end : -1 } : null;
+      if (result && anchor.more) result.more = resolveParts(anchor.more, blocks, result.blockId);
       nextCache[t.id] = { signature: signature, result: result, blockText: block && block.text,
         docHash: hash, candidates: choices, provisional: !!quick && (!result || provisional) };
       S.resolved[t.id] = result;
@@ -1299,11 +1358,11 @@
       var marks = root.querySelectorAll('mark.commented[data-thread="' + thread.id + '"]');
       if (!marks.length) continue;
       var host = marks[marks.length - 1];
-      var endpoint = r ? r.blockId + ':' + r.end : thread.id;
+      var end = passageEnd(r), endpoint = r ? end.blockId + ':' + end.end : thread.id;
       if (endpoints[endpoint]) continue;
       var siblings = list.filter(function (t) {
-        var at = S.resolved[t.id];
-        return at && r && at.blockId === r.blockId && at.end === r.end;
+        var at = passageEnd(S.resolved[t.id]);
+        return at && r && at.blockId === end.blockId && at.end === end.end;
       });
       endpoints[endpoint] = true;
       var pin = el('span', 'castor-comment-pin');
@@ -1489,9 +1548,17 @@
         S.resolved[t.id] = r;
         S.candidates[t.id] = [];
       }
-      if (!r || r.start < 0 || (blockId && r.blockId !== blockId)) continue;
-      var b = target || blockById(r.blockId);
-      if (b) wrapRange(b.el, r.start, r.end, t.id, t.done, null, threadBy(t), threadAnchorColor(t));
+      if (!r || r.start < 0) continue;
+      // A passage's later parts, found in the reading text as the first part is.
+      if (t.anchor.more) r.more = resolveParts(t.anchor.more, projections, r.blockId).map(function (part) {
+        var p = projections.find(function (x) { return x.id === part.blockId; });
+        return { blockId: part.blockId, start: p.offsets[part.start], end: p.offsets[part.end - 1] + 1 };
+      });
+      [r].concat(r.more || []).forEach(function (part) {
+        if (blockId && part.blockId !== blockId) return;
+        var b = target || blockById(part.blockId);
+        if (b) wrapRange(b.el, part.start, part.end, t.id, t.done, null, threadBy(t), threadAnchorColor(t));
+      });
     }
     // The workspace's excerpts get their own faint mark, through the same text-node
     // walk, in the same pass: two passes would compute offsets over already-split
@@ -1820,8 +1887,9 @@
 
     if (opts.quote !== false && thread.anchor && thread.anchor.quote) {
       var quote = el('details', 'castor-quote');
-      quote.appendChild(el('summary', null, 'Passage: “' + thread.anchor.quote.slice(0, 72) + (thread.anchor.quote.length > 72 ? '…' : '') + '”'));
-      quote.appendChild(el('div', null, thread.anchor.quote));
+      var passage = passageOf(thread.anchor);
+      quote.appendChild(el('summary', null, 'Passage: “' + passage.slice(0, 72).replace(/\n/g, ' ') + (passage.length > 72 ? '…' : '') + '”'));
+      quote.appendChild(el('div', null, passage));
       card.appendChild(quote);
     }
 
@@ -1850,7 +1918,7 @@
     var reply = withIcon(el('button', null, 'Reply'), 'reply');
     reply.type = 'button';
     reply.addEventListener('click', function (e) { e.stopPropagation(); openReply(thread, card); });
-    acts.appendChild(reply);
+    if (!ended()) acts.appendChild(reply);
 
     var link=withIcon(el('button',null,'Copy link'),'link');link.type='button';
     link.addEventListener('click',function(e){e.stopPropagation();copyThreadLink(thread,card);});acts.appendChild(link);
@@ -1876,7 +1944,7 @@
   function commentReadUrl(path){var who=!reviewing()&&Castor.who&&Castor.who.get?Castor.who.get():'';return '/api/comments?path='+encodeURIComponent(path)+'&actions=1'+(isWriter(who)?'&who='+who:'');}
   function pageActionActor(){if(!roleConfirmed())return null;if(reviewing()){var reader=reviewerIdentity(Castor.role);return reader?{kind:'reader',id:reader.id}:null;}var who=Castor.who&&Castor.who.get?Castor.who.get():'';return isWriter(who)?{kind:'founder-capability',id:who}:null;}
   function sameActionActor(actor){var current=pageActionActor();return !!(actor&&current&&actor.kind===current.kind&&actor.id===current.id);}
-  function actionCapability(){var c=S.commentActions;return S.actionScope===key()&&c&&c.version===1&&c.accessEpoch!==undefined&&c.accessEpoch!==null&&Array.isArray(c.reactionKeys)&&['git','descant'].indexOf(c.authority)>=0&&sameActionActor(c.actor)?c:null;}
+  function actionCapability(){if(ended())return null;var c=S.commentActions;return S.actionScope===key()&&c&&c.version===1&&c.accessEpoch!==undefined&&c.accessEpoch!==null&&Array.isArray(c.reactionKeys)&&['git','descant'].indexOf(c.authority)>=0&&sameActionActor(c.actor)?c:null;}
   function canonicalActionValue(value){if(Array.isArray(value))return value.map(canonicalActionValue);if(value&&typeof value==='object'){var sorted={};Object.keys(value).sort().forEach(function(k){sorted[k]=canonicalActionValue(value[k]);});return sorted;}return value;}
   function sameActionRequest(a,b){return !!(a&&b&&JSON.stringify(canonicalActionValue(a))===JSON.stringify(canonicalActionValue(b)));}
   function exactActionReceipt(receipt,request){return !!(receipt&&request&&receipt.opId===request.opId&&sameActionRequest(receipt.request,request)&&['git','descant'].indexOf(receipt.authority)>=0&&Number.isInteger(receipt.resultRev)&&receipt.resultRev>=0&&typeof receipt.gitDurable==='boolean');}
@@ -1944,8 +2012,8 @@
       e.stopPropagation();if(S.actionEditor!==editor)return;
       if(!textarea.value.trim()){status.textContent='Write a comment before saving.';return;}
       if(!captureActionEditor(editor))return;sendAction(editor.record, save.pending);
-    });node.appendChild(saveEdit);
-    var close=el('button',null,'Close edit');close.type='button';close.addEventListener('click',function(e){e.stopPropagation();if(S.actionEditor===editor)closeActionEditor();layout();});node.appendChild(close);
+    });var row=sendRow(node);row.appendChild(saveEdit);
+    var close=el('button',null,'Close edit');close.type='button';close.addEventListener('click',function(e){e.stopPropagation();if(S.actionEditor===editor)closeActionEditor();layout();});row.appendChild(close);
     textarea.addEventListener('input',function(){if(!sameActionActor(editor.record.actor)){if(S.actionEditor===editor)closeActionEditor();else captureActionEditor(editor);layout();return;}captureActionEditor(editor);});
     textarea.addEventListener('blur',function(){captureActionEditor(editor);});
     textarea.addEventListener('compositionend',function(){captureActionEditor(editor);});
@@ -2001,16 +2069,24 @@
   function renderActionRecovery(){if(!S.lostBox)return;clearAcknowledgedActions();actionRecords().filter(function(r){var thread=byId(r.threadId),present=thread&&(!r.messageRef||[thread].concat(thread.replies||[]).some(function(m){return m.actions&&m.actions.messageRef===r.messageRef;}));return !present&&!acknowledgedAction(r,true);}).forEach(function(r){var box=el('section','castor-comment-pending castor-action-recovery');box.appendChild(el('p',null,'Your pending '+r.request.action+' has no available comment. Its exact input is kept on this device.'));if(r.text)box.appendChild(el('p','castor-comment-pending-text',r.text));if(r.submitted&&actionCapability()){var retry=el('button',null,'Retry action');retry.type='button';retry.disabled=!!S.actionSending[r.opId];retry.addEventListener('click',function(e){e.stopPropagation();sendAction(r);});box.appendChild(retry);}S.lostBox.appendChild(box);});}
 
   function renderRecoveredComments() {
-    if (S.lostBox) journalRecords().filter(function (record) { return record.closed; }).forEach(function (record) {
+    if (S.lostBox) journalRecords().filter(function (record) {
+      return record.closed && (!record.thread || closedReplyDrafts(draftThread(record))[0] === record);
+    }).forEach(function (record) {
       var held = el('section', 'castor-comment-pending castor-recovered-comment');
       held.appendChild(el('p', null, record.thread ? 'Closed reply draft' : 'Closed comment draft'));
       held.appendChild(el('p', 'castor-action-status', 'Kept on this device. Resume when you want to use these words.'));
       held.appendChild(el('p', 'castor-comment-pending-text', record.text));
       var resume = el('button', null, 'Resume draft'); resume.type = 'button';
       resume.addEventListener('click', function (event) {
-        event.stopPropagation(); closeComposer(); restoreComposer(record); layout(true);
+        event.stopPropagation(); closeComposer(); resumeDraft(record); layout(true);
       });
-      held.appendChild(resume); S.lostBox.appendChild(held);
+      var discard = el('button', null, 'Discard draft'); discard.type = 'button';
+      discard.addEventListener('click', function (event) {
+        event.stopPropagation();
+        if (typeof global.confirm === 'function' && !global.confirm('Discard these words? They are kept nowhere else.')) return;
+        (record.thread ? closedReplyDrafts(draftThread(record)) : [record]).forEach(removeJournal); layout(true);
+      });
+      held.appendChild(resume); held.appendChild(discard); S.lostBox.appendChild(held);
     });
     if (!S.lostBox || !available()) return;
     var scope = key(), prefix = scope + '.recovered.', encodedScope = encodeURIComponent(scope), storage, copies = [];
@@ -2082,7 +2158,7 @@
   }
 
   function openReply(thread, card, record) {
-    if (!available()) return;
+    if (!available() || ended()) return;
     switchScope();
     thread = journalThread({ thread: thread.id }) || (record && thread);
     if (!thread) return;
@@ -2090,6 +2166,9 @@
     var existing = card && card.querySelector('[data-castor-ui="reply"]');
     if (existing) { focusPanelCard(thread.id,existing.querySelector('textarea, .cw-field')); return; }
     closeComposer();
+    // One reply draft per thread: Reply opens the draft closed here, with its words.
+    var draft = !record && closedReplyDrafts(thread.id)[0];
+    if (draft) { resumeDraft(draft); return; }
     record = record || newComposerRecord(thread.anchor, thread.id);
     var selector = '[data-thread-id="' + thread.id + '"]';
     card = panelCard(thread.id) || (S.page && S.page.querySelector(selector)) || card;
@@ -2100,20 +2179,21 @@
     box.appendChild(ta);
     var hint = el('div', 'castor-hint', 'Enter saves · Esc closes');
     box.appendChild(hint);
-    var send=el('button',null,'Send reply');send.type='button';send.addEventListener('click',function(e){e.stopPropagation();submit();});box.appendChild(send);
-    var cancel=el('button',null,'Cancel');cancel.type='button';cancel.addEventListener('click',function(e){e.stopPropagation();cancelComposer();});box.appendChild(cancel);
+    var send=el('button',null,'Send reply');send.type='button';send.setAttribute('data-word','Send');send.addEventListener('click',function(e){e.stopPropagation();if(send.getAttribute('data-claim'))record.claimed=true;submit();});var row=sendRow(box);row.appendChild(send);
+    var cancel=el('button',null,'Cancel');cancel.type='button';cancel.addEventListener('click',function(e){e.stopPropagation();cancelComposer();});row.appendChild(cancel);
     if (card) card.appendChild(box);
+    if (claimable(record) && record.tab !== TAB) askClaim(record, hint, send);
     function submit() {
       if(send.disabled)return false;
       var text = ta.value.trim();
       var journalled = rememberComposer();
       if (!text) { closeComposer(); return false; }
       if (record.path !== piecePath() || !available()) return false;
-      if (!composerIdentityKnown(record)) { hint.textContent = 'The original writer is unknown or unavailable. Your words are kept here.'; return false; }
+      if (!composerReady(record, hint, send)) return false;
       var target = journalThread(record);
       if (!target) { hint.textContent = 'This thread is unavailable. Your reply is kept here.'; return false; }
       var reply = {
-        id: record.id,
+        id: sentId(record),
         author: record.author, principal: record.principal, reviewer: record.reviewer, reviewerIdentity: record.reviewerIdentity,
         by: 'human', created: new Date().toISOString(), basis: 'the thread', text: text
       };
@@ -2231,7 +2311,7 @@
     var oldSlots = S.page.querySelectorAll('[data-castor-ui="thread-slot"]');
     var list = visibleThreads(), byBlock = {}, order = [];
     for (var i = 0; i < list.length; i++) {
-      var r = S.resolved[list[i].id];
+      var r = passageEnd(S.resolved[list[i].id]);
       if (!r) continue;                                   // detached: panel only
       if (!byBlock[r.blockId]) { byBlock[r.blockId] = []; order.push(r.blockId); }
       byBlock[r.blockId].push(list[i]);
@@ -2241,7 +2321,7 @@
       var b = blockById(order[j]);
       if (!b) continue;
       var threads = byBlock[order[j]], slot = null;
-      var signature = JSON.stringify([threads, S.expanded, S.actionJournal, S.actionReceipts, S.actionErrors, S.replySending, S.actionSending, S.actionEditor && S.actionEditor.record.opId, routed]);
+      var signature = JSON.stringify([threads, S.expanded, S.actionJournal, S.actionReceipts, S.actionErrors, S.replySending, S.actionSending, S.actionEditor && S.actionEditor.record.opId, routed, S.commentActions && S.commentActions.actor, S.ended]);
       for (var n = 0; n < oldSlots.length; n++) {
         if (oldSlots[n].getAttribute('data-comment-block') === order[j]) { slot = oldSlots[n]; break; }
       }
@@ -2585,7 +2665,7 @@
       row.setAttribute('data-thread-id', t.id);
       row.setAttribute('data-castor-ui', 'thread');
       row.addEventListener('click', function (event) { cardClicked(event, t); });
-      if (t.anchor.quote) row.appendChild(el('div', 'castor-quote', (t.done ? '✓ ' : '') + '\u201C' + t.anchor.quote + '\u201D'));
+      if (t.anchor.quote) row.appendChild(el('div', 'castor-quote', (t.done ? '✓ ' : '') + '\u201C' + passageOf(t.anchor) + '\u201D'));
       row.appendChild(el('div', 'castor-passage-status', passageStatus(t)));
       var acts = el('div', 'castor-acts');
       var find = el('button', null, 'Find it');
@@ -2648,9 +2728,17 @@
       return;
     }
 
+    // On a phone the sheet lies under the page, not beside it: a card is level with its passage when it
+    // sits as far under the top of the sheet's list as the passage sits under the top of the page he can
+    // see (N9). Measured from the sheet's own top, every passage he can read had its card above the list.
+    var from = band.top, panels = Castor.panels;
+    if (panels && panels.state && panels.state().mode === 'phone') {
+      var scroller = S.page.closest && S.page.closest('.page-scroll'), bar = DOC.getElementById('topbar');
+      from = Math.max(scroller ? scroller.getBoundingClientRect().top : 0, bar ? bar.getBoundingClientRect().bottom : 0);
+    }
     var wanted = items.map(function (it) {
       var target = passageEl(it.id);
-      return { it: it, y: target ? (target.getBoundingClientRect().top - band.top) : 0 };
+      return { it: it, y: target ? (target.getBoundingClientRect().top - from) : 0 };
     }).sort(function (a, b) { return a.y - b.y; });
 
     // No floor on the first card: a thread whose passage has scrolled off the top
@@ -2722,7 +2810,11 @@
     var layerH = Math.max(band.height, maxBottom + 16, target + band.height);
     S.canvas.style.height = layerH + 'px';
     target = Math.max(0, Math.min(target, layerH - band.height));
-    if (Math.abs(S.wrap.scrollTop - target) > 1) {
+    // A comment being written keeps the place its reveal gave it (N9): on a phone the keyboard and
+    // every key run this, and the list must not move the field and its Save edit away under them.
+    var writing = S.actionEditor && holdsFocus(S.actionEditor.textarea) && S.wrap.contains(S.actionEditor.node) ||
+      S.composer && holdsFocus(S.composer.textarea) && S.wrap.contains(S.composer.node);
+    if (!writing && Math.abs(S.wrap.scrollTop - target) > 1) {
       S.selfScroll = true;
       S.wrap.scrollTop = target;
       S.selfScroll = false;
@@ -2782,12 +2874,12 @@
     // Keep equal-endpoint threads together, in the same order as their single pin.
     var endpoints = {}, order = [];
     list.forEach(function (t) {
-      var r = S.resolved[t.id], key = r.blockId + ':' + r.end;
+      var r = passageEnd(S.resolved[t.id]), key = r.blockId + ':' + r.end;
       if (!endpoints[key]) { endpoints[key] = []; order.push(key); }
       endpoints[key].push(t);
     });
     list = [].concat.apply([], order.map(function (key) { return endpoints[key]; }));
-    var signature = JSON.stringify([list, S.expanded, S.actionJournal, S.actionReceipts, S.actionErrors, S.replySending, S.actionSending, S.actionEditor && S.actionEditor.record.opId, S.storageKey]);
+    var signature = JSON.stringify([list, S.expanded, S.actionJournal, S.actionReceipts, S.actionErrors, S.replySending, S.actionSending, S.actionEditor && S.actionEditor.record.opId, S.storageKey, S.commentActions && S.commentActions.actor, S.ended]);
     if (signature === S.panelCardsSignature && old.length === list.length) return;
     S.panelCardsSignature = signature;
     for (var i = 0; i < old.length; i++) old[i].remove();
@@ -2921,7 +3013,7 @@
     // Cancel only the focus-changing mouse default. Canceling pointerdown can
     // suppress the subsequent touch click in WebKit.
     if (event.type === 'pointerdown') return;
-    if (!event.target.closest || !event.target.closest('.castor-comment-editor button, .castor-composer > button, .castor-comment-undo button')) return;
+    if (!event.target.closest || !event.target.closest('.castor-comment-editor button, .castor-composer > button, .castor-composer > .castor-sendrow > button, .castor-comment-undo button')) return;
     if (S.actionEditor && holdsFocus(S.actionEditor.textarea) || S.composer && holdsFocus(S.composer.textarea)) event.preventDefault();
   }
 
@@ -2980,7 +3072,8 @@
         return;
       }
       var id = edit && field === edit.textarea ? edit.record.threadId : composer.record.thread;
-      var card = panelCard(id);
+      // The card that holds the field: in the sheet, or under its paragraph in the page.
+      var card = field.closest && field.closest('.castor-thread') || panelCard(id);
       if (card) revealPanelCard(card, field);
       else if (composer) revealPanelCard(composer.node, field);
     });
@@ -3005,11 +3098,15 @@
     return { top: vv ? vv.offsetTop || 0 : 0, bottom: bottom - (keyboard ? 72 : 0) };
   }
 
+  // The words that send or close a comment, in one row that can hold to the list's bottom (N9).
+  function sendRow(box) { var row = el('div', 'castor-sendrow'); box.appendChild(row); return row; }
   function revealPanelCard(card,field){
     if (!card) return;
+    // A thread "In the page" scrolls with the article.
+    var page=S.page&&S.page.contains&&S.page.contains(card)&&(S.page.closest('.page-scroll')||S.page.querySelector('.page-scroll'));
     var scroll=card.classList&&card.classList.contains('is-floating')?card:
       S.panelLayout==='list'&&S.panelEl&&S.panelEl.scrollTo&&S.panelEl.contains(card)?S.panelEl:
-      S.wrap&&S.wrap.contains(card)?S.wrap:S.lostBox;
+      S.wrap&&S.wrap.contains(card)?S.wrap:page||S.lostBox;
     if(!scroll||!scroll.getBoundingClientRect)return;
     var box=scroll.getBoundingClientRect(),at=card.getBoundingClientRect();
     if (!field && S.actionEditor && holdsFocus(S.actionEditor.textarea) && card.contains(S.actionEditor.node)) field = S.actionEditor.textarea;
@@ -3021,8 +3118,11 @@
       var input = commentCaretRect(field), viewport = commentViewport();
       var top = Math.max(box.top, viewport.top) + 8, bottom = Math.min(box.bottom, viewport.bottom) - 8;
       var end = input.bottom, editor = field.closest && field.closest('.castor-comment-editor, .castor-composer');
+      var row = editor && editor.querySelector && editor.querySelector('.castor-sendrow');
+      // The send row holds to the list's bottom on a phone (N9): it is in view; the caret stays above it.
+      if (row && global.getComputedStyle && global.getComputedStyle(row).position === 'sticky') bottom -= row.offsetHeight;
       // Keep the action words beside the caret when that whole interval fits.
-      if (editor) Array.prototype.forEach.call(editor.querySelectorAll('button'), function (button) {
+      else if (editor) Array.prototype.forEach.call(editor.querySelectorAll('button'), function (button) {
         var edge = button.getBoundingClientRect().bottom;
         if (edge - input.top <= bottom - top) end = Math.max(end, edge);
       });
@@ -3223,6 +3323,51 @@
     if (reviewing()) return record.reviewer === true && sameReviewer(record.reviewerIdentity, reviewerIdentity(Castor.role));
     return record.reviewer === false && isWriter(record.principal);
   }
+  /* This browser tab, across reloads (sessionStorage). Words typed in it before the
+     writer's sign-in was confirmed belong to whoever holds the tab, so they post as
+     the writer it then confirms; words from another tab wait for one explicit tap. */
+  var TAB = (function () {
+    try { var s = global.sessionStorage, t = s.getItem('castor.tab'); if (!t) { t = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2); s.setItem('castor.tab', t); } return t; }
+    catch (e) { return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2); }
+  })();
+  /* The kind of page ('read', 'write', or '' for the app itself): the reader's and the writer's
+     pages share one storage, even one tab, so kept words are claimed only on the kind they were
+     typed on. A duplicated tab copies the tab's id, so this one page load has its own id too. */
+  var PAGE_KIND = String((global.location && global.location.pathname) || '').split('/')[1] || '';
+  var PAGE_ID = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2);
+  function otherPage(record) { return typeof record.pageKind === 'string' && record.pageKind !== PAGE_KIND; }
+  function samePage(record) { return record.tab === TAB && record.pageKind === PAGE_KIND; }
+  function unclaimed(record) { return !record.author && !record.principal && record.reviewer === undefined && !record.reviewerIdentity; }
+  function claimable(record) {
+    return unclaimed(record) && !reviewing() && roleConfirmed() && isWriter(Castor.who && Castor.who.get ? Castor.who.get() : '');
+  }
+  function claim(record) {
+    record.author = Castor.who.name(); record.principal = Castor.who.get(); record.reviewer = false;
+  }
+  /* Ready to send as a known writer; otherwise says why in the hint and keeps the words. */
+  function composerReady(record, hint, button) {
+    if (ended()) { hint.textContent = 'Signed out. Your words stay on this device; sign in again to send them.'; return false; }
+    if (composerIdentityKnown(record)) return true;
+    if (!unclaimed(record) || reviewing() || otherPage(record)) { hint.textContent = 'The original writer is unknown or unavailable. Your words are kept here.'; return false; }
+    if (!claimable(record)) {
+      record.submitted = true;
+      if (S.composer && S.composer.record === record) rememberComposer();
+      hint.textContent = 'Checking your sign-in. Your comment stays on this device and is sent once you are confirmed.';
+      // Confirmed in this page with no reload (its opening check settled): sent now, as said.
+      if (Castor.reconfirm) Promise.resolve(Castor.reconfirm('comment')).then(function (confirmed) {
+        if (confirmed && roleConfirmed() && key() !== S.storageKey) { switchScope(); restoreComposer(record); layout(); }
+      });
+      return false;
+    }
+    if (!samePage(record) && !record.claimed) { askClaim(record, hint, button); return false; }
+    claim(record);
+    return composerIdentityKnown(record);
+  }
+  function askClaim(record, hint, button) {
+    button.textContent = (button.getAttribute('data-word') || 'Post') + ' as ' + Castor.who.name();
+    button.setAttribute('data-claim', '1');
+    hint.textContent = 'Written here before your sign-in was confirmed.';
+  }
   function composerRecoveryAllowed(record) {
     // Reader journals are private to their authenticated account, including
     // when the current sign-in is unknown or has become a founder session.
@@ -3230,7 +3375,7 @@
   }
   function newComposerRecord(anchor, thread) {
     var id = 'c' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
-    return { id: id, path: S.loadedPath, anchor: anchor, thread: thread || '', text: '',
+    return { id: id, path: S.loadedPath, anchor: anchor, thread: thread || '', text: '', tab: TAB, pageKind: PAGE_KIND,
       author: (Castor.who && Castor.who.name && Castor.who.name()) || '',
       principal: (Castor.who && Castor.who.get && Castor.who.get()) || '', reviewer: roleConfirmed() ? reviewing() : undefined,
       ...(reviewing() ? { reviewerIdentity: reviewerIdentity(Castor.role) } : {}),
@@ -3243,24 +3388,29 @@
   function journalRecords(readOnly) {
     var prefix = key() + '.composer.';
     var oldPrefix = legacyKey() + '.composer.';
-    function matches(k) { return k.indexOf(prefix) === 0 || k.indexOf(oldPrefix) === 0; }
+    var waiting = !reviewing() && roleConfirmed() ? legacyKey() + '.unconfirmed.composer.' : prefix;
+    function matches(k) { return k.indexOf(prefix) === 0 || k.indexOf(oldPrefix) === 0 || k.indexOf(waiting) === 0; }
     try {
+      // Another page removed it (it sent, resumed or discarded those words). Words storage refused stay.
+      Object.keys(S.journalStored).forEach(function (k) {
+        if (global.localStorage.getItem(k) === null) { delete S.composerJournal[k]; delete S.journalStored[k]; }
+      });
       for (var i = 0; i < global.localStorage.length; i++) {
         var k = global.localStorage.key(i);
         if (!k || !matches(k) || S.composerJournal[k]) continue;
         var record;
         try { record = JSON.parse(global.localStorage.getItem(k)); } catch (e) { continue; }
-        if (record && record.key === k && record.path === piecePath() && typeof record.text === 'string') S.composerJournal[k] = record;
+        if (record && record.key === k && record.path === piecePath() && typeof record.text === 'string') { S.composerJournal[k] = record; S.journalStored[k] = true; }
       }
     } catch (e) { /* the current page still holds the latest input */ }
     Object.keys(S.composerJournal).forEach(function(k){var r=S.composerJournal[k];if(matches(k)&&r.path===piecePath()&&!r.text.trim())removeJournal(r);});
     return Object.keys(S.composerJournal).filter(function (k) {
       return matches(k) && S.composerJournal[k].path === piecePath();
     }).map(function (k) { return S.composerJournal[k]; }).filter(function (record) {
-      if (!composerRecoveryAllowed(record)) return false;
+      if (!composerRecoveryAllowed(record) || otherPage(record)) return false;
       var thread = record.thread && journalThread(record);
-      var stored = record.storedId || (record.thread ? thread && thread.replies.some(function (r) { return r.id === record.id && r.text === record.text.trim() && r.author === record.author; }) :
-        S.threads.some(function (t) { return (t.id === record.id || t.clientId === record.id) && t.text === record.text.trim() && t.author === record.author; }));
+      var id = sentId(record), stored = record.storedId || (record.thread ? thread && thread.replies.some(function (r) { return r.id === id && r.text === record.text.trim() && r.author === record.author; }) :
+        S.threads.some(function (t) { return (t.id === id || t.clientId === id) && t.text === record.text.trim() && t.author === record.author; }));
       if (stored && !readOnly) removeJournal(record);
       return !stored;
     });
@@ -3277,7 +3427,7 @@
         held.author = ''; held.principal = ''; held.reviewer = undefined;
         delete held.reviewerIdentity;
         S.composerJournal[held.key] = held;
-        try { global.localStorage.setItem(held.key, JSON.stringify(held)); }
+        try { global.localStorage.setItem(held.key, JSON.stringify(held)); S.journalStored[held.key] = true; }
         catch (e) {
           if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unsaved', {
             path: c.record.path, reason: "Can't keep this comment on this device. Keep this page open."
@@ -3293,6 +3443,7 @@
     if (reviewing() && Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:draft', { path: c.record.path });
     try {
       global.localStorage.setItem(c.record.key, JSON.stringify(c.record));
+      S.journalStored[c.record.key] = true;
       c.hint.textContent = 'Enter saves · Esc closes';
       return true;
     } catch (e) {
@@ -3324,7 +3475,7 @@
     layout(true);
   }
   function removeJournal(record) {
-    delete S.composerJournal[record.key];
+    delete S.composerJournal[record.key]; delete S.journalStored[record.key];
     try { global.localStorage.removeItem(record.key); } catch (e) { /* stable message ids prevent a second submission */ }
   }
   function finishComposer(storedId) {
@@ -3369,36 +3520,80 @@
     }
     if (focused) c.textarea.focus({preventScroll:true});
   }
-  function restoreComposer(wanted) {
+  /* Words Posted before the sign-in was confirmed send themselves on the page they were typed
+     on, from one page only: a duplicated tab has this tab's id, and two pages can restore at
+     once. A page marks the comment as its own and sends it only if the mark is still its own a
+     moment later; another page's recent mark leaves the comment to that page. */
+  var SENDING_MS = 60000, SETTLE_MS = 50;
+  function sendsItself(record) { return !!record.submitted && samePage(record) && claimable(record); }
+  // A draft is sent under the id it was typed with, on every page that restores it, so the server
+  // keeps one comment however many pages send it.
+  function sentId(record) { return record.origin || record.id; }
+  /* True while this page's claim settles, so nothing else takes the composer first; false when
+     another page sends it. Either way the page then restores its other words. */
+  function sendOnce(record) {
+    var mark = key() + '.sending.' + sentId(record);
+    function holder() { try { return JSON.parse(global.localStorage.getItem(mark) || 'null'); } catch (e) { return null; } }
+    var held = holder();
+    if (S.claiming) return true;
+    if (held && held.by !== PAGE_ID && Date.now() - held.at < SENDING_MS) return false;
+    try { global.localStorage.setItem(mark, JSON.stringify({ by: PAGE_ID, at: Date.now() })); } catch (e) { return false; }
+    S.claiming = true;
+    global.setTimeout(function () {
+      S.claiming = false;
+      var mine = (holder() || {}).by === PAGE_ID, kept = false;
+      try { kept = global.localStorage.getItem(record.key) !== null; } catch (e) { kept = false; }
+      if (mine && kept) restoreComposer(record, mark);
+      restoreComposer();
+    }, SETTLE_MS);
+    return true;
+  }
+  // The closed reply drafts for a thread, newest first (ids start with their time). One per thread is
+  // kept: resuming the newest drops any older ones.
+  function draftThread(record) { var thread = journalThread(record); return thread ? thread.id : record.thread; }
+  function closedReplyDrafts(threadId) {
+    var made = function (r) { return parseInt(String(r.id).slice(1), 36) || 0; };
+    return journalRecords().filter(function (r) { return r.closed && r.thread && r.text.trim() && draftThread(r) === threadId; })
+      .sort(function (a, b) { return made(b) - made(a); });
+  }
+  function resumeDraft(record) {
+    if (record.thread) closedReplyDrafts(draftThread(record)).forEach(function (r) { if (r !== record) removeJournal(r); });
+    restoreComposer(record);
+  }
+  function restoreComposer(wanted, sending) {
     if (S.composer || !available()) return;
     var records = wanted ? [wanted] : journalRecords();
     for (var i = 0; i < records.length; i++) {
       var record = records[i], thread = record.thread && journalThread(record);
       if (!record.text || !wanted && (record.closed || S.closedComposers[record.key])) continue;
+      if (!sending && sendsItself(record)) { if (sendOnce(record)) return; continue; }
       // An unfinished recovery is a new tab's composer, not a shared mutable journal.
       var fresh = newComposerRecord(record.anchor, record.thread);
-      fresh = Object.assign({}, record, { id: fresh.id, key: fresh.key, closed: false });
+      fresh = Object.assign({}, record, { id: fresh.id, key: fresh.key, closed: false, origin: record.origin || record.id });
       if (record.thread) {
         openReply(thread || { id: record.thread, anchor: record.anchor }, null, fresh);
       } else compose(record.anchor, fresh);
       if (rememberComposer()) removeJournal(record);
+      if (sending && S.composer && S.composer.record === fresh && sendsItself(fresh) && S.composer.submit()) {
+        try { global.localStorage.removeItem(sending); } catch (e) { /* the mark lapses by itself */ }
+      }
       break;
     }
   }
 
   function compose(anchor, record) {
-    if (!available()) return null;
+    if (!available() || ended()) return null;
     switchScope();
     if (!S.page || !anchor || !anchor.quote) return null;
     closeComposer();
     record = record || newComposerRecord(anchor);
-    var r = resolveBlock(anchor);
-    var b = r ? blockById(r.blockId) : null;
+    var r = resolveBlock(anchor), end = r && anchor.more && resolveParts(anchor.more, pageBlocks(), r.blockId).pop();
+    var b = r ? blockById((end || r).blockId) : null;
 
     var slot = el('div', 'castor-thread-slot');
     slot.setAttribute('data-castor-ui', 'thread-slot');
     var box = el('div', 'castor-composer');
-    box.appendChild(el('div', 'castor-quote', '“' + anchor.quote + '”'));
+    box.appendChild(el('div', 'castor-quote', '“' + passageOf(anchor) + '”'));
     var ta = writingField('Your comment', 'What is wrong with this, or what you would want.');
     box.appendChild(ta);
     var hint = el('div', 'castor-hint', 'Enter saves · Esc closes');
@@ -3433,8 +3628,8 @@
       var journalled = rememberComposer();
       if (!text) { closeComposer(); return false; }
       if (record.path !== piecePath() || !available()) return false;
-      if (!composerIdentityKnown(record)) { hint.textContent = 'The original writer is unknown or unavailable. Your words are kept here.'; return false; }
-      var stored = addFrom('human', anchor, text, record.id, record);
+      if (!composerReady(record, hint, post)) return false;
+      var stored = addFrom('human', anchor, text, sentId(record), record);
       if (!stored) {
         if (journalled) hint.textContent = 'Comment was not saved. Your words are kept here.';
         return false;
@@ -3442,10 +3637,12 @@
       finishComposer(stored.id); layout();
       return true;
     }
-    var post = el('button', null, 'Post comment'); post.type = 'button';
-    post.addEventListener('click', function (event) { event.stopPropagation(); submit(); }); box.appendChild(post);
+    var post = el('button', null, 'Post comment'); post.type = 'button'; post.setAttribute('data-word', 'Post');
+    post.addEventListener('click', function (event) { event.stopPropagation(); if (post.getAttribute('data-claim')) record.claimed = true; submit(); });
+    var row = sendRow(box); row.appendChild(post);
+    if (claimable(record) && !samePage(record)) askClaim(record, hint, post);
     var cancel = el('button', null, 'Cancel'); cancel.type = 'button';
-    cancel.addEventListener('click', function (event) { event.stopPropagation(); cancelComposer(); }); box.appendChild(cancel);
+    cancel.addEventListener('click', function (event) { event.stopPropagation(); cancelComposer(); }); row.appendChild(cancel);
     S.composer = { node: slot, anchor: anchor, textarea: ta, hint: hint, record: record, submit: submit };
 
     if (!reviewing() && !ta.castorEditor) wireAt(ta, box);   // the editor has its own @name picker
@@ -3483,7 +3680,7 @@
       !host.hasAttribute('data-block-id') && !host.hasAttribute('data-block')) {
       host = host.parentElement;
     }
-    if (!host || host === S.page) return null;
+    if (!host || host === S.page) return passageFromRange(range);
     var selectedHost = element.closest('.cw-edit,.cw-mirror');
     var textNode = selectedHost && host.contains(selectedHost) ? selectedHost : passageTextNode(host);
     var text = textNode.textContent, at;
@@ -3504,6 +3701,37 @@
       blockText: text,
       version: (Castor.app && Castor.app.data && Castor.app.data.current) || 'v1'
     };
+  }
+
+  // A selection that starts in one paragraph and ends in a later one (S8), or null.
+  function passageFromRange(range, version) {
+    var blocks = pageBlocks(), first = -1, last = -1;
+    for (var i = 0; i < blocks.length; i++) {
+      if (first < 0 && blocks[i].el.contains(range.startContainer)) first = i;
+      if (blocks[i].el.contains(range.endContainer)) last = i;
+    }
+    if (first < 0 || last <= first) return null;
+    var span = blocks.slice(first, last + 1), roots = span.map(function (b, i) {
+      var at = i === 0 ? range.startContainer : i === span.length - 1 ? range.endContainer : null;
+      var picked = at && (at.nodeType === 1 ? at : at.parentElement);
+      picked = picked && picked.closest && picked.closest('.cw-edit,.cw-mirror');
+      return picked && b.el.contains(picked) ? picked : passageTextNode(b.el);
+    });
+    function offset(root, container, at) {
+      var r = DOC.createRange(); r.selectNodeContents(root);
+      try {
+        if (root.contains(container)) r.setEnd(container, at);
+        else if (r.comparePoint(container, at) < 0) return 0;
+      } catch (error) { return null; }
+      return r.toString().length;
+    }
+    var from = offset(roots[0], range.startContainer, range.startOffset), to = offset(roots[roots.length - 1], range.endContainer, range.endOffset);
+    if (from == null || to == null) return null;
+    var texts = roots.map(function (n) { return n.textContent; });
+    var anchor = spanAnchor(texts, from, to, version || (Castor.app && Castor.app.data && Castor.app.data.current) || 'v1');
+    if (!anchor) return null;
+    for (var k = 0; k < texts.length; k++) if (texts[k].indexOf(anchor.quote) >= 0) { anchor.blockId = span[k].id; break; }
+    return anchor;
   }
 
   /* --------------------------------------------------------------- the API */
@@ -3787,17 +4015,35 @@
     positionTouchPeek();
   }
 
+  // A tap outside the composer keeps the words in it as a draft; only Post sends.
+  // An empty composer still closes. true makes a tap outside send the words.
+  var TAP_OUTSIDE_SENDS = false;
   // Submitting a reply rebuilds its card. An edit button must receive its click
   // before that can remove the pointerdown target and cancel native activation.
+  // With a comment's keyboard up, a tap on the article only closes that keyboard (tapPassage), so what
+  // the writer types next, meant for the comment, never lands in the article; the next tap edits it.
+  // Noted as the touch begins, before an empty box closes; the keyboard closes only if the touch is a tap.
+  function commentHasFocus() {
+    return !!(S.composer && holdsFocus(S.composer.textarea) || S.actionEditor && holdsFocus(S.actionEditor.textarea));
+  }
   function saveOutsideComposer(event) {
+    if (event.type === 'pointerdown') S.keyboardTap = event.pointerType === 'touch' && commentHasFocus() && !!S.page &&
+      S.page.contains(event.target) && !(event.target.closest && event.target.closest('[data-castor-ui]')) ? Date.now() : 0;
     var editButton = event.target.closest && event.target.closest('.castor-comment-editor button');
     if ((event.type === 'click') !== !!editButton) return;
     if (S.composer && !(S.composer.record && S.composer.record.closed) &&
         !S.composer.node.contains(event.target) &&
-        !(event.target.closest && event.target.closest('.castor-comment-undo'))) S.composer.submit();
+        !(event.target.closest && event.target.closest('.castor-comment-undo')) &&
+        (TAP_OUTSIDE_SENDS || !S.composer.textarea.value.trim())) S.composer.submit();
   }
 
   function tapPassage(e) {
+    if (S.keyboardTap && Date.now() - S.keyboardTap < 1500) {
+      S.keyboardTap = 0;
+      if (commentHasFocus() && DOC.activeElement.blur) DOC.activeElement.blur();
+      if (e.preventDefault) e.preventDefault();
+      return true;
+    }
     S.touchPeekEnabled = true;
     S.passageTouchUntil = Date.now() + 800;
     var mark = markAt(e);
@@ -4077,6 +4323,7 @@
     tapPassage: tapPassage,
     compose: compose,
     anchorFromSelection: anchorFromSelection,
+    passageFromRange: passageFromRange,
     setFilter: function (f) { S.filter = ['open','done','all','withdrawn'].indexOf(f)>=0 ? f : 'open'; layout(); },
     setAuthorFilter: function (name) { S.authorFilter=String(name||'');layout(); },
     setReading: setReading,

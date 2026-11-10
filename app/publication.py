@@ -284,6 +284,15 @@ class Publication:
             if file == existing: continue
             other, _, _ = frontmatter(file.read_text())
             if other.get('chip') == chip: raise Refused('That chip act is already used by another site article.')
+        # Reject raw HTML, whose URLs and hidden content cannot be reviewed as Markdown. After "<" and a
+        # letter, "/", "!" or "?" (a tag, a comment, a declaration, an instruction) a page can hide every
+        # word up to a later >, closed or not, so none may reach it; refusing one in code is accepted.
+        # Only a whole autolink to a safe address passes.
+        for opener in re.finditer(r'<[A-Za-z/!?]', body):
+            link = re.match(r'<((?:https?://|mailto:)[^\s<>]+)>', body[opener.start():])
+            if not link:
+                raise Refused('Remove "<" before a letter, "/", "!" or "?", even in code: a web page can hide the words after it. A space after "<" keeps it as text.')
+            if not link.group(1).startswith('mailto:'): safe_url(link.group(1))
         exports = {}
         if len(re.findall(r'!\[', body)) != len(re.findall(r'!\[[^\]]*\]\([^\n)]+\)', body)):
             raise Refused('Use inline Markdown images with alt text before publication.')
@@ -313,10 +322,6 @@ class Publication:
             used.append(source_path)
             return '![' + alt + '](/descant/' + slug + '/' + Path(name).name + ')'
         body = re.sub(r'!\[([^\]]*)\]\(([^\s)]+)(?:\s+[^)]*)?\)', image, body)
-        # Reject raw HTML, whose URLs and hidden content cannot be reviewed as Markdown.
-        for tag in re.findall(r'<([^>]+)>', body):
-            if tag.startswith(('https://', 'http://')): safe_url(tag)
-            else: raise Refused('Convert raw HTML to Markdown before publication.')
         for link in re.findall(r'\]\(([^\s)]+)', body) + re.findall(r'^\s*\[(?!\^)[^\]]+\]:\s*(\S+)', body, re.M):
             safe_url(link)
         date = old_fields.get('date') or pending.get('metadata', {}).get('date') or datetime.date.today().isoformat()

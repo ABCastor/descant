@@ -9,7 +9,7 @@ import {
 } from "./rules.ts";
 import { actionRoute, metadata } from "./actions.ts";
 import { randomId, sha256Hex } from "./session.ts";
-import { clientReceipts, mayRead, pyIso, readable, readerThreads, type Anchor, type ClientReceipt, type LegacyMessage, type Env, type Person, type Thread } from "./store.ts";
+import { anchorParts, clientReceipts, mayRead, pyIso, readable, readerThreads, type Anchor, type ClientReceipt, type LegacyMessage, type Env, type Person, type Thread } from "./store.ts";
 import { json, sameSite } from "./web.ts";
 import { isWriter } from "./writers.ts";
 
@@ -100,8 +100,8 @@ function status(t: Record<string, unknown>): string {
 }
 
 function anchorFrom(v: unknown): Anchor {
-  const a = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
-  return { quote: plain(a.quote), prefix: plain(a.prefix), suffix: plain(a.suffix), blockText: plain(a.blockText), version: plain(a.version) };
+  const a = v && typeof v === "object" ? (v as Record<string, unknown>) : {}, more = anchorParts(a.more);
+  return { quote: plain(a.quote), prefix: plain(a.prefix), suffix: plain(a.suffix), blockText: plain(a.blockText), version: plain(a.version), ...(more.length ? { more } : {}) };
 }
 
 /** serve.py canonical_comment(), less the replies and the id: what an existing thread must still say. */
@@ -257,15 +257,20 @@ async function post(req: Request, env: Env, person: Person): Promise<Response> {
         separate(t, "thread", [...current.values()].flatMap(thread => (thread.legacyMessages ?? []).filter(m => m.kind === "thread" && m.author === person.name &&
           m.text === readerMessage(t.text) && JSON.stringify(m.anchor) === JSON.stringify(anchorFrom(t.anchor))).map(original => ({ thread, original }))));
         const a = anchorFrom(t.anchor);
+        // A passage over paragraphs (S8): every part, the first too, is bounded like its paragraph.
         const anchor: Anchor = {
-          quote: readerString(a.quote, QUOTE_MAX, "the quoted passage"), prefix: readerString(a.prefix, AFFIX_MAX, "the words before it"),
+          quote: readerString(a.quote, a.more ? BLOCK_MAX : QUOTE_MAX, "the quoted passage"), prefix: readerString(a.prefix, AFFIX_MAX, "the words before it"),
           suffix: readerString(a.suffix, AFFIX_MAX, "the words after it"), blockText: readerString(a.blockText, BLOCK_MAX, "its paragraph"),
           version: readerString(a.version, VERSION_MAX, "the version"),
+          ...(a.more ? { more: a.more.map((p) => ({ quote: readerString(p.quote, BLOCK_MAX, "the quoted passage"),
+            suffix: readerString(p.suffix, AFFIX_MAX, "the words after it"), blockText: readerString(p.blockText, BLOCK_MAX, "its paragraph") })) } : {}),
         };
-        // A comment is on words of this article: a quote that is not in its text is refused.
-        const quoted = wordsOf(anchor.quote);
-        if (quoted && !words.includes(quoted)) {
-          throw new Refused(400, "quote-not-found", "the words this comment is on are not in the article");
+        // A comment is on words of this article: a quote, or a part of it, that is not in its text is refused.
+        for (const part of [anchor, ...(anchor.more ?? [])]) {
+          const quoted = wordsOf(part.quote);
+          if (quoted && !words.includes(quoted)) {
+            throw new Refused(400, "quote-not-found", "the words this comment is on are not in the article");
+          }
         }
         const threadId = newThreadId();
         fresh.push({

@@ -117,6 +117,13 @@
     button.addEventListener('click', function () { var target = source && doc.querySelector(source); if (target) target.click(); else if (action) action(); });
     sheet.appendChild(button); return button;
   }
+  function group(sheet, id, title, before) {
+    var section = doc.getElementById(id);
+    if (section) return section;
+    section = doc.createElement('section'); section.id = id; section.className = 'menu-group'; section.setAttribute('aria-label', title);
+    var heading = doc.createElement('h2'); heading.textContent = title; section.appendChild(heading);
+    sheet.insertBefore(section, before); return section;
+  }
   function layoutMenu(value) {
     menu = value;
     var b = bar(), nav = words(), foot = doc.getElementById('footline'), meta = foot && foot.querySelector('.foot-meta');
@@ -129,6 +136,12 @@
     if (menuLabel && menuLabel.textContent !== (small ? 'Menu' : 'More')) menuLabel.textContent = small ? 'Menu' : 'More';
     menu.word.setAttribute('aria-label', small ? 'Menu' : 'More');
     sheet.setAttribute('aria-label', small ? 'Menu' : 'More');
+    var articles = doc.getElementById('menu-articles');
+    if (!articles) { articles = doc.createElement('section'); articles.id = 'menu-articles'; articles.setAttribute('aria-label', 'Open articles'); sheet.appendChild(articles); }
+    // Phone: the Menu lists its tools in named groups, in this order, before the open
+    // articles, whose list grows (S2).
+    var groups = small && { article: group(sheet, 'menu-article', 'This article', articles), library: group(sheet, 'menu-library', 'Library', articles), app: group(sheet, 'menu-app', 'App', articles) };
+    var groupOf = { outline: 'article', changes: 'article', drafts: 'article', links: 'article', files: 'library', workspace: 'library', 'for-you': 'library' };
     ['outline', 'comments', 'changes', 'files', 'drafts', 'workspace', 'links', 'for-you'].forEach(function (id) {
       var button = id === 'comments' && commentControl || doc.querySelector('.topwords [data-panel="' + id + '"], #more-sheet [data-panel="' + id + '"]');
       if (id === 'comments' && button) {
@@ -139,7 +152,7 @@
           button.addEventListener('click', function (event) { if (peek) { event.preventDefault(); event.stopImmediatePropagation(); peek.open(); } }, true);
         }
       }
-      if (id !== 'comments') move(button, id === 'comments' || !small && ['outline', 'changes', 'drafts'].indexOf(id) >= 0 ? nav : sheet);
+      if (id !== 'comments') move(button, groups ? groups[groupOf[id]] : ['outline', 'changes', 'drafts'].indexOf(id) >= 0 ? nav : sheet);
       if (button && Castor.panels) {
         if (Castor.panels.isReady) button.hidden = !Castor.panels.isReady(id);
         if (Castor.panels.isOpen) button.setAttribute('aria-pressed', String(Castor.panels.isOpen(id)));
@@ -153,14 +166,12 @@
     }
     var pub = publishButton(), live = doc.querySelector('.descant-live-marker');
     move(live, small ? section : meta); move(pub, small ? section : meta);
-    var shortcuts = doc.getElementById('castor-shortcuts'); move(shortcuts, sheet);
+    // Search is not listed: on the phone it sits at the top right of the row.
+    move(proxy(sheet, 'menu-share', 'Share', '.descant-share', null, 'share'), small ? section : sheet);
+    move(proxy(sheet, 'menu-theme', 'Theme', '#theme-switch', null, 'theme'), groups ? groups.app : sheet);
+    move(proxy(sheet, 'menu-settings', 'Settings', '#castor-settings-gear', null, 'settings'), groups ? groups.app : sheet);
+    var shortcuts = doc.getElementById('castor-shortcuts'); move(shortcuts, groups ? groups.app : sheet);
     if (shortcuts) shortcuts.dataset.icon = 'shortcuts';
-    proxy(sheet, 'menu-search', 'Search', '.find-lens', null, 'search');
-    proxy(sheet, 'menu-theme', 'Theme', '#theme-switch', null, 'theme');
-    proxy(sheet, 'menu-settings', 'Settings', '#castor-settings-gear', null, 'settings');
-    proxy(sheet, 'menu-share', 'Share', '.descant-share', null, 'share');
-    var articles = doc.getElementById('menu-articles');
-    if (!articles) { articles = doc.createElement('section'); articles.id = 'menu-articles'; articles.setAttribute('aria-label', 'Open articles'); sheet.appendChild(articles); }
     var tabs = Array.prototype.slice.call(doc.querySelectorAll('#castor-tabs .castor-tab'));
     var stamp = tabs.map(function (tab) { return tab.textContent + ':' + tab.getAttribute('aria-selected'); }).join('|');
     if (articles._stamp !== stamp) {

@@ -2,7 +2,7 @@
 import { clearFailures, guessKeys, reserveTry, waitWords } from './attempts.ts';
 import { emailProblem, foldEmail } from './rules.ts';
 import { hashPassword, PASSWORD_MAX, passwordProblem, verifyPassword } from './passwords.ts';
-import { FOUNDER_COOKIE, FOUNDER_DAYS, FOUNDER_HOURS, READER_COOKIE, cookie, randomId, readCookie, sha256Hex, signFounderSession, verifyFounderSession, verifySession, type FounderSession } from './session.ts';
+import { FOUNDER_COOKIE, FOUNDER_DAYS, FOUNDER_HOURS, READER_COOKIE, cookie, founderMaxAge, randomId, readCookie, sha256Hex, signFounderSession, verifyFounderSession, verifySession, type FounderSession } from './session.ts';
 import type { Env } from './store.ts';
 import { isWriter } from './writers.ts';
 import { esc, formOf, message, page, redirect, sameSite } from './web.ts';
@@ -23,18 +23,32 @@ export async function authenticatedFounder(req: Request, env: Env, now = Date.no
   if (!live || !/^[a-f0-9]{64}$/.test(live.emailSha256)) return undefined;
   if (modern) return modern.emailSha256 === live.emailSha256 && modern.generation === (live.generation ?? 'none') ? modern : undefined;
   if (!legacy || live.generation || legacy.expires > now + FOUNDER_HOURS * 3600000) return undefined;
-  return { subject, emailSha256: live.emailSha256, generation: 'none', authenticatedAt: 0, expires: legacy.expires };
+  return { subject, emailSha256: live.emailSha256, generation: 'none', authenticatedAt: 0, signedInAt: legacy.expires - FOUNDER_HOURS * 3600000, expires: legacy.expires };
 }
-/** Inbox/password proof is recent. A private bridge link authenticates access, not a password change. */
-export async function founderSessionCookie(env: Env, subject: string, recentlyVerified = false, expectedGeneration?: string, expectedEmail?: string): Promise<string | undefined> {
+/** Inbox/password proof is recent. A private bridge link authenticates access, not a password change;
+ * one made from a writing session passes that session's signedInAt, so the year runs on. */
+export async function founderSessionCookie(env: Env, subject: string, recentlyVerified = false, expectedGeneration?: string, expectedEmail?: string, signedInAt?: number): Promise<string | undefined> {
   const live = await identity(env, subject);
   if (!live || !isWriter(env, subject) || !/^[a-f0-9]{64}$/.test(live.emailSha256)) return undefined;
   if (expectedGeneration !== undefined && (live.generation ?? 'none') !== expectedGeneration) return undefined;
   if (expectedEmail !== undefined && live.emailSha256 !== expectedEmail) return undefined;
-  const now = Date.now();
-  return cookie(FOUNDER_COOKIE, await signFounderSession(env.SESSION_SECRET, subject, live.emailSha256, live.generation ?? 'none', recentlyVerified ? now : 0, now), FOUNDER_DAYS * 86400);
+  const now = Date.now(), from = signedInAt ?? now;
+  return cookie(FOUNDER_COOKIE, await signFounderSession(env.SESSION_SECRET, subject, live.emailSha256, live.generation ?? 'none', recentlyVerified ? now : 0, now, from), founderMaxAge(from, now));
+}
+/**
+ * Ends every writing session of this founder, on every device, with no password: sessions,
+ * unused email codes and unused dashboard links all name the credential generation, so a
+ * new one refuses them all. A password, if set, is kept.
+ */
+export async function signOutEverywhere(env: Env, subject: string): Promise<void> {
+  await env.DB.prepare(`INSERT INTO founder_credentials (founderKey,emailSha256,secret,generation,updatedAt)
+    SELECT key,emailSha256,NULL,?,? FROM founders WHERE key=?
+    ON CONFLICT(founderKey) DO UPDATE SET generation=excluded.generation,updatedAt=excluded.updatedAt`).bind(randomId('g'), new Date().toISOString(), subject).run();
 }
 const GENERIC = 'The email or password did not match. Try again, or use an email code.';
+/** Off where this plan cannot derive a password in time; on everywhere else. */
+export const passwordsOn = (env: Env): boolean => env.PASSWORD_SIGNIN !== 'off';
+const passwordsOff = () => message('Password sign-in is off', 'This server signs writers in with an email code.', 404, '<p><a href="/signin?write=1">Sign in with an email code</a></p>');
 function loginPage(error = '', status = 200): Response {
   return page('Sign in to write · Descant', `<h1>Sign in to write</h1>
 ${error ? `<p class="err" role="alert">${esc(error)}</p>` : ''}
@@ -45,6 +59,7 @@ ${error ? `<p class="err" role="alert">${esc(error)}</p>` : ''}
 <p><a href="/signin?write=1">Use an email code instead</a></p>`, status);
 }
 export async function founderPasswordSignIn(req: Request, env: Env): Promise<Response> {
+  if (!passwordsOn(env)) return passwordsOff();
   if (req.method !== 'POST') return loginPage();
   if (!sameSite(req)) return message('Refused', 'That form came from another site, so nothing was done.', 403);
   const field = await formOf(req), email = foldEmail(field('email', 255)), password = field('password', 2049);
@@ -84,6 +99,7 @@ ${hasPassword ? `<form method="post" action="/admin/password" class="stack"><inp
 <p><a href="/signin?write=1">Email-code sign-in stays available</a></p>`, status);
 }
 export async function founderPasswordSettings(req: Request, env: Env): Promise<Response> {
+  if (!passwordsOn(env)) return passwordsOff();
   if (req.method === 'POST' && !sameSite(req)) return message('Refused', 'That form came from another site, so nothing was done.', 403);
   const session = await authenticatedFounder(req, env);
   if (!session) return message('Founders only', 'Sign in to your writing account first.', 401, '<p><a href="/signin?write=1">Sign in to write</a></p>');

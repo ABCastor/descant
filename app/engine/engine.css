@@ -582,6 +582,10 @@ body {
   scroll-behavior: smooth;
   padding: var(--page-pad-top, 3.5rem) var(--page-pad-x, 1.25rem) var(--page-pad-bot, 8rem);
 }
+/* On a touch screen the app moves the article itself, around the keyboard and the
+   comment sheet. WebKit's scroll anchoring moved it again when an in-page comment
+   card was rebuilt under the finger: Save edit scrolled the page down (S7). */
+@media (pointer: coarse) { .page-scroll { overflow-anchor: none; } }
 
 /* The article stays still when a panel opens. The column is
    centred on the window, not on the room between the docks: --page-shift moves it
@@ -921,6 +925,16 @@ body {
 }
 .page-column .cw-block.cw-writer-source > p,
 .page-column .cw-block.cw-writer-source .cw-mirror { color: var(--ink-3, #9b9b93); }
+/* a definition no link uses (editor.js unusedDefinition): said at the end of its own
+   line, so a short line keeps its height, with or without the caret in it */
+.page-column .cw-block.cw-writer-source.cw-unused > p::after,
+.page-column .cw-block.cw-writer-source.cw-unused .cw-mirror > p::after {
+  content: "hidden from readers";
+  margin-left: .75em;
+  font: 400 13px/1 var(--font-ui, ui-sans-serif, system-ui, sans-serif);
+  white-space: nowrap;
+  color: var(--ink-3, #9b9b93);
+}
 .page-column .cw-writer-only .writer-note {
   color: inherit;
   font-style: inherit;
@@ -1030,7 +1044,9 @@ body {
   cursor: text;
 }
 .cw-field:focus-within { border-color: var(--ink, #23231f); }
-.cw-field .cw-block > * { margin: 0; }
+/* A plain paragraph is bare text in the editing layer (editor.js editingHtml) and a <p> in the mirror that
+   paints it: without the paragraph's margins the words he sees sit where the caret is. */
+.cw-field .cw-block > *, .cw-field .cw-editor-stack > * > * { margin: 0; }
 .cw-field .cw-block + .cw-block { margin-top: .6em; }
 .cw-field[data-empty="1"]::before {
   content: attr(data-placeholder);
@@ -3088,6 +3104,8 @@ mark.is-done > .castor-comment-pin .castor-comment-mark svg { stroke-dasharray: 
 .castor-msg[data-person-color] + .castor-msg { margin-top: .5rem; }
 .castor-quote summary { cursor: pointer; overflow-wrap: anywhere; }
 .castor-quote > div { margin-top: .4rem; white-space: pre-wrap; }
+/* The composer's and a lost thread's quote: a passage over paragraphs shows one per line. */
+div.castor-quote { white-space: pre-line; }
 #app:is([data-mode="phone"], [data-mode="tablet"]) :is(.castor-quote summary, .castor-acts button, .castor-filter button, .panel-close, .panel-collapse) { min-height: 44px; min-width: 44px; }
 @media (any-pointer: coarse) {
   :is(.castor-quote summary, .castor-acts button, .castor-filter button) { min-height: 44px; min-width: 44px; }
@@ -3585,11 +3603,11 @@ html[data-keyhint="on"] .castor-tab-item:has(.word-key) .castor-tab-close { visi
 .castor-thread .castor-action-hint { margin: 4px 0 0; font: 12px/1.4 var(--font-ui, system-ui, sans-serif); color: var(--ink-3); }
 .castor-comment-undo { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 5; display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: var(--surface, var(--paper)); border: 1px solid var(--rule); border-radius: 6px; font: 13px var(--font-ui, system-ui, sans-serif); }
 .castor-comment-undo button { background: none; border: 0; color: var(--ink); font: inherit; text-decoration: underline; min-height: 32px; cursor: pointer; }
-.castor-composer > button { background: transparent; border: 1px solid var(--rule); border-radius: 6px; color: var(--ink); font: 13px var(--font-ui, system-ui, sans-serif); min-height: 32px; padding: 4px 8px; cursor: pointer; }
+.castor-composer > button, .castor-composer > .castor-sendrow > button { background: transparent; border: 1px solid var(--rule); border-radius: 6px; color: var(--ink); font: 13px var(--font-ui, system-ui, sans-serif); min-height: 32px; padding: 4px 8px; cursor: pointer; }
 .castor-peek .castor-peek-reply { border: 0; background: transparent; color: var(--ink); font: inherit; cursor: pointer; }
 @media (pointer: coarse) {
   .castor-comments .castor-filter .castor-status-tabs button, .castor-comments .castor-author-filter summary,
-  .castor-thread .castor-acts button, .castor-thread .castor-comment-own button, .castor-composer > button, .castor-comment-undo button { min-height: 44px; }
+  .castor-thread .castor-acts button, .castor-thread .castor-comment-own button, .castor-composer > button, .castor-composer > .castor-sendrow > button, .castor-comment-undo button { min-height: 44px; }
 }
 
 .castor-comments .castor-lost { max-height: 50%; overflow-y: auto; overscroll-behavior: contain; background: var(--surface, var(--paper)); }
@@ -3631,6 +3649,12 @@ html[data-keyhint="on"] .castor-tab-item:has(.word-key) .castor-tab-close { visi
   #app .dock:has(.castor-comment-editor:focus-within, .castor-composer:focus-within) .castor-shows,
   #app .dock:has(.castor-comment-editor:focus-within, .castor-composer:focus-within) .castor-filter,
   #app .dock:has(.castor-comment-editor:focus-within, .castor-composer:focus-within) .castor-lost:not(:focus-within) { display: none; }
+}
+/* The words that send or close a comment hold to the bottom of the sheet's list, so with the keyboard
+   up (the list is ~150 px on an iPhone) they stay in view above it while the field scrolls under them
+   (over the field's editing layer, which sits at z-index 2). */
+@container castorapp (max-width: 700px) {
+  .dock .castor-sendrow { position: sticky; bottom: 0; z-index: 3; background: var(--surface-raised, var(--pane-solid, var(--paper))); }
 }
 
 /* A code-span source newline paints as the normalized reader space. */

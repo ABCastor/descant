@@ -1,8 +1,8 @@
 // The public writer has its own namespace and founder identity, independent of
 // reader sessions. Only this server supplies the per-founder origin credential.
-import { authenticatedFounder } from "./founder-password.ts";
+import { authenticatedFounder, passwordsOn } from "./founder-password.ts";
 import type { Env } from "./store.ts";
-import { sha256Hex } from "./session.ts";
+import { FOUNDER_COOKIE, cookie, founderMaxAge, readCookie, sha256Hex, signFounderSession, type FounderSession } from "./session.ts";
 import { json, redirect, secure } from "./web.ts";
 
 const MAX_BODY = 5 * 1024 * 1024;
@@ -29,6 +29,17 @@ export async function originCredential(sha256: string, principal: string): Promi
   const key = await crypto.subtle.importKey("raw", encoder.encode(sha256), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode("descant.writer.v1:" + principal)));
   return [...bytes].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Marks the unused bridge link in the origin's answer with the sign-in time of the session that asked for it. */
+async function stampBridge(env: Env, content: Uint8Array, session: FounderSession): Promise<boolean> {
+  let url: unknown;
+  try { url = JSON.parse(new TextDecoder().decode(content)).url; } catch { return false; }
+  const token = typeof url === "string" && /\/founder\/([A-Za-z0-9_-]{43})$/.exec(url)?.[1];
+  if (!token) return false;
+  const stamped = await env.DB.prepare("UPDATE onetime SET founderSignedInAt=? WHERE tokenHash=? AND kind='founder' AND subject=? AND usedAt IS NULL AND founderSignedInAt IS NULL")
+    .bind(session.signedInAt, await sha256Hex(token), session.subject).run();
+  return stamped.meta.changes === 1;
 }
 
 async function bounded(stream: ReadableStream<Uint8Array> | null, limit: number): Promise<Uint8Array> {
@@ -154,9 +165,32 @@ async function writerAsset(req: Request, env: Env, url: URL, principal: string):
   } catch { return fail("writer-assets-unavailable", 503); }
 }
 
+/**
+ * A writer who keeps writing stays signed in: a session older than a day is signed
+ * again for thirty days, with the same account, credential generation, proof time and
+ * sign-in time, so a password change still ends it and its year still ends it.
+ * Near the year's end a renewal reaches the end and no further. A twelve-hour legacy
+ * session keeps its end.
+ */
+async function renewed(req: Request, env: Env, session: FounderSession | undefined, response: Response): Promise<Response> {
+  const now = Date.now();
+  if (!session || !readCookie(req.headers.get("Cookie"), FOUNDER_COOKIE)?.startsWith("f2.")) return response;
+  const maxAge = founderMaxAge(session.signedInAt, now);
+  if (now + maxAge * 1000 - session.expires < 86_400_000) return response;
+  const value = await signFounderSession(env.SESSION_SECRET, session.subject, session.emailSha256, session.generation, session.authenticatedAt, now, session.signedInAt);
+  const out = new Response(response.body, response);
+  out.headers.append("Set-Cookie", cookie(FOUNDER_COOKIE, value, maxAge));
+  return out;
+}
+
 export async function writerRoute(req: Request, env: Env, url: URL): Promise<Response> {
   if (env.PUBLIC_REQUESTS && !(await env.PUBLIC_REQUESTS.limit({ key: req.headers.get("CF-Connecting-IP") || "unknown" })).success) return fail("rate-limited", 429, { "Retry-After": "60" });
-  const principal = await knownFounder(req, env);
+  const session = await authenticatedFounder(req, env);
+  const response = await writerResponse(req, env, url, session?.subject);
+  return response.status === 401 || response.status === 403 ? response : renewed(req, env, session, response);
+}
+
+async function writerResponse(req: Request, env: Env, url: URL, principal: string | undefined): Promise<Response> {
   if (!principal) {
     const document = req.method === "GET" && ["/write", "/write/"].includes(url.pathname)
       && headerParts(req.headers.get("Accept") || "", ",").some(member => {
@@ -204,7 +238,7 @@ export async function writerRoute(req: Request, env: Env, url: URL): Promise<Res
   // tells the page's service worker that the origin was not asked, so this answer never lifts a
   // denial the origin gave or renews the device's offline grant (writer-sw.js).
   if (req.method === "GET" && api === "whoami" && req.headers.get("X-Descant-Flight-Online") !== "1") {
-    return secure(json({ role: "founder", id: "founder:" + principal, who: principal, publicWriter: true }, 200, { "X-Descant-Account": "founder:" + principal, "X-Descant-Identity": "edge" }), undefined, "private, no-store");
+    return secure(json({ role: "founder", id: "founder:" + principal, who: principal, publicWriter: true, ...(passwordsOn(env) ? {} : { passwords: false }) }, 200, { "X-Descant-Account": "founder:" + principal, "X-Descant-Identity": "edge" }), undefined, "private, no-store");
   }
   if (mutation && req.headers.get("Content-Type")?.split(";")[0].trim() !== "application/json") return fail("json-only", 415);
   if (Number(req.headers.get("Content-Length") || 0) > MAX_BODY) return fail("body-too-large", 413);
@@ -214,6 +248,8 @@ export async function writerRoute(req: Request, env: Env, url: URL): Promise<Res
   // Explicitly negotiate gzip with the private Python origin. Bound the decoded
   // stream below; a compressed Content-Length is not a decoded size limit.
   headers.set("Accept-Encoding", "gzip");
+  // The origin's whoami, and the offline copy's, then say Password is off as this one does.
+  if (!passwordsOn(env)) headers.set("X-Descant-Passwords", "off");
   if (mutation) headers.set("Content-Type", "application/json");
   if (req.method === "GET" && req.headers.get("X-Descant-Flight-Online") === "1") headers.set("X-Descant-Flight-Online", "1");
   // Preserve a proved browser Origin; never fabricate one for a cross-site caller.
@@ -249,8 +285,14 @@ export async function writerRoute(req: Request, env: Env, url: URL): Promise<Res
         phase = "assets";
         if (generation && api === "offline" && !await offlineAssetsMatch(content, generation, env, url)) return fail("offline-assets-mismatch", 409);
         trace("checked");
-        // A password reset during the upstream call must not reveal a fresh bridge link.
-        if ((api === "share/admin-link" || api === "share/article") && await knownFounder(req, env) !== principal) return fail("founder-required", 401);
+        if (api === "share/admin-link" || api === "share/article") {
+          // A password reset during the upstream call must not reveal a fresh bridge link.
+          const session = await authenticatedFounder(req, env);
+          if (session?.subject !== principal) return fail("founder-required", 401);
+          // Nor may a bridge link restart this session's year: the link carries its
+          // sign-in time into the session it opens. A link the Worker cannot stamp is not shown.
+          if (api === "share/admin-link" && response.ok && !await stampBridge(env, content, session)) return fail("bridge-unbound", 502);
+        }
         const clean = new Headers({ "Cache-Control": "private, no-store", "X-Descant-Account": "founder:" + principal });
         if (generation) clean.set("X-Descant-Assets", generation.assets);
         for (const key of ["Content-Type", "Content-Security-Policy", "Content-Disposition", "X-Descant-Snapshot"]) {

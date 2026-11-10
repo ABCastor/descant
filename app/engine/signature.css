@@ -303,11 +303,12 @@ html[data-theme-choice="system"] .theme-toggle .t-system{display:block}
 .footline::before{content:"";position:absolute;top:0;left:var(--bar-pad,1.25rem);right:var(--bar-pad,1.25rem);height:1px;background:var(--rule);pointer-events:none}
 .footline a{text-decoration:none}
 .foot-by{display:inline-flex;align-items:baseline;flex:0 0 auto;color:var(--quiet)}
-.foot-castor{margin-left:.3em;font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;letter-spacing:-.04em;font-size:14px;color:var(--ink)}
-.foot-ast{display:inline-block;font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;font-size:14px;line-height:.88;color:var(--human)}  /* typed, at the word's size and weight, where typing "Castor*" puts it */
+.foot-castor{margin-left:.3em;font-family:Word,Georgia,serif;font-weight:560;font-variation-settings:'opsz' 72;letter-spacing:-.04em;font-size:14px;color:var(--ink)}
+.foot-ast{display:inline-block;font-family:Word,Georgia,serif;font-weight:560;font-variation-settings:'opsz' 72;font-size:14px;line-height:.88;color:var(--human)}  /* typed, at the word's size and weight, where typing "Castor*" puts it */
 @media (prefers-reduced-motion:no-preference){
   .foot-ast{transition:transform var(--t-move) var(--ease)}
   @media (hover:hover){.foot-by:hover .foot-ast{transform:rotate(90deg)}}
+  .foot-by.brand-play .foot-ast{transform:rotate(90deg)}
 }
 .foot-meta{--status-gap:1rem;margin-left:auto;display:flex;align-items:center;gap:var(--status-gap);min-width:0}
 .foot-count{font-variant-numeric:tabular-nums}

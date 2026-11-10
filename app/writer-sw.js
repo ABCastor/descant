@@ -100,7 +100,8 @@ self.addEventListener('fetch', function (event) {
     var current = await state(meta, event.clientId), actual = response.headers.get('X-Descant-Account');
     // A known denial takes precedence over a concurrent bind or confirmation.
     // Clear shared authority first, before any client write that can hit quota.
-    if (response.status === 401 || response.status === 403) {
+    // A 403 on any other read refuses that one file (an unreadable path), not the writer.
+    if (response.status === 401 || response.status === 403 && (request.mode === 'navigate' || url.pathname === '/write/api/whoami')) {
       var original = current.account || account || observedGrant.account;
       original = original.startsWith('revoked:') ? original.slice(8) : original;
       var revoked = original && original !== 'revoked' ? 'revoked:' + original : 'revoked';

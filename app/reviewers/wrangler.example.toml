@@ -63,6 +63,9 @@ FROM_ADDRESS = "descant@example.com"
 # WRITER_ORIGIN = "https://writer.example.com:8443"
 # The writers' founder keys (the keys of .descant/people.json), comma separated. None: no one is a writer.
 WRITERS = "ada,bo"
+# On Workers Free a password cannot be derived within the CPU limit: set "off" and writers sign in
+# with an email code only (nothing offers a password then).
+# PASSWORD_SIGNIN = "off"
 # Optional: the folder of an article kept only for trying sharing (.descant/config.json testArticle),
 # never shared or listed. None: every article follows its owner's rule.
 # TEST_ARTICLE = "articles/zz-test/"

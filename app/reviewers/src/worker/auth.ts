@@ -2,11 +2,11 @@
 
 import { CODE_MINUTES, codePage } from "./code-page.ts";
 import { requestFounderCode, verifyFounderCode } from "./founder-auth.ts";
-import { founderSessionCookie } from './founder-password.ts';
+import { founderSessionCookie, passwordsOn } from './founder-password.ts';
 import { clearFailures, guessKeys, reserveTry, waitWords } from "./attempts.ts";
 import { emailProblem, foldEmail, foldName, nameProblem } from "./rules.ts";
 import {
-  FOUNDER_COOKIE, READER_COOKIE, READER_DAYS, cookie, emailCodeHash, newToken, randomId, sameText, sha256Hex, signSession,
+  FOUNDER_COOKIE, READER_COOKIE, READER_DAYS, cookie, emailCodeHash, founderMaxAge, newToken, randomId, sameText, sha256Hex, signSession,
 } from "./session.ts";
 import { founderNames, inviteState, personByEmail, type Env, type Person } from "./store.ts";
 import { esc, formOf, message, page, redirect } from "./web.ts";
@@ -29,8 +29,8 @@ ${canEmail(env) ? `<p>${writing ? "Use your writing-account email." : "Use your 
 <label>Email <input type="email" name="email" autocomplete="email" required maxlength="254"></label>
 <button type="submit">Email me a code</button>
 </form>` : `<p>Email is unavailable. Ask the person who invited you to try again later.</p>`}
-<p><a href="/signin/password">Sign in to write with a password</a></p>
-<p class="quiet">${writing ? "Reader invitations use a separate account." : "If you used a password before, ask the person who invited you for a recovery link."}</p>`);
+${passwordsOn(env) ? `<p><a href="/signin/password">Sign in to write with a password</a></p>
+` : ""}<p class="quiet">${writing ? "Reader invitations use a separate account." : "If you used a password before, ask the person who invited you for a recovery link."}</p>`);
 }
 
 export async function signInRoute(req: Request, env: Env): Promise<Response> {
@@ -289,7 +289,7 @@ export async function resetRoute(req: Request, env: Env, token: string): Promise
 export async function founderLinkRoute(env: Env, token: string): Promise<Response> {
   const hash = await sha256Hex(token);
   const at = new Date().toISOString();
-  const row = await env.DB.prepare("SELECT subject,founderGeneration AS generation,founderEmailSha256 AS emailSha256 FROM onetime WHERE tokenHash=? AND kind='founder'").bind(hash).first<{ subject: string; generation: string | null; emailSha256: string | null }>();
+  const row = await env.DB.prepare("SELECT subject,founderGeneration AS generation,founderEmailSha256 AS emailSha256,founderSignedInAt AS signedInAt FROM onetime WHERE tokenHash=? AND kind='founder'").bind(hash).first<{ subject: string; generation: string | null; emailSha256: string | null; signedInAt: number | null }>();
   // One use and five minutes, decided in one statement so two opens cannot both succeed.
   const spent = row?.generation && row.emailSha256
     ? await env.DB.prepare("UPDATE onetime SET usedAt=? WHERE tokenHash=? AND kind='founder' AND usedAt IS NULL AND expiresAt > ? AND EXISTS (SELECT 1 FROM founders WHERE key=onetime.subject AND emailSha256=onetime.founderEmailSha256) AND COALESCE((SELECT generation FROM founder_credentials WHERE founderKey=onetime.subject),'none')=onetime.founderGeneration").bind(at, hash, at).run()
@@ -297,7 +297,9 @@ export async function founderLinkRoute(env: Env, token: string): Promise<Respons
   if (!row || spent?.meta.changes !== 1) {
     return message("This link has been used or has expired", "A founder's link opens the dashboard once, within five minutes. Choose People and sharing in the writing app again for a new one.", 410);
   }
-  const value = await founderSessionCookie(env, row.subject, false, row.generation!, row.emailSha256!);
+  // A link made from a writing session opens one that ends when that session's year ends.
+  if (row.signedInAt !== null && founderMaxAge(row.signedInAt) <= 0) return message("Your sign-in has ended", "A sign-in to write lasts a year. Sign in again, then choose People and sharing.", 401, '<p><a href="/signin?write=1">Sign in to write</a></p>');
+  const value = await founderSessionCookie(env, row.subject, false, row.generation!, row.emailSha256!, row.signedInAt ?? undefined);
   if (!value) return message('Founders only', 'This writing account is no longer available.', 401);
   return redirect("/admin", [value]);
 }

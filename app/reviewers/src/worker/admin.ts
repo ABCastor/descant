@@ -4,6 +4,7 @@
 // grant (rules.ts mayShare); taking access away is open to either founder.
 
 import { RESET_HOURS } from "./auth.ts";
+import { passwordsOn, signOutEverywhere } from "./founder-password.ts";
 import { emailProblem, foldEmail, labelProblem, isTestArticle, mayShare } from "./rules.ts";
 import { FOUNDER_COOKIE, cookie, newToken, randomId } from "./session.ts";
 import { allArticles, founders, inviteState, type Article, type Env } from "./store.ts";
@@ -21,6 +22,12 @@ export async function adminRoute(req: Request, env: Env, url: URL, founder: stri
   if (path === "/admin" && !post) return dashboard(env, founder);
   if (!post) return message("Not found", "There is nothing at this address.", 404);
   if (path === "/admin/signout") return redirect("/", [cookie(FOUNDER_COOKIE, "", 0)]);
+  if (path === "/admin/signout-everywhere") {
+    await signOutEverywhere(env, founder);
+    const out = message("Signed out everywhere", "Every writing session, on every device, is signed out, this one too. Sign in again with an email code.", 200, '<p><a href="/signin?write=1">Sign in to write</a></p>');
+    out.headers.append("Set-Cookie", cookie(FOUNDER_COOKIE, "", 0));
+    return out;
+  }
   const form = await req.formData().catch(() => new FormData());
   const field = (name: string, max = 200) => {
     const v = form.get(name);
@@ -159,8 +166,8 @@ async function dashboard(env: Env, founder: string, shown?: Shown, problems: str
     : `<p class="quiet">No article is yours to share yet. The list comes from the writing app within half a minute of it starting.</p>`;
 
   return page("People and sharing · Descant", `<div class="bar"><h1>People and sharing</h1>
-<a href="/admin/password">Password</a>
-<form method="post" action="/admin/signout" class="inline"><span class="quiet">${esc(me)}</span> <button type="submit" class="small">Sign out</button></form></div>
+${passwordsOn(env) ? '<a href="/admin/password">Password</a>\n' : ''}<form method="post" action="/admin/signout" class="inline"><span class="quiet">${esc(me)}</span> <button type="submit" class="small">Sign out</button></form>
+<form method="post" action="/admin/signout-everywhere" class="inline"><button type="submit" class="small" title="Ends your writing sessions on every device, this one too">Sign out everywhere</button></form></div>
 ${shownBlock}${problemBlock}
 <section id="people">
 <h2>People</h2>

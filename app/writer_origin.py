@@ -73,6 +73,13 @@ def snapshot(app):
     return revision.hexdigest()
 
 
+def identity(principal, headers):
+    """The signed writer's whoami, as the Worker answers it: it also says when password sign-in is off."""
+    found = {"role": "founder", "id": "founder:" + principal, "who": principal, "publicWriter": True}
+    if headers.get("X-Descant-Passwords") == "off": found["passwords"] = False
+    return found
+
+
 def handler_for(app):
     class WriterHandler(app.Handler):
         def end_headers(self):
@@ -219,8 +226,7 @@ def handler_for(app):
                 return self.reply(200, b"" if self.command == "HEAD" else target.read_bytes(), kind, headers)
             if self.command == "HEAD": return self.reply(405, {"error": "method-not-allowed"})
             if self.command == "GET" and route == "/api/whoami":
-                return self.reply(200, {"role": "founder", "id": "founder:" + self._writer_principal,
-                                       "who": self._writer_principal, "publicWriter": True})
+                return self.reply(200, identity(self._writer_principal, self.headers))
             if self.command == "GET" and route == "/api/sync":
                 return self.reply(200, {"on": app.SYNC["on"], "error": app.SYNC["last_error"], "pending": bool(app.SYNC["push_pending"])})
             if self.command == "GET" and route == "/api/save-status":
