@@ -230,6 +230,7 @@
     // Anchors of the excerpts living on the workspace canvas. canvas.js publishes
     // them on 'canvas:anchors'; the page keeps a faint mark while a card exists.
     workspace: [],
+    drawn: {},               // block id -> what the last whole-page marking pass drew there
     reading: 'quiet',        // 'quiet' | 'inline' -- see setReading
     panelLayout: 'list',     // 'list' | 'beside' -- see the note above place()
     burstOpen: false,        // the orphan burst is expanded to its rows
@@ -1311,6 +1312,32 @@
     drawn.push(seen);
     return { text: text, at: at, drawn: drawn };
   }
+  // The exact and case-folded places of a quote in one block's text, with their context scores.
+  // A pure function of the text and the anchor, so it is kept by text: typing changes one block,
+  // and every other block answers from memory instead of being searched again for every thread.
+  var quickMemo = new Map();
+  function quickHits(text, quote, anchor) {
+    var entry = quickMemo.get(text);
+    if (!entry) {
+      if (quickMemo.size > 2048) quickMemo.clear();
+      entry = { lower: null, hits: new Map() };
+      quickMemo.set(text, entry);
+    }
+    var key = quote + '\u0000' + (anchor.prefix || '') + '\u0000' + (anchor.suffix || '') + '\u0000' + (anchor.blockText === text ? 1 : 0);
+    var found = entry.hits.get(key);
+    if (found) return found;
+    found = { exact: [], folded: [] };
+    [quote, quote.toLowerCase()].forEach(function (needle, folded) {
+      var hay = folded ? (entry.lower === null ? (entry.lower = text.toLowerCase()) : entry.lower) : text;
+      var from = 0, index;
+      while ((index = hay.indexOf(needle, from)) >= 0) {
+        (folded ? found.folded : found.exact).push({ start: index, score: quickContextScore(text, index, quote.length, anchor) });
+        from = index + Math.max(1, quote.length);
+      }
+    });
+    entry.hits.set(key, found);
+    return found;
+  }
   function resolveDrawn(anchor, quick, blocks, restricted) {
     if (!anchor || !anchor.quote) return null;
     var candidates = blocks || pageBlocks();
@@ -1318,15 +1345,9 @@
     if (quick) {
       var quote = String(anchor.quote), hits = [], foldedHits = [];
       candidates.forEach(function (block) {
-        [quote, quote.toLowerCase()].forEach(function (needle, folded) {
-          var text = folded ? block.text.toLowerCase() : block.text;
-          var from = 0, index;
-          while ((index = text.indexOf(needle, from)) >= 0) {
-            (folded ? foldedHits : hits).push({ blockId: block.id, start: index, end: index + quote.length,
-              score: quickContextScore(block.text, index, quote.length, anchor) });
-            from = index + Math.max(1, quote.length);
-          }
-        });
+        var found = quickHits(block.text, quote, anchor), i;
+        for (i = 0; i < found.exact.length; i++) hits.push({ blockId: block.id, start: found.exact[i].start, end: found.exact[i].start + quote.length, score: found.exact[i].score });
+        for (i = 0; i < found.folded.length; i++) foldedHits.push({ blockId: block.id, start: found.folded[i].start, end: found.folded[i].start + quote.length, score: found.folded[i].score });
       });
       hits = hits.length ? hits : foldedHits;
       hits.sort(function (a, b) { return b.score - a.score; });
@@ -1507,10 +1528,12 @@
   // One zero-width anchor at the last text fragment. The control is out of flow,
   // so neither its icon nor the message-count experiment changes line wrapping.
   // UI descendants are excluded by the editor and the anchor text walker.
-  function applyCommentPins(root, list) {
+  // `only`: the threads whose control goes in this root (the whole-page pass places each at its last mark).
+  function applyCommentPins(root, list, only) {
     var endpoints = {};
     for (var i = 0; i < list.length; i++) {
       var thread = list[i], r = S.resolved[thread.id];
+      if (only && only.indexOf(thread.id) < 0) continue;
       var marks = root.querySelectorAll('mark.commented[data-thread="' + thread.id + '"]');
       if (!marks.length) continue;
       var host = marks[marks.length - 1];
@@ -1554,10 +1577,30 @@
 
   // Project the mirror onto reading text, retaining the source positions for
   // painting. Revealing ** must not change which passage a comment belongs to.
+  function identityProjection(block) {
+    var offsets = null, length = block.text.length;
+    return { id: block.id, el: block.el, text: block.text, raw: block.text,
+      get offsets() { return offsets || (offsets = Array.from({ length: length }, function (_, i) { return i; })); } };
+  }
+  // Without revealed markers or page controls inside, the reading text is the block's text itself.
+  // The length of the text wrapRange walks: every text node outside page controls.
+  function markableLength(root) {
+    var ui = root.querySelectorAll ? root.querySelectorAll('[data-castor-ui]') : [], plain = true;
+    for (var i = 0; i < ui.length; i++) if (ui[i].textContent) plain = false;
+    if (plain) return root.textContent.length;
+    var walker = DOC.createTreeWalker(root, global.NodeFilter.SHOW_TEXT, null), n, length = 0;
+    while ((n = walker.nextNode())) if (!(n.parentElement && n.parentElement.closest('[data-castor-ui]'))) length += (n.nodeValue || '').length;
+    return length;
+  }
+  function plainPassage(root) {
+    if (!root.querySelector || root.querySelector('.cw-mk')) return false;
+    var ui = root.querySelectorAll('[data-castor-ui]');
+    for (var i = 0; i < ui.length; i++) if (ui[i].textContent) return false;
+    return true;
+  }
   function commentProjection(block) {
     var root = passageTextNode(block.el);
-    if (root === block.el) return { id: block.id, el: block.el, text: block.text, raw: block.text,
-      offsets: Array.from({ length: block.text.length }, function (_, i) { return i; }) };
+    if (root === block.el || plainPassage(root)) return identityProjection(block);
     var walker = DOC.createTreeWalker(root, global.NodeFilter.SHOW_TEXT, null);
     var text = '', raw = '', offsets = [], node;
     while ((node = walker.nextNode())) {
@@ -1572,7 +1615,19 @@
     return { id: block.id, el: block.el, text: text, raw: raw, offsets: offsets };
   }
 
+  // The same anchor reads the same way every time: kept, so a key does not parse it again.
+  var readingMemo = new Map();
   function commentReadingAnchor(anchor) {
+    var md = Castor.md;
+    if (!md || !md.parse) return anchor;
+    var key = [anchor.quote, anchor.prefix, anchor.suffix, anchor.blockText].join('\u0000');
+    if (readingMemo.has(key)) return readingMemo.get(key) || anchor;
+    if (readingMemo.size > 1024) readingMemo.clear();
+    var read = readingAnchorOf(anchor);
+    readingMemo.set(key, read === anchor ? null : read);
+    return read;
+  }
+  function readingAnchorOf(anchor) {
     var md = Castor.md, source = anchor.blockText || '';
     if (!md || !md.parse || /[\uE000\uE001]/.test(source)) return anchor;
     var place = resolveBlock(anchor, true, [{ id: 'source', text: source }]);
@@ -1613,7 +1668,7 @@
       range.setStart(first, 0); range.setEnd(last, last.nodeValue.length);
       var key = 'castor-comment-' + commentPaintKeys.length, mark = parts[0];
       commentPaintKeys.push(key);
-      parts.forEach(function (part) { part.setAttribute('data-comment-paint', key); });
+      parts.forEach(function (part) { if (part.getAttribute('data-comment-paint') !== key) part.setAttribute('data-comment-paint', key); });
       var by = mark.getAttribute('data-by');
       var colour = by === 'agent' ? 'var(--comment-agent, #006770)' :
         cleanHexColor(mark.style.getPropertyValue('--comment-person')) ||
@@ -1676,16 +1731,14 @@
     commentPaintObserver.observe(S.page, { subtree: true, attributes: true, attributeFilter: ['class'] });
   }
 
-  function applyMarks(quick, blockId) {
-    var target = blockId && blockById(blockId);
-    if (blockId && !target) return;
-    clearMarks(target && target.el);
-    var list = visibleThreads(), projections = null;
+  // Where every visible thread's passage is on the page now, in thread order. It also settles
+  // S.resolved and S.candidates for each thread, as a marking pass always has.
+  function markPlan(list, projections) {
+    var plan = [];
     for (var i = 0; i < list.length; i++) {
       var t = list[i], r = S.resolved[t.id];
       // The resolver counts the revealed markers. Retry the same exact-anchor
       // rules against reading text before declaring a focused passage detached.
-      if (!projections) projections = pageBlocks().map(commentProjection);
       var rawBlock = r && projections.find(function (p) { return p.id === r.blockId; });
       var chosen = t.anchor.chosenPlace && rawBlock && r.end > r.start && rawBlock.raw.slice(r.start, r.end) === t.anchor.quote;
       var hit = !chosen && resolveBlock(t.anchor, true, projections);
@@ -1710,29 +1763,148 @@
         var p = projections.find(function (x) { return x.id === part.blockId; });
         return { blockId: part.blockId, start: p.offsets[part.start], end: p.offsets[part.end - 1] + 1 };
       });
-      [r].concat(r.more || []).forEach(function (part) {
-        if (blockId && part.blockId !== blockId) return;
-        var b = target || blockById(part.blockId);
-        if (b) wrapRange(b.el, part.start, part.end, t.id, t.done, null, threadBy(t), threadAnchorColor(t));
-      });
+      plan.push({ thread: t, parts: [r].concat(r.more || []) });
     }
+    return plan;
+  }
+
+  // One block repainted (a key, a reveal): its marks are drawn again, every other block keeps its own.
+  function applyMarks(quick, blockId) {
+    var target = blockId && blockById(blockId);
+    if (blockId && !target) return;
+    if (!blockId) { applyPageMarks(quick); return; }
+    delete S.drawn[blockId];
+    clearMarks(target.el);
+    var list = visibleThreads();
+    var plan = list.length ? markPlan(list, pageBlocks().map(commentProjection)) : [];
+    plan.forEach(function (item) {
+      var t = item.thread;
+      item.parts.forEach(function (part) {
+        if (part.blockId !== blockId) return;
+        wrapRange(target.el, part.start, part.end, t.id, t.done, null, threadBy(t), threadAnchorColor(t));
+      });
+    });
     // The workspace's excerpts get their own faint mark, through the same text-node
     // walk, in the same pass: two passes would compute offsets over already-split
     // text and the second set would land in the wrong place.
     for (var w = 0; w < S.workspace.length; w++) {
       var a = S.workspace[w];
       var hit = a && resolveBlock(a, quick);
-      if (!hit || (blockId && hit.blockId !== blockId)) continue;
-      var wb = target || blockById(hit.blockId);
-      if (!wb) continue;
-      var wr = domRange(wb.el, a);
-      if (wr) wrapRange(wb.el, wr.start, wr.end,
+      if (!hit || hit.blockId !== blockId) continue;
+      var wr = domRange(target.el, a);
+      if (wr) wrapRange(target.el, wr.start, wr.end,
         a._canvasCardId ? 'canvas:' + a._canvasCardId : null, false, 'in-workspace');
     }
-    applyCommentPins(target ? target.el : S.page, list);
+    applyCommentPins(target.el, list);
     if (S.active) {
-      var lifted = (target ? target.el : S.page).querySelectorAll('mark.commented[data-thread="' + S.active + '"]');
+      var lifted = target.el.querySelectorAll('mark.commented[data-thread="' + S.active + '"]');
       for (var j = 0; j < lifted.length; j++) lifted[j].classList.add('is-lifted');
+    }
+    paintCommentRanges();
+    observeCommentPaint();
+  }
+
+  // The whole page, as one pass that clears every mark and draws them all again would leave it.
+  // A block is drawn again only when what it should show differs from what this pass drew there
+  // last, or its text or marks changed since: a pause in typing redraws the paragraph typed in,
+  // not the article.
+  var DRAWN = 'mark.commented, mark.in-workspace, [data-castor-ui="comment-mark"]';
+  function applyPageMarks(quick) {
+    var list = visibleThreads(), blocks = pageBlocks(), index = {}, i;
+    for (i = 0; i < blocks.length; i++) index[blocks[i].id] = i;
+    var projections = list.length ? blocks.map(commentProjection) : [], rawLength = {};
+    blocks.forEach(function (block) { rawLength[block.id] = markableLength(passageTextNode(block.el)); });
+    var plan = list.length ? markPlan(list, projections) : [];
+    var wraps = {}, hosts = {}, endpoints = {};
+    function add(blockId, wrap) { (wraps[blockId] || (wraps[blockId] = [])).push(wrap); }
+    // A range wraps when it is not empty and starts inside the block's text (wrapRange).
+    function wraps_(blockId, start, end) { return end > start && start < (rawLength[blockId] || 0); }
+    plan.forEach(function (item) {
+      var t = item.thread, by = threadBy(t), colour = threadAnchorColor(t), last = -1;
+      item.parts.forEach(function (part) {
+        if (!(part.blockId in index)) return;
+        var ok = wraps_(part.blockId, part.start, part.end);
+        add(part.blockId, [t.id, part.start, part.end, !!t.done, by, colour || '', ok]);
+        if (ok && index[part.blockId] > last) last = index[part.blockId];
+      });
+      item.host = last;
+    });
+    for (var w = 0; w < S.workspace.length; w++) {
+      var a = S.workspace[w];
+      var hit = a && resolveBlock(a, quick);
+      var wb = hit && blocks[index[hit.blockId]];
+      if (!wb) continue;
+      var wr = domRange(wb.el, a);
+      if (wr) add(wb.id, ['ws', a._canvasCardId ? 'canvas:' + a._canvasCardId : null, wr.start, wr.end]);
+    }
+    // Comment controls: one per passage end, at the thread's last mark on the page (applyCommentPins).
+    plan.forEach(function (item) {
+      if (item.host < 0) return;
+      var t = item.thread, r = S.resolved[t.id], end = passageEnd(r), endpoint = r ? end.blockId + ':' + end.end : t.id;
+      if (endpoints[endpoint]) return;
+      endpoints[endpoint] = true;
+      var siblings = list.filter(function (other) {
+        var at = passageEnd(S.resolved[other.id]);
+        return at && r && at.blockId === end.blockId && at.end === end.end;
+      }).length;
+      var id = blocks[item.host].id;
+      (hosts[id] || (hosts[id] = [])).push([t.id, t.author || '', (t.replies || []).length, !!t.done, siblings]);
+    });
+    var seen = {};
+    blocks.forEach(function (block) {
+      var id = block.id, root = passageTextNode(block.el), box = block.el;
+      seen[id] = true;
+      var sig = wraps[id] || hosts[id] ? JSON.stringify([wraps[id] || [], hosts[id] || []]) : '';
+      var rec = S.drawn[id], now = null;
+      if (rec && rec.root === root && rec.text === block.text) {
+        now = box.querySelectorAll(DRAWN);
+        var same = now.length === rec.nodes.length;
+        for (var k = 0; same && k < now.length; k++) same = now[k] === rec.nodes[k];
+        if (!same) rec = null;
+      } else rec = null;
+      if (!rec && !sig && box.querySelector && !box.querySelector(DRAWN)) {
+        S.drawn[id] = { root: root, text: block.text, sig: '', nodes: [], classes: [] };
+        return;
+      }
+      if (rec && rec.sig === sig) {
+        // As drawn: only the lift follows the thread active now, as a fresh mark would.
+        for (var m = 0; m < rec.nodes.length; m++) {
+          if (!rec.classes[m]) continue;
+          var want = rec.classes[m] + (S.active && rec.nodes[m].getAttribute('data-thread') === S.active && rec.nodes[m].classList.contains('commented') ? ' is-lifted' : '');
+          if (rec.nodes[m].className !== want) rec.nodes[m].className = want;
+        }
+        return;
+      }
+      clearMarks(box);
+      plan.forEach(function (item) {
+        var t = item.thread;
+        item.parts.forEach(function (part) {
+          if (part.blockId === id) wrapRange(block.el, part.start, part.end, t.id, t.done, null, threadBy(t), threadAnchorColor(t));
+        });
+      });
+      (wraps[id] || []).forEach(function (wrap) { if (wrap[0] === 'ws') wrapRange(block.el, wrap[2], wrap[3], wrap[1], false, 'in-workspace'); });
+      if (hosts[id]) applyCommentPins(box, list, hosts[id].map(function (pin) { return pin[0]; }));
+      var drawn = box.querySelectorAll(DRAWN), nodes = [], classes = [];
+      for (var d = 0; d < drawn.length; d++) { nodes.push(drawn[d]); classes.push(drawn[d].tagName === 'MARK' ? drawn[d].className : ''); }
+      if (S.active) {
+        var lifted = box.querySelectorAll('mark.commented[data-thread="' + S.active + '"]');
+        for (var j = 0; j < lifted.length; j++) lifted[j].classList.add('is-lifted');
+      }
+      S.drawn[id] = { root: root, text: root.textContent, sig: sig, nodes: nodes, classes: classes };
+    });
+    Object.keys(S.drawn).forEach(function (id) { if (!seen[id]) delete S.drawn[id]; });
+    // Any other mark on the page goes, as the whole-page clear took it.
+    var kept = new Set();
+    blocks.forEach(function (block) { var rec = S.drawn[block.id]; if (rec) rec.nodes.forEach(function (n) { kept.add(n); }); });
+    var stray = S.page.querySelectorAll(DRAWN);
+    for (var x = 0; x < stray.length; x++) {
+      if (kept.has(stray[x])) continue;
+      var gone = stray[x], parent = gone.parentNode;
+      if (!parent) continue;
+      if (gone.tagName !== 'MARK') { gone.remove(); continue; }
+      while (gone.firstChild) parent.insertBefore(gone.firstChild, gone);
+      parent.removeChild(gone);
+      parent.normalize();
     }
     paintCommentRanges();
     observeCommentPaint();

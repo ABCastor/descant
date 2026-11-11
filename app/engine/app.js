@@ -2123,19 +2123,19 @@
       if (slot) slot.appendChild(el);
       else els.topbar.appendChild(el);
     }
-    el.dataset.state = saver.state;
+    if (el.dataset.state !== saver.state) el.dataset.state = saver.state;
     if (reviewing()) {
       /* A reviewer's word says whose comments these will be, where a founder's
          says whether the text is saved. */
       var me = Castor.role.name;
-      el.textContent = saver.state === 'refused' ? 'Comment not saved'
-        : (me ? 'Reviewing as ' + me : 'Reviewing');
-      el.title = saver.detail || REVIEWING_SAYS;
+      setText(el, saver.state === 'refused' ? 'Comment not saved'
+        : (me ? 'Reviewing as ' + me : 'Reviewing'));
+      setTitle(el, saver.detail || REVIEWING_SAYS);
       renderSession();
       return;
     }
     if (Castor.saveStatus) Castor.saveStatus.render(el, saveDescription());
-    else { el.textContent = word; el.title = commentWarning() || saver.detail || (word === 'Saved as draft' ? heldRules().note : ''); }
+    else { setText(el, word); setTitle(el, commentWarning() || saver.detail || (word === 'Saved as draft' ? heldRules().note : '')); }
     // The panel is built as it opens (popovers.bind) and kept current while open, never rebuilt
     // on a key while it is closed, so a keystroke does no DOM work for it. A browser without
     // native popovers shows it by other means, so there it is built every time.
@@ -2145,6 +2145,12 @@
     renderSession();
     if (Castor.touchLayout) Castor.touchLayout.placeSave();
   }
+
+  /* The save word and the session initials repaint on every keystroke: each write happens only
+     when its value differs, so a key that changes nothing they show writes nothing. */
+  function setText(node, text) { if (node.textContent !== text) node.textContent = text; }
+  function setTitle(node, text) { if (node.title !== text) node.title = text; }
+  function setAttr(node, name, value) { if (!node.getAttribute || node.getAttribute(name) !== value) node.setAttribute(name, value); }
 
   /* Who is in the session, as initials beside the save word; clicking them
      opens the card. */
@@ -2165,13 +2171,13 @@
     var slot = document.getElementById('castor-save-slot') || save.parentNode;
     if (el.parentNode !== slot) slot.appendChild(el);
     var people = sessionNow();
-    el.textContent = people.length ? people.map(personShort).join(' ') : 'Who?';
+    setText(el, people.length ? people.map(personShort).join(' ') : 'Who?');
     var names = people.map(function (p, i) { return personName(p) + (i === 0 ? ' (at the keyboard)' : ''); });
     var says = people.length ? 'Writing: ' + names.join(', ') + '. Click to change.' : 'Say who is writing. Click to choose.';
-    el.setAttribute('aria-label', says);
-    el.title = says;
-    el.setAttribute('aria-expanded', String(!!document.getElementById('castor-who')));
-    el.setAttribute('aria-controls', 'castor-who');
+    setAttr(el, 'aria-label', says);
+    setTitle(el, says);
+    setAttr(el, 'aria-expanded', String(!!document.getElementById('castor-who')));
+    setAttr(el, 'aria-controls', 'castor-who');
   }
 
   /* --- telling a reviewer, in a card they cannot miss --------------------------

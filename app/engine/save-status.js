@@ -53,6 +53,8 @@
       : view.sharedFailed ? 'Not backed up' : view.state === 'partial' ? 'Not saved'
       : /^Checking/.test(view.word) ? 'Checking' : 'Saving';
   }
+  // Each write only when its value differs: a keystroke that leaves the view as it was writes nothing.
+  function setAttr(node, name, value) { if (!node.getAttribute || node.getAttribute(name) !== value) node.setAttribute(name, value); }
   function render(button, view) {
     var icon = button.querySelector('.save-signal'), label = button.querySelector('.save-signal-label');
     if (!icon) {
@@ -68,13 +70,13 @@
       label.setAttribute('class', 'save-signal-label'); button.appendChild(label);
       button.setAttribute('aria-live', 'polite'); button.setAttribute('aria-atomic', 'true');
     }
-    button.setAttribute('data-signal', view.state);
+    setAttr(button, 'data-signal', view.state);
     var shapes = { device: 'M3 4h14v12H3z M7 13h6', saved: 'M4 10l4 4 8-8', partial: 'M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16 M10 6v5 M10 14v.01',
       saving: 'M10 2a8 8 0 1 1-8 8' };
-    icon.firstChild.setAttribute('d', shapes[view.state]);
+    setAttr(icon.firstChild, 'd', shapes[view.state]);
     var word = shortWord(view);
     if (label.textContent !== word) label.textContent = word;
-    button.setAttribute('aria-label', view.label);
+    setAttr(button, 'aria-label', view.label);
     if (button.title !== view.label) button.title = view.label;
   }
   var api = { describe: describe, render: render, track: track, shortWord: shortWord };

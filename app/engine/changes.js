@@ -379,19 +379,26 @@
     if (!S.demo && v.path === articlePath()) { try { global.localStorage.setItem(key(), v.id); } catch (e) { v.error = 'Your browser could not remember your place. Allow browser storage, then try again.'; render(); return; } }
     close(); paintNotice();
   }
+  // Refreshed on every keystroke: the ticks are rebuilt only when what they show changed.
   function renderRail() {
     var rail = D.getElementById('saves-rail'); if (!rail) return;
+    var ticks = versions().slice().reverse().map(function (v) {
+      return { id: v.id, current: v.id === currentId(), by: (v.authorRole || v.by) === 'agent' || v.author === 'the agent' ? 'agent' : 'human',
+        title: authorName(v) + ' · ' + saveTime(v), label: 'Compare current writing with the version saved on ' + saveTime(v) + ' by ' + authorName(v) };
+    }), drawn = JSON.stringify(ticks);
+    if (rail.castorTicks === drawn && rail.childNodes && rail.childNodes.length === ticks.length) return;
     rail.textContent = ''; rail.setAttribute('role', 'group');
     rail.setAttribute('aria-label', 'Saved versions');
-    versions().slice().reverse().forEach(function (v) {
+    ticks.forEach(function (v) {
       var tick = button('', function () { setBase(v.id); }, 'tick');
       tick.setAttribute('data-version', v.id);
-      if (v.id === currentId()) tick.setAttribute('data-current', '1');
-      tick.setAttribute('data-by', (v.authorRole || v.by) === 'agent' || v.author === 'the agent' ? 'agent' : 'human');
-      tick.title = authorName(v) + ' · ' + saveTime(v);
-      tick.setAttribute('aria-label', 'Compare current writing with the version saved on ' + saveTime(v) + ' by ' + authorName(v));
+      if (v.current) tick.setAttribute('data-current', '1');
+      tick.setAttribute('data-by', v.by);
+      tick.title = v.title;
+      tick.setAttribute('aria-label', v.label);
       rail.appendChild(tick);
     });
+    rail.castorTicks = drawn;
   }
   function refresh() {
     paintNotice(); renderRail();
@@ -413,8 +420,9 @@
   }
   function paintNotice() {
     if (!S.noticeEl) return; var away = missed(), frame = D.getElementById('app');
-    S.noticeEl.hidden = !away; if (frame) frame.setAttribute('data-changes-notice', away ? '1' : '0');
-    S.noticeText.textContent = away ? away.line : '';
+    if (S.noticeEl.hidden !== !away) S.noticeEl.hidden = !away;
+    if (frame && !(frame.getAttribute && frame.getAttribute('data-changes-notice') === (away ? '1' : '0'))) frame.setAttribute('data-changes-notice', away ? '1' : '0');
+    if (S.noticeText.textContent !== (away ? away.line : '')) S.noticeText.textContent = away ? away.line : '';
   }
   function mountNotice(root) {
     if (!root) return; S.noticeEl = root; root.textContent = '';

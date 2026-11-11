@@ -166,6 +166,7 @@
     site.addEventListener('change', function () { load(); changed(); }); load();
     return { tags: function () { return tags; }, pending: function () { return !!input.value.trim(); }, lock: function () { input.disabled = locked(); renderChips(); close(); } };
   }
+  function setAttr(n, name, value) { if (!n.getAttribute || n.getAttribute(name) !== value) n.setAttribute(name, value); }
   function el(tag, text) { var n = D.createElement(tag); if (text != null) n.textContent = text; return n; }
   function button(text, fn) { var n = el('button', text); n.type = 'button'; n.addEventListener('click', fn); return n; }
   // A founder is whoever the server confirmed, even before "Who's writing?" is answered:
@@ -306,11 +307,22 @@
     // One dot, like the green dot that marks where you are in the article tabs:
     // green = the live version is what you are reading, amber = changed since, grey = not live.
     var code = !live ? 'none' : !canDiff() ? 'unknown' : words === 'Matches website' ? 'match' : 'changed';
-    marker.setAttribute('data-state', code);
-    var long = el('span', words), short = el('span', code === 'none' ? 'Not live' : code === 'changed' ? 'Changed' : 'Live');
-    long.className = 'live-long'; short.className = 'live-short';
-    marker.replaceChildren(long, short); marker.setAttribute('title', words); marker.setAttribute('aria-label', words);
+    var shortWords = code === 'none' ? 'Not live' : code === 'changed' ? 'Changed' : 'Live';
+    // It repaints on every keystroke: the marker is written only when what it says changed,
+    // and the panel is built while it is open (popovers.bind builds it as it opens).
+    setAttr(marker, 'data-state', code);
+    var shown = marker.children || [];
+    if (!(shown.length === 2 && shown[0].className === 'live-long' && shown[0].textContent === words &&
+        shown[1].className === 'live-short' && shown[1].textContent === shortWords)) {
+      var long = el('span', words), short = el('span', shortWords);
+      long.className = 'live-long'; short.className = 'live-short';
+      marker.replaceChildren(long, short);
+    }
+    setAttr(marker, 'title', words); setAttr(marker, 'aria-label', words);
     if (!panel) return;
+    var shut = false;
+    try { shut = !!(C.popovers && panel.matches && !panel.matches(':popover-open')); } catch (e) { shut = false; }
+    if (shut) return;
     panel.replaceChildren(); var live = piece().live;
     panel.appendChild(el('p', live ? live.site : 'Not published'));
     if (live) {
