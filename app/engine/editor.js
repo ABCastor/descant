@@ -623,7 +623,9 @@
       rawHtml[b.id] = rendered[b.id] = '';
     } else if (sub.blocks.length === 1) {
       b.type = sub.blocks[0].type || classify(b.source);
-      rendered[b.id] = sub.blocks[0].html || md.blockToHtml(sub.blocks[0]);
+      // A one-block parse numbers its block from the start; the page's block keeps its own id,
+      // or the next reparse finds the paragraph changed and draws it again.
+      rendered[b.id] = String(sub.blocks[0].html || md.blockToHtml(sub.blocks[0])).replace(/^(<[a-z][a-z0-9]*\b[^>]*? data-block-id=")[^"]*"/, function (m, head) { return head + esc(b.id) + '"'; });
       if (headingLevel(b.type)) keepHeadingIds(false);
     } else if (sub.blocks.length > 1) {
       // a paste turned one block into several: split the model
@@ -738,16 +740,92 @@
     updateMirror(wrap, b);
   }
 
+  /* A key that changed only text keeps the mirror's nodes and rewrites their text.
+     Adding elements anywhere in the article makes Chromium restyle and lay out the
+     whole article (its :has() rules are asked again), where a changed text lays out
+     one paragraph. The comment marks and controls drawn into the mirror are not the
+     rendering's nodes: they are looked through here, and comments.js checks them
+     against the new text. Any other difference draws the mirror afresh. */
+  function mirrorItems(parent, out) {
+    for (var c = parent.firstChild; c; c = c.nextSibling) {
+      if (c.nodeType === 3) {
+        if (!c.data) continue;
+        var last = out[out.length - 1];
+        if (last && last.text) last.text.push(c); else out.push({ text: [c] });
+      } else if (c.nodeType === 1) {
+        if (c.getAttribute('data-castor-ui') === 'comment-mark') continue;
+        if (c.nodeName === 'MARK' && /(?:^| )(?:commented|in-workspace)(?: |$)/.test(c.className)) { if (!mirrorItems(c, out)) return null; continue; }
+        out.push({ el: c });
+      } else return null;
+    }
+    return out;
+  }
+  function sameMirrorShape(live, next, runs) {
+    var a = mirrorItems(live, []), b = [];
+    for (var c = next.firstChild; c; c = c.nextSibling) {
+      if (c.nodeType === 3) b.push({ data: c.data });
+      else if (c.nodeType === 1) b.push({ el: c });
+      else return false;
+    }
+    if (!a || a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].text) { if (b[i].data == null) return false; runs.push([a[i].text, b[i].data]); continue; }
+      var x = a[i].el, y = b[i].el;
+      if (!y || x.nodeName !== y.nodeName || x.namespaceURI !== y.namespaceURI || x.attributes.length !== y.attributes.length) return false;
+      for (var k = 0; k < y.attributes.length; k++) if (x.getAttribute(y.attributes[k].name) !== y.attributes[k].value) return false;
+      if (!sameMirrorShape(x, y, runs)) return false;
+    }
+    return true;
+  }
+  // One run of text, split by marks into several nodes: the edit goes where it was made,
+  // and at a mark's edge into the text outside the mark.
+  function rewriteRun(nodes, text) {
+    var old = nodes.map(function (n) { return n.data; }).join('');
+    if (old === text) return;
+    var a = 0, max = Math.min(old.length, text.length);
+    while (a < max && old.charCodeAt(a) === text.charCodeAt(a)) a++;
+    var z = 0;
+    while (z < max - a && old.charCodeAt(old.length - 1 - z) === text.charCodeAt(text.length - 1 - z)) z++;
+    var cut = old.length - z, put = text.slice(a, text.length - z), at = -1, from = 0, i;
+    for (i = 0; i < nodes.length; i++) {
+      var to = from + nodes[i].data.length;
+      if (a > from && a < to || a === from && i === 0) { at = i; break; }
+      if (a === to) {
+        var next = nodes[i + 1], marked = function (n) { return n.parentNode && n.parentNode.nodeName === 'MARK'; };
+        at = next && marked(nodes[i]) && !marked(next) ? i + 1 : i;
+        break;
+      }
+      from = to;
+    }
+    if (at < 0) at = nodes.length - 1;
+    from = 0;
+    for (i = 0; i < nodes.length; i++) {
+      var data = nodes[i].data, start = from, end = from + data.length, value = data;
+      from = end;
+      if (end > a && start < cut) value = data.slice(0, Math.max(0, a - start)) + data.slice(Math.max(0, Math.min(data.length, cut - start)));
+      if (i === at) value = value.slice(0, Math.max(0, a - start)) + put + value.slice(Math.max(0, a - start));
+      if (value !== data) nodes[i].data = value;
+    }
+  }
+  function patchMirror(mirror, html) {
+    if (!mirror.firstChild || !html) return false;
+    var parsed = document.createElement('template'), runs = [];
+    parsed.innerHTML = html;
+    if (!parsed.content || !sameMirrorShape(mirror, parsed.content, runs)) return false;
+    runs.forEach(function (run) { rewriteRun(run[0], run[1]); });
+    return true;
+  }
+
   function updateMirror(wrap, b) {
     var started = global.performance && performance.now ? performance.now() : Date.now();
     b.type = classify(b.source);
-    wrap.setAttribute('data-type', b.type);
+    if (!wrap.getAttribute || wrap.getAttribute('data-type') !== b.type) wrap.setAttribute('data-type', b.type);
     var mirror = wrap.querySelector('.cw-mirror');
     if (mirror) {
       var html = liveHtml(b), host = wrap.querySelector('.cw-edit');
       // A reference definition's block is dimmed while it is written, too.
       var writerLine = /^<p class="cw-writer-line">/.test(html), marks = wrap.classList;
-      if (marks && marks[writerLine ? 'add' : 'remove']) marks[writerLine ? 'add' : 'remove']('cw-writer-source');
+      if (marks && marks.add && (!marks.contains || marks.contains('cw-writer-source') !== writerLine)) marks[writerLine ? 'add' : 'remove']('cw-writer-source');
       if (host && host.childNodes && !composing) {
         var next = document.createElement('div'); next.innerHTML = editingHtml(html, b.source);
         // A plain insertion only changes text. Keep WebKit's live nodes and IME
@@ -765,7 +843,7 @@
         }
       }
       if (host) host.cwReferenceKey = JSON.stringify(doc.references || {});
-      mirror.innerHTML = html;
+      if (typeof patchMirror !== 'function' || !patchMirror(mirror, html)) mirror.innerHTML = html;
       // Decorations belong to this paint, not the delayed document reparse.
       if (bus && bus.emit) bus.emit('editor:mirror', { blockId: b.id });
     }
@@ -1463,6 +1541,8 @@
       lastFocusPara = el;
     }
     page.classList.toggle('cw-focus-paragraph', on);
+    var lit = !!(lastFocusPara && page.contains && page.contains(lastFocusPara));
+    if (page.classList.contains && page.classList.contains('cw-has-lit') !== lit) page.classList.toggle('cw-has-lit', lit);
   }
   var revealTimer = 0, revealPending = false, revealNotBefore = 0, focusScroll = null, tapCaretRaf = 0;
   function cancelCaretReveal() {
@@ -3031,6 +3111,18 @@
     if (host && host.blur) host.blur();
     blurCurrent();
   }
+  /* The caret stands before the first character of a line of text: of a paragraph, of a line
+     after a hard break, of a list item, a quote or a heading. Only hidden Markdown (a list or
+     quote marker, a heading's hashes, a break's marks) comes before it on its line. Not in a
+     block written as its source (a definition keeps every byte typed). */
+  var LEAD_TYPES = /^(?:p|list|quote|h[1-6])$/;
+  function lineLead(b, host, at) {
+    if (!b || !host || !LEAD_TYPES.test(b.type || '') || (typeof editedAsSource === 'function' && editedAsSource(b))) return false;
+    var before = String(b.source || '').slice(0, at), line = Math.max(before.lastIndexOf('\n') + 1, 0), br = /<br\s*\/?>/gi, m;
+    while ((m = br.exec(before))) line = Math.max(line, m.index + m[0].length);
+    return !interactionRuns(host).some(function (n) { return n.len > 0 && Math.min(at, n.at + n.len) > Math.max(line, n.at); });
+  }
+
   function replaceVisible(id, start, end, inserted, history, surface, work) {
     // A writer note (%%...%%) is drawn as this span: its words are literal source.
     function writerNote(node) { return !!(node && /(?:^| )writer-note(?: |$)/.test(node.className || '')); }
@@ -3057,11 +3149,11 @@
     }
     var nodes = sourceNodes(host);
     var action = inserted && typeof inserted === 'object' ? inserted : { kind: 'text', text: inserted || '' };
-    // A space typed before a paragraph's first character is dropped: kept, it could only be saved as
-    // literal indentation, an HTML span that readers see as code. Pasted indentation keeps it, and a
-    // block written as its source (a definition) keeps every character typed.
-    if (action.kind === 'text' && !action.link && !surface && history !== 'paste' && history !== 'project' && b.type === 'p' &&
-        start === end && /^[ \t]/.test(action.text) && !(typeof editedAsSource === 'function' && editedAsSource(b)) && !interactionRuns(host).some(function (n) { return n.len > 0 && n.at < start; })) {
+    // A space typed before a line's first character is dropped (lineLead): kept, it could only be
+    // saved as literal indentation, an HTML span that readers see as code. Pasted indentation keeps
+    // it, and a block written as its source (a definition) keeps every character typed.
+    if (action.kind === 'text' && !action.link && !surface && history !== 'paste' && history !== 'project' &&
+        start === end && /^[ \t]/.test(action.text) && typeof lineLead === 'function' && lineLead(b, host, start)) {
       if (!/[^ \t]/.test(action.text)) { setCaret(id, start); return { source: source, caret: start, start: start, end: end }; }
       action = Object.assign({}, action, { text: action.text.replace(/^[ \t]+/, '') });
     }
@@ -4856,11 +4948,10 @@
       }
     }
     if (opts.showMarks && sourceInput(e, t, visibleCaret, liveInputCaret)) return;
-    // Only spaces, typed before a paragraph's first character: nothing to type (replaceVisible
+    // Only spaces, typed before a line's first character: nothing to type (replaceVisible
     // drops them on every route); refused here, they leave no step in the history either.
     if (t === 'insertText' && /^[ \t]+$/.test(e.data || '') && e.cancelable !== false && visibleCaret &&
-        visibleCaret.start === visibleCaret.end && (blockOf(focusId) || {}).type === 'p' &&
-        !(typeof editedAsSource === 'function' && editedAsSource(blockOf(focusId))) && !interactionRuns(el).some(function (n) { return n.len > 0 && n.at < visibleCaret.start; })) {
+        visibleCaret.start === visibleCaret.end && typeof lineLead === 'function' && lineLead(blockOf(focusId), el, visibleCaret.start)) {
       e.preventDefault(); finishInput(global.performance && performance.now ? performance.now() : Date.now()); return;
     }
     if (e.cancelable !== false && visibleCaret && liveInputCaret &&

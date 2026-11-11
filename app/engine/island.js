@@ -513,6 +513,12 @@
     });
   }
 
+  // The bar is refreshed on every key: a control's state is written only when it changes.
+  function setAttr(el, name, value) { if (!el.getAttribute || el.getAttribute(name) !== value) el.setAttribute(name, value); }
+  function setDisabled(button, off) {
+    if (button.disabled !== off) button.disabled = off;
+    setAttr(button, 'aria-disabled', off ? 'true' : 'false');
+  }
   function refreshControls() {
     var e = editor();
     if (!S.actions && !S.desktopActions) { announce(); return; }
@@ -521,20 +527,22 @@
     if (editFocused() && saved) S.keyboardCaret = saved;
     (S.actions || []).concat(S.desktopActions || []).forEach(function (button) {
       var id = button.dataset.command;
-      button.disabled = id === 'done' ? false : id === 'hide-keyboard' ? !saved : !state[id];
+      setDisabled(button, id === 'done' ? false : id === 'hide-keyboard' ? !saved : !state[id]);
       if (id === 'hide-keyboard') {
         var up = keyboardUp(), label = up ? 'Hide keyboard' : 'Show keyboard';
-        button.setAttribute('title', label);
-        button.setAttribute('aria-label', label);
-        if (S.root.dataset.toolbar === 'symbols') button.innerHTML = commandSymbol(up ? 'hide-keyboard' : 'show-keyboard');
-        else button.textContent = label;
+        setAttr(button, 'title', label);
+        setAttr(button, 'aria-label', label);
+        var face = (S.root.dataset.toolbar === 'symbols' ? 'symbols:' : 'words:') + label;
+        if (button.castorFace !== face) {
+          if (S.root.dataset.toolbar === 'symbols') button.innerHTML = commandSymbol(up ? 'hide-keyboard' : 'show-keyboard');
+          else button.textContent = label;
+          button.castorFace = face;
+        }
       }
-      button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
     });
     if (S.row) Array.prototype.forEach.call(S.row.children, function (button) {
       var id = button.dataset.command;
-      button.disabled = id === 'undo' || id === 'redo' ? !state[id] : !e || !!(e.can && !e.can(id));
-      button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
+      setDisabled(button, id === 'undo' || id === 'redo' ? !state[id] : !e || !!(e.can && !e.can(id)));
     });
     announce();
   }
@@ -550,9 +558,10 @@
     if (S.root && S.root.dataset.docked !== (docked ? '1' : '0')) remove();
     if (S.root && Castor.capsule && docked && S.root.dataset.arrangement !== 'writing') remove();
     ensure();
-    if (S.app) S.app.dataset.touchFormat = docked ? '1' : '0';
+    if (S.app && S.app.dataset.touchFormat !== (docked ? '1' : '0')) S.app.dataset.touchFormat = docked ? '1' : '0';
     var value = policy();
-    S.root.dataset.layout = mode() === 'phone' ? 'phone' : 'computer';
+    var layout = mode() === 'phone' ? 'phone' : 'computer';
+    if (S.root.dataset.layout !== layout) S.root.dataset.layout = layout;
     // The phone's floating bar is for the article: another field (a comment or search,
     // an editor field too) has the keyboard to itself. The bar's own buttons and a passing
     // BODY focus between two blocks are not another field.
@@ -560,11 +569,11 @@
     var elsewhere = mode() === 'phone' && !!active && !(active.closest && active.closest('#page')) &&
       !!(active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || ''));
     // While it steps aside, its round mark still shows a save problem (the top row is away too).
-    if (S.app && mode() === 'phone') { if (elsewhere) S.app.dataset.barAside = ''; else delete S.app.dataset.barAside; }
+    if (S.app && mode() === 'phone' && (S.app.dataset.barAside != null) !== elsewhere) { if (elsewhere) S.app.dataset.barAside = ''; else delete S.app.dataset.barAside; }
     var show = Castor.capsule && docked ? keyboardUp() && !elsewhere : docked || (!S.dismissed && !focusActive() &&
       (value === 'always' || (S.focused && keyboardUp())));
-    S.root.dataset.open = show ? '1' : '0';
-    S.root.setAttribute('aria-hidden', show ? 'false' : 'true');
+    if (S.root.dataset.open !== (show ? '1' : '0')) S.root.dataset.open = show ? '1' : '0';
+    setAttr(S.root, 'aria-hidden', show ? 'false' : 'true');
     if (!show || !floating()) tuck(false);
     paintTuck();
     refreshHeading();

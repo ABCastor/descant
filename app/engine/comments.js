@@ -723,8 +723,15 @@
       if (raw) {
         var v = JSON.parse(raw);
         local = Array.isArray(v) ? mergeLocal(reconciledThreads(v.map(normalise), storageKey), local || []) : local;
-        if (global.localStorage.getItem(storageKey + '.unsaved') && Castor.bus && Castor.bus.emit) {
-          Castor.bus.emit('comments:pending', { path: storablePath() });
+        var marked = global.localStorage.getItem(storageKey + '.unsaved');
+        if (marked && Castor.bus && Castor.bus.emit) {
+          // Another tab's comment on its way reads as saving here too, until its time is up.
+          var until = sendingUntil(marked);
+          if (until > Date.now()) {
+            clearTimeout(S.sendingCheck);
+            S.sendingCheck = setTimeout(function () { if (key() === storageKey) { load(); schedule(); } }, until - Date.now() + 50);
+          }
+          Castor.bus.emit('comments:pending', until > Date.now() ? { path: storablePath(), sending: true } : { path: storablePath() });
         }
       }
     } catch (e) { local = null; }
@@ -832,6 +839,14 @@
   }
 
   var COMMENT_TIMEOUT = 15000;
+  /* While a tab sends a comment its device mark reads `sending:<until>:<id>`: another tab of the
+     article reads it as saving until then. A send takes at most three requests; a mark still
+     there after that is a comment kept on this device (its tab was closed mid-way). */
+  var SENDING_WINDOW = 3 * COMMENT_TIMEOUT + 5000;
+  function sendingMark(id) { return 'sending:' + (Date.now() + SENDING_WINDOW) + ':' + id; }
+  function sendingUntil(mark) { var m = /^sending:(\d+):/.exec(mark || ''); return m ? +m[1] : 0; }
+  Castor.commentSending = function (mark) { return sendingUntil(mark) > Date.now(); };
+  Castor.commentSendingUntil = sendingUntil;
   // Bound both the connection and its body. A timeout can still have committed:
   // pending operation ids stay intact for reconciliation, never a fresh send.
   function commentRequest(url, init) {
@@ -890,27 +905,39 @@
       return true;
     }
     if (Castor.comments) Castor.comments.durable = false;
-    var token = Date.now().toString(36) + Math.random().toString(36).slice(2);
-    try { global.localStorage.setItem(storageKey + '.unsaved', token); } catch (e) { /* the thread copy remains */ }
+    /* The device's mark: written once, as kept or as on its way (sendingMark), never kept first
+       and then sending, so another tab of the article never reads a comment being sent as unsaved. */
+    var markId = Date.now().toString(36) + Math.random().toString(36).slice(2), token = markId, markKey = storageKey + '.unsaved';
+    function mark(sending) {
+      token = sending ? sendingMark(markId) : markId;
+      try { global.localStorage.setItem(markKey, token); } catch (e) { /* the thread copy remains */ }
+    }
+    // The send failed: if the mark is still this one, it says kept, now.
+    function keptAfterAll() {
+      try { if (global.localStorage.getItem(markKey) === token && token !== markId) { token = markId; global.localStorage.setItem(markKey, markId); } } catch (e) { /* the thread copy remains */ }
+    }
+    function keep(result) { mark(false); return result; }
     /* A comment that stays here says it is waiting on this device; one sent below is saving.
        A path that names its own reason (comments:unsaved) needs neither. */
-    function kept() { if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:pending', { path: path }); return true; }
+    function kept() { mark(false); if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:pending', { path: path }); return true; }
     if (driven()) return kept();
     var who = (Castor.who && Castor.who.get) ? Castor.who.get() : '';
     /* A reviewer is not asked and sends no name: the server records their
        comments under the name they signed in with, whatever the page says. */
     if (!roleConfirmed()) {
+      mark(false);
       if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unsaved', { path: path, reason: 'Checking your sign-in. Your words stay on this device and are sent once you are confirmed.' });
       if (!reviewer && Castor.reconfirm) Castor.reconfirm();
       return true;
     }
     if (S.migrationBlocked === storageKey) return kept();
-    if (holdLegacy(threads, storageKey)) return true;
+    if (holdLegacy(threads, storageKey)) return keep(true);
     if (!who && !reviewer) {
       if (Castor.who && Castor.who.ask) Castor.who.ask();
       return kept();
     }
     if (!reviewer && !pendingIdentityKnown(pendingMessages(threads, storageKey), false, null)) {
+      mark(false);
       if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unsaved', { path: path, reason: 'The original writer of these pending words is unknown or unavailable. Your words remain on this device.' });
       return true;
     }
@@ -926,11 +953,13 @@
         });
       });
       if (principals.length > 1) {
+        mark(false);
         if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unsaved', { path: path, reason: 'Pending comments have different writers. Their words remain on this device.' });
         return true;
       }
       if (principals.length) who = principals[0];
     }
+    mark(true);
     if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:pending', { path: path, sending: true });
     var revision = saveVersions[storageKey] = (saveVersions[storageKey] || 0) + 1;
     var snapshot = JSON.stringify(S.threads);
@@ -1046,6 +1075,7 @@
         } catch (e) { /* the API copy is durable */ }
         S.serverCopies[storageKey] = confirmed;
         delete S.retryReads[storageKey];
+        if (merged.unsent) keptAfterAll();
         if (merged.unsent && revision === saveVersions[storageKey] && Castor.bus && Castor.bus.emit) {
           // A comment the server held is named, with why; any other refusal reads as it always does.
           var named = (Array.isArray(payload.refused) ? payload.refused : []).map(function (r) { return r && r.error; }).filter(Boolean);
@@ -1067,6 +1097,7 @@
 
       });
     }).catch(function (error) {
+      keptAfterAll();
       var transient = !error.status || error.status >= 500 || error.status === 429 || error.reason === 'busy' || error.reason === 'concurrent-save';
       if (transient) deferCommentRetry(storageKey);
       else delete S.retryReads[storageKey];
@@ -1774,34 +1805,80 @@
     if (blockId && !target) return;
     if (!blockId) { applyPageMarks(quick); return; }
     delete S.drawn[blockId];
-    clearMarks(target.el);
     var list = visibleThreads();
     var plan = list.length ? markPlan(list, pageBlocks().map(commentProjection)) : [];
-    plan.forEach(function (item) {
-      var t = item.thread;
-      item.parts.forEach(function (part) {
-        if (part.blockId !== blockId) return;
-        wrapRange(target.el, part.start, part.end, t.id, t.done, null, threadBy(t), threadAnchorColor(t));
-      });
-    });
-    // The workspace's excerpts get their own faint mark, through the same text-node
-    // walk, in the same pass: two passes would compute offsets over already-split
-    // text and the second set would land in the wrong place.
+    var excerpts = [];
     for (var w = 0; w < S.workspace.length; w++) {
       var a = S.workspace[w];
       var hit = a && resolveBlock(a, quick);
-      if (!hit || hit.blockId !== blockId) continue;
-      var wr = domRange(target.el, a);
-      if (wr) wrapRange(target.el, wr.start, wr.end,
-        a._canvasCardId ? 'canvas:' + a._canvasCardId : null, false, 'in-workspace');
+      if (hit && hit.blockId === blockId) excerpts.push(a);
     }
-    applyCommentPins(target.el, list);
-    if (S.active) {
-      var lifted = target.el.querySelectorAll('mark.commented[data-thread="' + S.active + '"]');
-      for (var j = 0; j < lifted.length; j++) lifted[j].classList.add('is-lifted');
-    }
+    drawMarks(target.el, function (el) {
+      plan.forEach(function (item) {
+        var t = item.thread;
+        item.parts.forEach(function (part) {
+          if (part.blockId !== blockId) return;
+          wrapRange(el, part.start, part.end, t.id, t.done, null, threadBy(t), threadAnchorColor(t));
+        });
+      });
+      // The workspace's excerpts get their own faint mark, through the same text-node
+      // walk, in the same pass: two passes would compute offsets over already-split
+      // text and the second set would land in the wrong place.
+      excerpts.forEach(function (a) {
+        var wr = domRange(el, a);
+        if (wr) wrapRange(el, wr.start, wr.end,
+          a._canvasCardId ? 'canvas:' + a._canvasCardId : null, false, 'in-workspace');
+      });
+      applyCommentPins(el, list);
+    });
+    liftMarks(target.el);
     paintCommentRanges();
     observeCommentPaint();
+  }
+
+  /* A block's marks are drawn by `draw` on a copy of the block first: when the copy
+     shows what the page shows, the page is left as it is. Taking a paragraph's marks
+     off and putting them back for every key made the browser restyle and lay out the
+     whole article each time. The lift and the hover pairing are states of a drawn
+     mark, set apart (liftMarks), not part of the drawing. */
+  function drawMarks(blockEl, draw) {
+    if (blockEl.cloneNode) {
+      var copy = blockEl.cloneNode(true);
+      clearMarks(copy); draw(copy);
+      if (drawnForm(passageTextNode(copy)) === drawnForm(passageTextNode(blockEl))) return false;
+    }
+    clearMarks(blockEl); draw(blockEl);
+    return true;
+  }
+  function freshClass(mark) {
+    return String(mark.className || '').split(' ').filter(function (c) { return c && c !== 'is-lifted' && c !== 'is-paired'; }).join(' ');
+  }
+  function drawnForm(node) {
+    var out = '';
+    (function walk(n) {
+      for (var c = n.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType === 3) { out += c.data.replace(/[<&]/g, function (x) { return x === '<' ? '&lt;' : '&amp;'; }); continue; }
+        if (c.nodeType !== 1) continue;
+        var attrs = [];
+        for (var i = 0; i < c.attributes.length; i++) {
+          var at = c.attributes[i];
+          if (at.name === 'data-comment-paint') continue;
+          attrs.push(at.name + '="' + (at.name === 'class' && c.nodeName === 'MARK' ? freshClass(c) : at.value) + '"');
+        }
+        out += '<' + c.nodeName + ' ' + attrs.sort().join(' ') + '>';
+        walk(c);
+        out += '</' + c.nodeName + '>';
+      }
+    })(node);
+    return out;
+  }
+  function liftMarks(root) {
+    var marks = root.querySelectorAll('mark.commented');
+    for (var j = 0; j < marks.length; j++) {
+      var on = !!S.active && marks[j].getAttribute('data-thread') === S.active;
+      var lifted = /(?:^| )is-lifted(?: |$)/.test(String(marks[j].className || ''));
+      if (on && !lifted) marks[j].classList.add('is-lifted'); else if (!on && lifted) marks[j].classList.remove('is-lifted');
+    }
   }
 
   // The whole page, as one pass that clears every mark and draws them all again would leave it.
@@ -1875,21 +1952,19 @@
         }
         return;
       }
-      clearMarks(box);
-      plan.forEach(function (item) {
-        var t = item.thread;
-        item.parts.forEach(function (part) {
-          if (part.blockId === id) wrapRange(block.el, part.start, part.end, t.id, t.done, null, threadBy(t), threadAnchorColor(t));
+      drawMarks(box, function (el) {
+        plan.forEach(function (item) {
+          var t = item.thread;
+          item.parts.forEach(function (part) {
+            if (part.blockId === id) wrapRange(el, part.start, part.end, t.id, t.done, null, threadBy(t), threadAnchorColor(t));
+          });
         });
+        (wraps[id] || []).forEach(function (wrap) { if (wrap[0] === 'ws') wrapRange(el, wrap[2], wrap[3], wrap[1], false, 'in-workspace'); });
+        if (hosts[id]) applyCommentPins(el, list, hosts[id].map(function (pin) { return pin[0]; }));
       });
-      (wraps[id] || []).forEach(function (wrap) { if (wrap[0] === 'ws') wrapRange(block.el, wrap[2], wrap[3], wrap[1], false, 'in-workspace'); });
-      if (hosts[id]) applyCommentPins(box, list, hosts[id].map(function (pin) { return pin[0]; }));
       var drawn = box.querySelectorAll(DRAWN), nodes = [], classes = [];
-      for (var d = 0; d < drawn.length; d++) { nodes.push(drawn[d]); classes.push(drawn[d].tagName === 'MARK' ? drawn[d].className : ''); }
-      if (S.active) {
-        var lifted = box.querySelectorAll('mark.commented[data-thread="' + S.active + '"]');
-        for (var j = 0; j < lifted.length; j++) lifted[j].classList.add('is-lifted');
-      }
+      for (var d = 0; d < drawn.length; d++) { nodes.push(drawn[d]); classes.push(drawn[d].tagName === 'MARK' ? freshClass(drawn[d]) : ''); }
+      liftMarks(box);
       S.drawn[id] = { root: root, text: root.textContent, sig: sig, nodes: nodes, classes: classes };
     });
     Object.keys(S.drawn).forEach(function (id) { if (!seen[id]) delete S.drawn[id]; });
@@ -4332,7 +4407,12 @@
     var range = selection.getRangeAt(0), node = range.startContainer;
     var host = node.nodeType === 1 ? node : node.parentElement;
     if (!host || !host.closest || !host.closest('.cw-edit') || !S.page.contains(host)) return null;
-    return commentCaretRect(host.closest('.cw-edit'));
+    // Only a mark in the caret's own paragraph can hold the caret: with none there, nothing
+    // is measured, and otherwise only that paragraph's marks are (syncTouchPeek).
+    var block = host.closest('.cw-block');
+    if (block && !block.querySelector('mark.commented')) return null;
+    var rect = commentCaretRect(host.closest('.cw-edit'));
+    return rect && { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, block: block };
   }
 
   function positionTouchPeek() {
@@ -4363,7 +4443,7 @@
     var caret = touchPeekCaret(), marks = [], point;
     if (caret) {
       point = { clientX: caret.left, clientY: (caret.top + caret.bottom) / 2 };
-      Array.prototype.forEach.call(S.page.querySelectorAll('mark.commented'), function (mark) {
+      Array.prototype.forEach.call((caret.block || S.page).querySelectorAll('mark.commented'), function (mark) {
         Array.prototype.some.call(mark.getClientRects(), function (rect) {
           if (point.clientX >= rect.left - 1 && point.clientX <= rect.right + 1 && point.clientY >= rect.top - 2 && point.clientY <= rect.bottom + 2) { marks.push(mark); return true; }
           return false;
@@ -4378,8 +4458,8 @@
     var id = mark.getAttribute('data-thread'), thread = threadById(id);
     if (!thread) return;
     closePeek();
-    var ids = [id];
-    Array.prototype.forEach.call(S.page.querySelectorAll('mark.commented'), function (other) {
+    var ids = [id], scope = mark.closest && mark.closest('.cw-block') || S.page;
+    Array.prototype.forEach.call(scope.querySelectorAll('mark.commented'), function (other) {
       var otherId = other.getAttribute('data-thread');
       if (ids.indexOf(otherId) >= 0) return;
       Array.prototype.forEach.call(other.getClientRects(), function (rect) {

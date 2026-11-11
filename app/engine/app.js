@@ -1988,21 +1988,32 @@
   try {
     for (var keptComment = 0; keptComment < global.localStorage.length; keptComment++) {
       var pendingKey = global.localStorage.key(keptComment);
-      if (/\.unsaved$/.test(pendingKey || '')) pendingCommentKeys[pendingKey] = true;
+      if (/\.unsaved$/.test(pendingKey || '')) pendingCommentKeys[pendingKey] = global.localStorage.getItem(pendingKey) || true;
     }
   } catch (e) { /* the current article also reports its own pending copy */ }
   if (global.addEventListener) global.addEventListener('storage', function (event) {
     if (!/\.unsaved$/.test(event.key || '')) return;
-    if (event.newValue) pendingCommentKeys[event.key] = true;
+    if (event.newValue) pendingCommentKeys[event.key] = event.newValue;
     else delete pendingCommentKeys[event.key];
     var path = pendingCommentPath(event.key);
     if (!path) return;
     if (!event.newValue) delete pendingComments[path];
     renderSaveState();
   });
+  /* Another tab's comment on its way (its mark says sending, comments.js) is not kept here: it
+     reads as nothing until it lands, or as kept once its time is up. */
+  var sendingRecheck = 0;
+  function keptElsewhere(key) {
+    var mark = pendingCommentKeys[key], until = Castor.commentSendingUntil ? Castor.commentSendingUntil(typeof mark === 'string' ? mark : '') : 0;
+    if (until > Date.now()) {
+      if (global.setTimeout && !sendingRecheck) sendingRecheck = global.setTimeout(function () { sendingRecheck = 0; renderSaveState(); }, until - Date.now() + 50);
+      return false;
+    }
+    return !!pendingCommentPath(key);
+  }
   function commentWarning() {
     var paths = Object.keys(pendingComments);
-    return paths.length ? pendingComments[paths[0]] : Object.keys(pendingCommentKeys).some(function (key) { return !!pendingCommentPath(key); })
+    return paths.length ? pendingComments[paths[0]] : Object.keys(pendingCommentKeys).some(keptElsewhere)
       ? 'A comment is kept on this device and is waiting to save.' : '';
   }
   function saveWord() {

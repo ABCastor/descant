@@ -129,11 +129,13 @@
    focus: the caret or a selection placed in the text, by a click or the keys.
    Escape (the editor lets go of its block) or a click anywhere outside the text
    takes the focus away and every paragraph returns to full ink, through the same
-   fade. `:has()` and `:focus-within` ask both questions at paint time, so no
-   script has to keep a second copy of either. Settings turns the token off, and
-   then nothing recedes at all (app.js, "Dim the other paragraphs"). */
+   fade. The editor says on the page that a block is lit (`cw-has-lit`), next to
+   the block's own class; `:focus-within` asks the other question at paint time.
+   Not `:has()`: with it, every element added anywhere in the article (a mirror
+   redrawn, a comment mark) made Chromium restyle every paragraph. Settings turns
+   the token off, and then nothing recedes at all (app.js, "Dim the other paragraphs"). */
 .cw-focus-paragraph .cw-block { transition: color var(--focus-fade) ease; }
-.cw-focus-paragraph:focus-within:has(.cw-lit) .cw-block:not(.cw-lit) { color: var(--ink-dim); }
+.cw-focus-paragraph.cw-has-lit:focus-within .cw-block:not(.cw-lit) { color: var(--ink-dim); }
 .cw-focus-paragraph .cw-block.cw-lit { color: var(--ink, #1a1a18); }
 
 /* The trail's steps are written by editor.js into <style id="castor-trail">,
