@@ -2235,9 +2235,10 @@
     return showNotice(me ? 'Reviewing as ' + me : 'Reviewing', REVIEWING_SAYS, null, false);
   }
 
-  /* A comment that did not reach the repository says so where a save would. */
+  /* A comment that did not reach the repository says so where a save would. One on its way
+     (`sending`) is saving: the save word shows it while the request runs, never as unsaved. */
   bus.on('comments:pending', function (info) {
-    pendingComments[(info && info.path) || saver.path] = 'A comment is kept on this device and is waiting to save.';
+    if (!(info && info.sending)) pendingComments[(info && info.path) || saver.path] = 'A comment is kept on this device and is waiting to save.';
     renderSaveState();
   });
   bus.on('comments:unsaved', function (info) {

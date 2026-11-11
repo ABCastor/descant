@@ -3057,6 +3057,14 @@
     }
     var nodes = sourceNodes(host);
     var action = inserted && typeof inserted === 'object' ? inserted : { kind: 'text', text: inserted || '' };
+    // A space typed before a paragraph's first character is dropped: kept, it could only be saved as
+    // literal indentation, an HTML span that readers see as code. Pasted indentation keeps it, and a
+    // block written as its source (a definition) keeps every character typed.
+    if (action.kind === 'text' && !action.link && !surface && history !== 'paste' && history !== 'project' && b.type === 'p' &&
+        start === end && /^[ \t]/.test(action.text) && !(typeof editedAsSource === 'function' && editedAsSource(b)) && !interactionRuns(host).some(function (n) { return n.len > 0 && n.at < start; })) {
+      if (!/[^ \t]/.test(action.text)) { setCaret(id, start); return { source: source, caret: start, start: start, end: end }; }
+      action = Object.assign({}, action, { text: action.text.replace(/^[ \t]+/, '') });
+    }
     // Markdown styling inside raw HTML is literal text on the published site.
     if (action.kind === 'style' && /^ {0,3}</.test(source) && MD().parse(source).blocks[0]?.meta.htmlBlock) return { source: source, caret: end, start: start, end: end };
     if (action.kind === 'style' && (b.type === 'quote' || b.type === 'callout')) {
@@ -4848,6 +4856,13 @@
       }
     }
     if (opts.showMarks && sourceInput(e, t, visibleCaret, liveInputCaret)) return;
+    // Only spaces, typed before a paragraph's first character: nothing to type (replaceVisible
+    // drops them on every route); refused here, they leave no step in the history either.
+    if (t === 'insertText' && /^[ \t]+$/.test(e.data || '') && e.cancelable !== false && visibleCaret &&
+        visibleCaret.start === visibleCaret.end && (blockOf(focusId) || {}).type === 'p' &&
+        !(typeof editedAsSource === 'function' && editedAsSource(blockOf(focusId))) && !interactionRuns(el).some(function (n) { return n.len > 0 && n.at < visibleCaret.start; })) {
+      e.preventDefault(); finishInput(global.performance && performance.now ? performance.now() : Date.now()); return;
+    }
     if (e.cancelable !== false && visibleCaret && liveInputCaret &&
         (visibleCaret.start !== liveInputCaret.start || visibleCaret.end !== liveInputCaret.end) &&
         /^(insertText|insertReplacementText)$/.test(t || '') && e.data != null) {

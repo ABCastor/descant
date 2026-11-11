@@ -8,7 +8,6 @@ remote font links retain their declared network URLs."""
 
 import argparse
 import base64
-import datetime
 import hashlib
 import json
 import re
@@ -293,15 +292,22 @@ def file_entry(path, size, date, blob=None):
     return entry
 
 
+def last_commit_date(path):
+    """The day a file last changed in git, so every checkout builds the same bundle.
+    Untracked, or outside git: None, which file_entry shows as one fixed value."""
+    try:
+        return git("log", "-1", "--format=%cs", "--", path.relative_to(REPO_ROOT).as_posix()).strip() or None
+    except (RuntimeError, OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
 def sample_file_entries():
     root = SAMPLE.parent
     entries = []
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         rel = path.relative_to(root).as_posix()
-        stat = path.stat()
         blob = path.read_bytes() if preview_kind(rel) == "image" else None
-        date = datetime.datetime.fromtimestamp(stat.st_mtime).date().isoformat()
-        entries.append(file_entry(rel, stat.st_size, date, blob))
+        entries.append(file_entry(rel, path.stat().st_size, last_commit_date(path), blob))
     return entries
 
 

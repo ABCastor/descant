@@ -891,8 +891,10 @@
     if (Castor.comments) Castor.comments.durable = false;
     var token = Date.now().toString(36) + Math.random().toString(36).slice(2);
     try { global.localStorage.setItem(storageKey + '.unsaved', token); } catch (e) { /* the thread copy remains */ }
-    if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:pending', { path: path });
-    if (driven()) return true;
+    /* A comment that stays here says it is waiting on this device; one sent below is saving.
+       A path that names its own reason (comments:unsaved) needs neither. */
+    function kept() { if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:pending', { path: path }); return true; }
+    if (driven()) return kept();
     var who = (Castor.who && Castor.who.get) ? Castor.who.get() : '';
     /* A reviewer is not asked and sends no name: the server records their
        comments under the name they signed in with, whatever the page says. */
@@ -901,10 +903,11 @@
       if (!reviewer && Castor.reconfirm) Castor.reconfirm();
       return true;
     }
-    if (S.migrationBlocked === storageKey || holdLegacy(threads, storageKey)) return true;
+    if (S.migrationBlocked === storageKey) return kept();
+    if (holdLegacy(threads, storageKey)) return true;
     if (!who && !reviewer) {
       if (Castor.who && Castor.who.ask) Castor.who.ask();
-      return true;
+      return kept();
     }
     if (!reviewer && !pendingIdentityKnown(pendingMessages(threads, storageKey), false, null)) {
       if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unsaved', { path: path, reason: 'The original writer of these pending words is unknown or unavailable. Your words remain on this device.' });
@@ -927,6 +930,7 @@
       }
       if (principals.length) who = principals[0];
     }
+    if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:pending', { path: path, sending: true });
     var revision = saveVersions[storageKey] = (saveVersions[storageKey] || 0) + 1;
     var snapshot = JSON.stringify(S.threads);
     var outgoing = JSON.parse(snapshot).filter(function (t) { return /^\d+$/.test(String(t.id)) || t.pending; });
