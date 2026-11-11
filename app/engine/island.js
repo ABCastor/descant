@@ -12,16 +12,18 @@
   var Castor = global.Castor || (global.Castor = {});
   var DOC = global.document;
   var toolbarChoice = new URLSearchParams((global.location && global.location.search) || '').get('toolbar');
+  // The order the writer reaches for them, the first five in view on a phone before the row scrolls.
   var COMMANDS = [
     { id: 'heading', label: 'Paragraph', title: 'Heading level' },
     { id: 'bold', label: 'Bold', title: 'Bold' },
+    { id: 'italic', label: 'Italic', title: 'Italic' },
+    { id: 'link', label: 'Link', title: 'Link' },
     { id: 'bullet', label: 'Bullet', title: 'Bullet list' },
     { id: 'checkbox', label: 'Box', title: 'Checkbox' },
-    { id: 'outdent', label: 'Outdent', title: 'Outdent' },
-    { id: 'indent', label: 'Indent', title: 'Indent' },
     { id: 'highlight', label: 'Highlight', title: 'Highlight' },
-    { id: 'link', label: 'Link', title: 'Link' },
-    { id: 'footnote', label: 'Footnote', title: 'Add footnote' }
+    { id: 'footnote', label: 'Footnote', title: 'Add footnote' },
+    { id: 'outdent', label: 'Outdent', title: 'Outdent' },
+    { id: 'indent', label: 'Indent', title: 'Indent' }
   ];
 
   if (toolbarChoice === 'symbols') COMMANDS.splice(7, 0,
@@ -33,6 +35,7 @@
   function commandSymbol(id) {
     if (id === 'heading') return 'P';
     if (id === 'bold') return '<b>B</b>';
+    if (id === 'italic') return '<i>I</i>';
     if (id === 'highlight') return '<u>H</u>';
     if (id === 'footnote') return 'x<sup>1</sup>';
     var paths = {
@@ -413,6 +416,7 @@
         Math.max(prefix.length, saved.end + delta));
     }
     if (id === 'bold') return wrapInline(block, saved, '**');
+    if (id === 'italic') return wrapInline(block, saved, '*');
     if (id === 'highlight') return wrapInline(block, saved, '==');
     if (id === 'link') {
       if (saved.end > saved.start) {

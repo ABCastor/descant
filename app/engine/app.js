@@ -506,6 +506,7 @@
     target.piece.sites = Array.isArray(payload.sites) ? payload.sites : [];
     target.piece.article_sha256_now = payload.article_sha256_now || null;
     target.piece.savedMarkdown = payload.markdown;
+    target.piece.held = Array.isArray(payload.held) ? payload.held : [];
     target.piece.folder = payload.folder || target.piece.folder;
     target.piece.fileEntries = payload.files || [];
     target.piece.fileOrder = payload.fileOrder || {};
@@ -2015,6 +2016,7 @@
     if (saver.state === 'offline') return kept ? SAVE_WORDS.offline : 'Not saved: can’t reach the server';
     if (saver.state === 'refused' && saver.short) return 'Not saved: ' + saver.short;
     if (saver.state === 'locked' && saver.short) return saver.short;
+    if (['ready', 'saved'].indexOf(saver.state) >= 0 && heldRules()) return 'Saved as draft';
     return SAVE_WORDS[saver.state] || '';
   }
   function saveDescription() {
@@ -2024,6 +2026,7 @@
       current: text === saver.text, offline: saver.state === 'offline', saving: !!saver.inflight || saver.state === 'saving',
       deviceAt: Castor.keep && Castor.keep.receipt ? Castor.keep.receipt(saver.path, text) : 0,
       history: evidence.history, shared: evidence.shared, warning: [commentWarning(), fileWarning()].filter(Boolean).join(' '),
+      held: (['ready', 'saved'].indexOf(saver.state) >= 0 && heldRules() || {}).note || '',
       problem: ['dirty', 'refused', 'conflict', 'stale', 'locked', 'offline'].indexOf(saver.state) >= 0 ? saver.detail || SAVE_WORDS[saver.state] : ''
     });
   }
@@ -2071,6 +2074,11 @@
     if (saver.detail && (editorSource() !== saver.text || ['dirty', 'refused', 'conflict', 'stale', 'locked', 'offline'].indexOf(saver.state) >= 0)) panel.appendChild(line('p', 'save-explanation', saver.detail));
     if (saver.state === 'refused' && saver.refusal && saver.refusal.line && Castor.editor && Castor.editor.revealSource) {
       panel.appendChild(pick('Show line ' + saver.refusal.line, function () { if (panel.hidePopover) panel.hidePopover(); showRefusal(); }));
+    }
+    var held = ['ready', 'saved'].indexOf(saver.state) >= 0 && heldRules();
+    if (held) {
+      panel.appendChild(line('p', 'save-explanation', held.note));
+      if (held.line && Castor.editor && Castor.editor.revealSource) panel.appendChild(pick('Show line ' + held.line, function () { if (panel.hidePopover) panel.hidePopover(); held.show(); }));
     }
     if (['unsaved', 'offline', 'dirty', 'refused'].indexOf(saver.state) >= 0) {
       panel.appendChild(pick('Try saving now', function () { retryNow(true); }));
@@ -2127,7 +2135,7 @@
       return;
     }
     if (Castor.saveStatus) Castor.saveStatus.render(el, saveDescription());
-    else { el.textContent = word; el.title = commentWarning() || saver.detail || ''; }
+    else { el.textContent = word; el.title = commentWarning() || saver.detail || (word === 'Saved as draft' ? heldRules().note : ''); }
     // The panel is built as it opens (popovers.bind) and kept current while open, never rebuilt
     // on a key while it is closed, so a keystroke does no DOM work for it. A browser without
     // native popovers shows it by other means, so there it is built every time.
@@ -2946,6 +2954,8 @@
           data.piece.article_sha256_now = b.article_sha256_now || null;
         }
       }
+      // The writing rules these saved words break: they are saved, and publishing waits for the fix.
+      if (data.piece && Array.isArray(b.held)) data.piece.held = b.held;
       saver.evidence = b.save || null;
       refreshSaveEvidence();
       var shared = b.push === 'pending' ? ' It reaches the shared copy once the hub answers.' : '';
@@ -3030,13 +3040,30 @@
 
   /* The refusal in plain words: the rule as advice, the line, and the words around the character
      the check named (an em dash can sit a thousand characters into the line it quotes the start of). */
-  function refusalMessage(r, text) {
+  function refusalMessage(r, text, lead, tail) {
     var none = /^owner: \S+ writes none; (.+)$/.exec(r.why || '');
     var rule = none ? 'this article takes no ' + r.rule + ' (write a ' + none[1] + ')' : r.rule + (r.why ? ' (' + r.why + ')' : '');
     var words = r.line ? refusalQuote(text, r) : '';
     // Words that end a sentence end it inside the quote: no second full stop after it.
-    return 'The project’s check refused this version: ' + rule + (r.line ? ', line ' + r.line + (words ? ': “' + words + '”' : '') : '') +
-      (/[.!?…]$/.test(words) ? ' ' : '. ') + 'Change it and the next pause saves.';
+    return ((lead == null ? 'The project’s check refused this version: ' : lead) + rule + (r.line ? ', line ' + r.line + (words ? ': “' + words + '”' : '') : '') +
+      (/[.!?…]$/.test(words) ? ' ' : '. ') + (tail == null ? 'Change it and the next pause saves.' : tail)).trim();
+  }
+
+  /* The writing rules the saved text breaks, as the check named them: the words are saved, and
+     publishing waits until they change. A calm note for the save state, the reason Publish gives,
+     and Show line. Null when nothing is held, or when the words on screen are not the saved ones. */
+  function heldRules() {
+    var lines = data && data.piece && data.piece.held;
+    if (!Array.isArray(lines) || !lines.length || saver.text === null || editorSource() !== saver.text) return null;
+    var r = gateRefusal(lines.join('\n'));
+    if (!r) return null;
+    var text = editorSource(), more = lines.length > 1 ? ' One more rule waits after it.' : '';
+    return {
+      rule: r.rule, line: r.line, refusal: r,
+      note: refusalMessage(r, text, 'Saved as a draft. Before it can be published: ', '') + more,
+      publish: refusalMessage(r, text, 'Fix this before publishing: ', '') + more,
+      show: function () { return showRefusal(r); }
+    };
   }
   /* About six words on each side of the character the check named, cut at spaces, on the line where Show
      line finds it; without it, the check's own words, their first dozen or so. */
@@ -3074,8 +3101,8 @@
   }
 
   /* Show line: the caret there in typing mode, the line brought into view as a tap brings it. */
-  function showRefusal() {
-    var at = refusalAt(editorSource(), saver.refusal);
+  function showRefusal(r) {
+    var at = refusalAt(editorSource(), r || saver.refusal);
     return !!at && Castor.editor.revealSource(at.start, at.end);
   }
 
@@ -3259,9 +3286,59 @@
     ]).then(function (r) { return { words: r[0], comments: r[1] }; });
   };
 
+  /* For the app shell, which asks when it leaves the screen and may then be suspended.
+     Answers only once every word on the screen -- the article, and an open comment,
+     reply or edit box -- is confirmed by the server or read back from this device's
+     journal. Unfinished comments are kept as typed, never sent. The counts are every
+     unsent article and comment kept in this browser, for any article. A store that
+     refused the words, or could not be read, makes the receipt not durable; one that
+     does not answer in time rejects. Nothing is sent, cleared or navigated. The
+     receipt carries no words, paths or names. */
+  var NATIVE_WAIT = 4000;
+  function nativeReceipt() {
+    if (reviewing()) return Promise.reject(Error('Not a writing page.'));
+    if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
+    // Comment boxes are captured first: their journal writes are synchronous.
+    var notes = Castor.comments && Castor.comments.unsent ? Castor.comments.unsent() : null;
+    var path = saver.path, text = editorSource();
+    var onScreen = !!Castor.editor && typeof text === 'string' && text !== saver.text && (saver.typed || saver.text !== null);
+    journal();
+    var kept = keepOn() && Castor.keep ? Castor.keep.now() : Promise.resolve(!onScreen);
+    return Promise.resolve(kept).then(function (stored) {
+      if (!Castor.keep || !Castor.keep.unsent) throw Error('This page has no journal to read back.');
+      return Castor.keep.unsent().then(function (entries) {
+        var held = !onScreen || !!path && (saver.path === path && saver.text === text ||
+          entries.some(function (e) { return e.path === path && e.text === text; }));
+        var articles = Object.create(null);
+        entries.forEach(function (e) { if (!(e.path === saver.path && e.text === saver.text)) articles[e.path] = true; });
+        if (onScreen && path && !(saver.path === path && saver.text === text)) articles[path] = true;
+        var count = notes && Number.isSafeInteger(notes.count) && notes.count >= 0 ? notes.count : 0;
+        return {
+          version: 1,
+          durable: stored === true && held && !!notes && notes.durable === true,
+          unsentArticles: Object.keys(articles).length,
+          unsentComments: count
+        };
+      });
+    });
+  }
+  if (!PUBLIC_REVIEWER) {
+    global.DescantNative = global.DescantNative || {};
+    global.DescantNative.flush = function () {
+      var timer = 0;
+      return Promise.race([
+        Promise.resolve().then(nativeReceipt),
+        new Promise(function (resolve, reject) {
+          timer = setTimeout(function () { reject(Error('The words on this device were not confirmed in time.')); }, NATIVE_WAIT);
+        })
+      ]).then(function (receipt) { clearTimeout(timer); return receipt; }, function (e) { clearTimeout(timer); throw e; });
+    };
+  }
+
   Castor.saver = {
     state: function () { return saver.state; },
     refusal: function () { var r = saver.refusal; return r ? { rule: r.rule, line: r.line, words: r.words, at: r.at } : null; },
+    held: heldRules,
     flush: function () { return flushSave(false); },
     snapshot: function () { return { path: saver.path, base: saver.base, clean: !saver.inflight && editorSource() === saver.text }; },
     reattach: attachSaver

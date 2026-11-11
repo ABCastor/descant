@@ -49,6 +49,30 @@ def command(repo, *args, timeout=60):
     return result.stdout.strip()
 
 
+def writing_rules(repo, path):
+    """Refuse an article the repository's own check holds back, naming the rule and its line.
+    A save keeps words that break a writing rule; publishing is where they stop. The check's
+    quote of the line stays out of the message: a line it refuses can hold a credential."""
+    gate = Path(repo) / 'check.sh'
+    if not gate.is_file():
+        return
+    try:
+        result = subprocess.run([str(gate), '--writing-save', path], cwd=repo, capture_output=True, text=True,
+                                timeout=60, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        raise Refused('The writing check could not run, so nothing was published.', 503)
+    if result.returncode == 0:
+        return
+    fail = next((line for line in (result.stdout + result.stderr).splitlines() if line.startswith('FAIL ')), '')
+    found = re.match(r'FAIL (.+?) in \S+(?: \(([^)]*)\))?(?: -> (\d+):)?', fail)
+    if not found:
+        raise Refused('Fix this before publishing: the writing check refused the article (run ./check.sh on it).')
+    rule, why, line = found.group(1), found.group(2) or '', found.group(3)
+    none = re.match(r'owner: \S+ writes none; (.+)$', why)
+    said = 'this article takes no %s (write a %s)' % (rule, none.group(1)) if none else rule + (' (%s)' % why if why else '')
+    raise Refused('Fix this before publishing: %s%s.' % (said, ', line ' + line if line else ''))
+
+
 def head(repo):
     return command(repo, 'git', 'rev-parse', 'HEAD')
 
@@ -246,8 +270,7 @@ class Publication:
             raise Refused('The article needs a stable public slug.')
         if not isinstance(fields['title'], str) or not fields['title'].strip():
             raise Refused('The article needs a title.')
-        if (self.source / 'check.sh').is_file():
-            command(self.source, str(self.source / 'check.sh'), '--writing-save', path)
+        writing_rules(self.source, path)
         if fields['status'] == 'candidate':
             raise Refused('A founder must decide this candidate article before publication.')
         if fields['owner'] not in (*self.authors, 'both', 'unassigned') or fields['published'] not in (True, False):

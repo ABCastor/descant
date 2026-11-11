@@ -441,6 +441,40 @@ def git_blob(ref_path, timeout=20, commit="HEAD"):
     )
 
 
+# The check's writing rules hold an article back from publication, never from a save: the words
+# reach Git as typed and the page says what to fix before publishing. Any other refusal of the
+# check (a credential-shaped line, whitespace) still keeps the save out of Git.
+PUBLISH_RULES = ("em dash", "internal comment", "private source")
+HELD = {}
+
+
+def gate_failures(stdout):
+    """The check's FAIL lines, as (the writing rules publishing waits for, every other failure)."""
+    held, refused = [], []
+    for line in (stdout or "").splitlines():
+        if line.startswith("FAIL "):
+            rule = re.match(r"FAIL (.+?) in \S+", line)
+            (held if rule and rule.group(1) in PUBLISH_RULES else refused).append(line)
+    return held, refused
+
+
+def publish_held(path, data):
+    """The writing rules the article's saved bytes break, as the check words them; kept per text."""
+    key = (path, hashlib.sha256(data).hexdigest())
+    if key not in HELD:
+        try:
+            if (REPO_ROOT / path).read_bytes() != data:
+                return []
+            gate = subprocess.run([str(REPO_ROOT / "check.sh"), "--writing-save", path], cwd=str(REPO_ROOT),
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if len(HELD) > 512:
+            HELD.clear()
+        HELD[key] = gate_failures(gate.stdout)[0]
+    return list(HELD[key])
+
+
 def save_evidence(path, sha):
     """Prove the requested article commit and its presence on the upstream branch."""
     history = None
@@ -1412,6 +1446,96 @@ def comment_threads(path):
     return [document["thread"] for _target, document in documents]
 
 
+# An agent's message names the founder it was written for in its `principal:`. One written
+# before that field existed is credited only from the commit that wrote its signature line,
+# and only when that commit says so itself: one Principal trailer naming a founder (or both)
+# and an Actor that is not a person. The answer is a reading of history, sent as `onBehalfOf`
+# beside the message and never written back into the review file.
+COMMIT_CREDIT = {}         # commit -> founder key, "both" or None
+FILE_CREDIT = {}           # (file, sha256 of its bytes) -> {signature line number: founder key}
+
+
+def commit_credit(sha):
+    if sha not in COMMIT_CREDIT:
+        body = git("log", "-1", "--format=%B", sha)
+        text = body.stdout if body.returncode == 0 else ""
+        principals = set(re.findall(r"^Principal:[ \t]*(\S+)[ \t]*$", text, re.M))
+        actors = set(a.strip().lower() for a in re.findall(r"^Actor:[ \t]*(.+?)[ \t]*$", text, re.M))
+        found = principals.pop() if len(principals) == 1 else None
+        person = len(actors) != 1 or actors & {"human", ""}
+        COMMIT_CREDIT[sha] = found if found in FOUNDERS + ("both",) and not person else None
+    return COMMIT_CREDIT[sha]
+
+
+def signature_credits(target):
+    """{line number: founder} for each agent signature line of one review file without a recorded founder."""
+    try:
+        data = target.read_bytes()
+    except OSError:
+        return {}
+    key = (str(target), hashlib.sha256(data).hexdigest())
+    if key in FILE_CREDIT:
+        return FILE_CREDIT[key]
+    lines, wanted = data.decode("utf-8", "replace").splitlines(), []
+    for number, line in enumerate(lines[frontmatter_end(lines) + 1:], frontmatter_end(lines) + 2):
+        match = MESSAGE_RE.match(line)
+        qualifier = [part.strip() for part in (match.group(3) or "").split(",")] if match else []
+        if match and "agent" in qualifier and not any(part.startswith("principal:") for part in qualifier):
+            wanted.append(number)
+    meta = "\n".join(lines[:frontmatter_end(lines) + 1])
+    root_agent = re.search(r"^by:[ \t]*agent[ \t]*$", meta, re.M) and not re.search(r"^principal:", meta, re.M)
+    first = next((n for n, line in enumerate(lines[frontmatter_end(lines) + 1:], frontmatter_end(lines) + 2) if MESSAGE_RE.match(line)), None)
+    if root_agent and first and first not in wanted:
+        wanted.append(first)
+    found = {}
+    if wanted:
+        ranges = [arg for n in sorted(wanted) for arg in ("-L", "%d,%d" % (n, n))]
+        blame = git("blame", "--porcelain", *ranges, "--", target.relative_to(REPO_ROOT).as_posix())
+        if blame.returncode == 0:
+            for row in blame.stdout.splitlines():
+                head = re.match(r"^([0-9a-f]{40}) \d+ (\d+)", row)
+                if head and int(head.group(2)) in wanted and head.group(1).strip("0"):
+                    credit = commit_credit(head.group(1))
+                    if credit:
+                        found[int(head.group(2))] = credit
+    FILE_CREDIT[key] = found
+    return found
+
+
+def credited_messages(target):
+    """The founder each message of one review file was written for, in message order (None: not proved)."""
+    credits = signature_credits(target)
+    if not credits:
+        return []
+    lines = target.read_text("utf-8").splitlines()
+    start = frontmatter_end(lines) + 1
+    return [credits.get(number) for number, line in enumerate(lines[start:], start + 1) if MESSAGE_RE.match(line)]
+
+
+def with_comment_credit(path, payload):
+    """The comment payload as it is sent, each agent message without a recorded founder credited from history."""
+    threads = payload if isinstance(payload, list) else (payload.get("threads") or ([payload["thread"]] if isinstance(payload.get("thread"), dict) else []))
+    if not threads:
+        return payload
+    try:
+        targets = {re.match(r"([0-9]+)-", t.name).group(1): t for t in comment_files(piece_folder(path) / "review")}
+    except (OSError, ValueError):
+        return payload
+    for thread in threads:
+        target = targets.get(str(thread.get("id") or "")) if isinstance(thread, dict) else None
+        messages = [thread] + list(thread.get("replies") or []) if target else []
+        try:
+            credits = credited_messages(target) if target else []
+        except (OSError, UnicodeError, subprocess.SubprocessError):
+            credits = []
+        if len(credits) != len(messages):
+            continue                   # the file and the answer disagree: credit nothing
+        for message, credit in zip(messages, credits):
+            if credit and message.get("by") == "agent" and not message.get("principal"):
+                message["onBehalfOf"] = credit
+    return payload
+
+
 
 # Comment actions use immutable per-operation Git records. Shared thread revisions
 # belong to Descant; importing its event is a later durability boundary.
@@ -1879,12 +2003,13 @@ def search_article(path, folder, title, markdown, needle):
         except (OSError, UnicodeError, ValueError):
             continue
         rows = raw.splitlines()
-        author = None
+        author, messages, at, said = None, [thread] + thread["replies"], -1, {}
         for n in range(frontmatter_end(rows) + 1, len(rows)):
             text = rows[n]
             opened = MESSAGE_RE.match(text)
             if opened:
-                author = opened.group(1)
+                author, at = opened.group(1), at + 1
+                said = messages[at] if at < len(messages) else {}
                 continue
             plain = text.strip()
             # Only what people wrote: never the heading, the quoted passage before the
@@ -1898,6 +2023,9 @@ def search_article(path, folder, title, markdown, needle):
                                  "snippet": found[0], "match": found[1], "line": n + 1,
                                  "file": target.relative_to(REPO_ROOT).as_posix(),
                                  "thread": thread["id"], "author": author,
+                                 **{k: said[k] for k in ("by", "principal", "model") if said.get(k)},
+                                 **({"onBehalfOf": credit} if said.get("by") == "agent" and not said.get("principal") and
+                                    (credit := (credited_messages(target) + [None] * (at + 1))[at]) else {}),
                                  "quote": thread["anchor"]["quote"]})
     return titles, texts, comments
 
@@ -3236,6 +3364,7 @@ class Handler(SimpleHTTPRequestHandler):
             "live": self.article_live_record(path),
             "sites": [] if hasattr(self, "reviewer") else space_config.client_sites(),
             "article_sha256_now": hashlib.sha256(article_bytes).hexdigest(),
+            "held": publish_held(path, article_bytes) if article_path(path) and not hasattr(self, "reviewer") else [],
         })
 
     def article_live_record(self, path):
@@ -3489,8 +3618,8 @@ class Handler(SimpleHTTPRequestHandler):
                 if (self.query().get("actions") or [""])[0] == "1" and not isinstance(self, ReviewerHandler):
                     who = (self.query().get("who") or [""])[0]
                     if who not in FOUNDERS: return self.reply(403, {"ok": False, "reason": "writer-unconfirmed"})
-                    return self.reply(200, comment_action_document(path, who))
-                return self.reply(200, comment_projected_threads(path))
+                    return self.reply(200, with_comment_credit(path, comment_action_document(path, who)))
+                return self.reply(200, with_comment_credit(path, comment_projected_threads(path)))
         except (OSError, UnicodeError, ValueError) as error:
             return self.reply(422, {"error": "a review thread could not be parsed: " + str(error)[:200]})
 
@@ -3537,7 +3666,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if prior:
                     if prior["requestHash"] != fingerprint: return self.reply(409, {"ok": False, "reason": "operation-conflict"})
                     if prior in committed:
-                        return self.reply(200, {"ok": True, "receipt": {"opId": op, "request": prior["request"], "resultRev": prior["resultRev"], "authority": "git", "gitDurable": True}, "thread": current})
+                        return self.reply(200, with_comment_credit(path, {"ok": True, "receipt": {"opId": op, "request": prior["request"], "resultRev": prior["resultRev"], "authority": "git", "gitDurable": True}, "thread": current}))
                 elif len(committed) != len(events):
                     return self.reply(422, {"ok": False, "reason": "save-failed", "error": "A retained action awaits its exact retry before another action."})
                 is_status = action in ("resolve", "reopen")
@@ -3550,7 +3679,7 @@ class Handler(SimpleHTTPRequestHandler):
                 history = [e for e in committed if e.get("localThreadId", e.get("threadId")) == current["id"] and e["slot"] == slot]
                 latest = max(history, key=lambda e: e["resultRev"], default=None)
                 rev = latest["resultRev"] if latest else 0
-                if base != rev: return self.reply(409, {"ok": False, "reason": "stale-action", "thread": current})
+                if base != rev: return self.reply(409, with_comment_credit(path, {"ok": False, "reason": "stale-action", "thread": current}))
                 original = next((m for m in [doc["thread"]] + doc["thread"]["replies"] if m.get("messageRef", "local-root:" + doc["thread"]["id"]) == body.get("messageRef")), message)
                 state = dict(latest["state"]) if latest else ({"done": current["done"], "status": current["status"]} if is_status else {"active": False} if action == "reaction" else {"text": original["text"], "withdrawn": False})
                 if is_status: state = {"done": action == "resolve", "status": "answered" if action == "resolve" else "open"}
@@ -3574,7 +3703,7 @@ class Handler(SimpleHTTPRequestHandler):
                 except (ValueError, OSError, subprocess.TimeoutExpired) as error: return self.reply(422, {"ok": False, "reason": "save-failed", "error": str(error)[:200]})
                 # The synchronous commit/push may rebase onto newer action state.
                 committed = comment_action_events(path, committed_only=True)
-                return self.reply(200, {"ok": True, "receipt": {"opId": op, "request": body, "resultRev": rev+1, "authority": "git", "gitDurable": True}, "thread": comment_action_projection(path, doc["thread"], who, events=committed)})
+                return self.reply(200, with_comment_credit(path, {"ok": True, "receipt": {"opId": op, "request": body, "resultRev": rev+1, "authority": "git", "gitDurable": True}, "thread": comment_action_projection(path, doc["thread"], who, events=committed)}))
         answer = None
         try:
             answer = private_action_answer(share_action_call(outgoing), doc["thread"]["id"])
@@ -3717,7 +3846,7 @@ class Handler(SimpleHTTPRequestHandler):
                 # Append receipts must carry the same actor-bound controls as a
                 # read. Polling deliberately pauses while another edit is open.
                 document = comment_action_document(path, str(self._comment_actor).strip().lower(), events=events) if self._comment_actor else {"threads": comment_projected_threads(path, events=events), "held": comment_held_list(held)}
-                return self.reply(200, dict(document, ok=True, changed=0, refused=refused))
+                return self.reply(200, with_comment_credit(path, dict(document, ok=True, changed=0, refused=refused)))
 
             written = []
             before_sha = git("rev-parse", "HEAD").stdout.strip()
@@ -3760,8 +3889,8 @@ class Handler(SimpleHTTPRequestHandler):
             # Never return the validation snapshot after a commit/push/rebase.
             events = comment_action_events(path, committed_only=True)
             document = comment_action_document(path, str(self._comment_actor).strip().lower(), events=events) if self._comment_actor else {"threads": comment_projected_threads(path, events=events), "held": comment_held_list(held)}
-            return self.reply(200, dict(document, ok=True, changed=len(changes), refused=refused,
-                                       sha=git("rev-parse", "HEAD").stdout.strip()))
+            return self.reply(200, with_comment_credit(path, dict(document, ok=True, changed=len(changes), refused=refused,
+                                       sha=git("rev-parse", "HEAD").stdout.strip())))
         except CommentRefused as refused:
             # Raised only by the hooks, which all run while `changes` is being built,
             # so a refusal always arrives before the first file is touched.
@@ -3886,7 +4015,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.reply(422, {"ok": False, "reason": "gate-failed",
                                         "error": "the repository gate could not run",
                                         "stdout": str(error)})
-            if gate.returncode != 0:
+            held, refused = gate_failures(gate.stdout)
+            if gate.returncode != 0 and (refused or not held):
                 atomic_write(target, before)
                 return self.reply(422, {"ok": False, "reason": "gate-failed",
                                         "error": "the repository gate refused this save",
@@ -3909,8 +4039,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.reply(500, {"ok": False, "reason": "commit-failed", "error": failure})
             sha = git("rev-parse", "HEAD").stdout.strip()
             media = served_media(piece_folder(path))
+            HELD[(path, hashlib.sha256(submitted).hexdigest())] = held
             answer = {"ok": True, "sha": sha, "versions": piece_versions(path, media),
-                      "save": save_evidence(path, sha)}
+                      "save": save_evidence(path, sha), "held": held}
             if SYNC["on"] and SYNC["push_pending"]:
                 answer["push"] = "pending"
             return self.reply(200, answer)

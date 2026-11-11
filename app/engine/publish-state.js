@@ -218,7 +218,19 @@
     if (!founder()) return 'Only a founder can publish this article.';
     if (busy) return 'Publishing is in progress.';
     if (!clean()) return 'Save the article before publishing.';
+    var rules = held();
+    if (rules) return rules.publish;
     return '';
+  }
+  /* The saved words break a writing rule: they are saved, and the website waits for the fix (app.js). */
+  function held() { return C.saver && C.saver.held ? C.saver.held() : null; }
+  function showLine(box) {
+    var rules = held();
+    if (!rules || !rules.line || !rules.show) return;
+    box.appendChild(button('Show line ' + rules.line, function () {
+      if (panel && panel.hidePopover) panel.hidePopover();
+      hideSheet(); rules.show();
+    }));
   }
   function comparison(article, record) {
     if (!record || !record.commit || !record.article_sha256) return Promise.reject(Error('Published text is unavailable.'));
@@ -248,7 +260,7 @@
       if (captured !== epoch || sequence !== requestSeq || who !== founder() || article !== path || p !== piece()
         || C.pieces && C.pieces.current && C.pieces.current() !== article) return;
       p.live = data.live || null; p.article_sha256_now = data.article_sha256_now;
-      p.savedMarkdown = data.markdown; paint();
+      p.savedMarkdown = data.markdown; if (Array.isArray(data.held)) p.held = data.held; paint();
       if (C.changes && C.changes.refresh) C.changes.refresh();
       return data;
     }).catch(function () { /* Keep the last received evidence, never invent a match. */ })
@@ -313,7 +325,7 @@
     }
     var publish = button(live ? 'Update the live version' : 'Publish', confirm);
     var blocked = reason(); publish.disabled = !!blocked; panel.appendChild(publish);
-    if (blocked) panel.appendChild(el('p', blocked));
+    if (blocked) { panel.appendChild(el('p', blocked)); showLine(panel); }
   }
   function confirm() {
     if (busy) return;
@@ -321,7 +333,7 @@
     if (C.editor && C.editor.flush) C.editor.flush();
     if (!clean()) { var saved = dialog('Save first'); saved.appendChild(el('p', 'Save first')); saved.appendChild(button('Close', hideSheet)); return; }
     var blocked = reason();
-    if (blocked) { var unavailable = dialog('Publish unavailable'); unavailable.appendChild(el('p', blocked)); unavailable.appendChild(button('Close', hideSheet)); return; }
+    if (blocked) { var unavailable = dialog('Publish unavailable'); unavailable.appendChild(el('p', blocked)); showLine(unavailable); unavailable.appendChild(button('Close', hideSheet)); return; }
     var article = path, captured = epoch, who = founder(), original = source();
     var fields = C.md.parse(original).frontmatter;
     var box = dialog(piece().live ? 'Update the live version' : 'Publish this article');

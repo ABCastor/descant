@@ -43,10 +43,13 @@
     if (s.warning) missing.push(s.warning);
     if (s.problem) missing.push(s.problem);
     var label = state === 'device' ? 'Kept on this device. Waiting to sync when the connection returns.' : state === 'saving' ? (history && !shared ? 'Checking the shared backup. ' + rows[2].detail : 'Saving') : state === 'saved' ? 'Saved: all three copies confirmed' : 'Save incomplete. ' + missing.join(' ');
-    return { word: word, state: state, label: label, rows: rows, sharedFailed: sharedFailed };
+    // Saved words that break a writing rule are safe; only publishing waits. Calm words, the same mark.
+    var held = state === 'saved' && s.held ? s.held : '';
+    if (held) { word = 'Saved as draft'; label = 'All three copies confirmed. ' + held; }
+    return { word: word, state: state, label: label, rows: rows, sharedFailed: sharedFailed, held: !!held };
   }
   function shortWord(view) {
-    return view.state === 'device' ? 'On device' : view.state === 'saved' ? 'Saved'
+    return view.state === 'device' ? 'On device' : view.state === 'saved' ? (view.held ? 'Draft' : 'Saved')
       : view.sharedFailed ? 'Not backed up' : view.state === 'partial' ? 'Not saved'
       : /^Checking/.test(view.word) ? 'Checking' : 'Saving';
   }

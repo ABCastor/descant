@@ -536,6 +536,18 @@
     });
   }
 
+  /* Every unsent copy on this device, for any article and any page, read back from
+     the stores after every write asked before it. Rejects when a store that may
+     hold words cannot be read: an unreadable store is never taken as empty. */
+  function unsent() {
+    return queue(function () {
+      return everything(true).then(function (entries) {
+        return entries.filter(function (e) { return !e.confirmed && !dismissed(e, entries); })
+          .map(function (e) { return { path: e.path, text: e.text }; });
+      });
+    });
+  }
+
   function independent(entry) { return /^copy-[a-z0-9]+-/.test(String(entry.page || '')); }
 
   // Immutable copies never share a writer's next mutable journal destination.
@@ -640,6 +652,7 @@
     all: function () { return list(); },
     snapshot: snapshot,
     mine: mine,
+    unsent: unsent,
     adopt: adopt,
     preserveCurrent: preserveCurrent,
     discard: discard,

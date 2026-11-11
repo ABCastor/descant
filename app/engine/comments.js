@@ -60,6 +60,35 @@
     if (text != null) n.textContent = text;
     return n;
   }
+  /* SHOW AND HIDE, ONE WAY. A part of a card that waits closed (the comments without a passage,
+     the older versions of an edit) opens with a real button: it names what it holds, says Show or
+     Hide in words, carries aria-expanded and names the region it opens, which follows it. No
+     native disclosure triangle anywhere in comments. `toggled(open)` keeps the state for the
+     next layout. */
+  var disclosureSeq = 0;
+  function disclosure(cls, label, open, toggled) {
+    var box = el('div', cls), id = 'castor-shows-' + (++disclosureSeq);
+    var button = el('button', 'castor-disclosure');
+    button.type = 'button';
+    var state = el('span', 'castor-disclosure-state', open ? 'Hide' : 'Show');
+    state.setAttribute('aria-hidden', 'true');
+    button.appendChild(el('span', 'castor-disclosure-label', label));
+    button.appendChild(state);
+    button.setAttribute('aria-expanded', String(!!open));
+    button.setAttribute('aria-controls', id);
+    var body = el('div', 'castor-disclosure-body');
+    body.id = id; body.hidden = !open;
+    button.addEventListener('click', function (event) {
+      event.stopPropagation();
+      var now = button.getAttribute('aria-expanded') !== 'true';
+      button.setAttribute('aria-expanded', String(now));
+      state.textContent = now ? 'Hide' : 'Show';
+      body.hidden = !now;
+      if (toggled) toggled(now);
+    });
+    box.appendChild(button); box.appendChild(body);
+    return { node: box, body: body, button: button };
+  }
   function words(s) { return String(s || '').toLowerCase().match(/[a-z0-9']+/g) || []; }
   /* app.js confirms the role. Create/reply retain their existing authority;
      edits and other mutations require server-confirmed per-target capabilities. */
@@ -1137,6 +1166,7 @@
       author: t.author || 'You',
       ...(typeof t.principal === 'string' && t.principal.trim() ? { principal: t.principal.trim() } : (t.principal ? { principal: t.principal } : {})),
       ...(typeof t.model === 'string' && t.model.trim() ? { model: t.model.trim() } : {}),
+      ...(founderKey(t.onBehalfOf) ? { onBehalfOf: t.onBehalfOf } : {}),
       ...(col ? { color: col } : {}),
       ...(typeof t.writer === 'string' && t.writer ? { writer: t.writer } : {}),
       ...(typeof t.reviewer === 'boolean' ? { reviewer: t.reviewer } : {}),
@@ -1151,6 +1181,7 @@
           ...(r.legacyReconciliation ? { legacyReconciliation: r.legacyReconciliation } : {}),
           ...(typeof r.principal === 'string' && r.principal.trim() ? { principal: r.principal.trim() } : (r.principal ? { principal: r.principal } : {})),
           ...(typeof r.model === 'string' && r.model.trim() ? { model: r.model.trim() } : {}),
+          ...(founderKey(r.onBehalfOf) ? { onBehalfOf: r.onBehalfOf } : {}),
           ...(rCol ? { color: rCol } : {}),
           ...(typeof r.writer === 'string' && r.writer ? { writer: r.writer } : {}),
           ...(typeof r.reviewer === 'boolean' ? { reviewer: r.reviewer } : {}),
@@ -1710,9 +1741,10 @@
   function configuredPerson(msg) {
     if (!msg || msg.reviewer || msg.reviewerIdentity) return null;
     var people = (Castor.app && Castor.app.data && Castor.app.data.people) || [];
-    if (msg.principal) {
+    var key = msg.principal || (msg.by === 'agent' && founderKey(msg.onBehalfOf) ? msg.onBehalfOf : '');
+    if (key) {
       for (var pIdx = 0; pIdx < people.length; pIdx++) {
-        if (people[pIdx] && people[pIdx].id === msg.principal) return people[pIdx];
+        if (people[pIdx] && people[pIdx].id === key) return people[pIdx];
       }
       return null;
     }
@@ -1769,16 +1801,78 @@
     return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722 > .179 ? '#000000' : '#ffffff';
   }
 
+  /* WHO SAID IT, AND FOR WHOM. An agent is named as itself (its model, written the way people
+     write it) and with the founder it acted for: the one its record names, or the one the commit
+     that wrote it names (`onBehalfOf`, which the server reads from history and never stores).
+     Neither known: the agent alone, never a guess. A founder is a first name, never a key or
+     an address. */
+  function founderKey(key) { return typeof key === 'string' && /^[a-z][a-z0-9-]{0,23}$/.test(key) && key !== 'unassigned'; }
+  function founderName(key) {
+    var people = ((Castor.app && Castor.app.data && Castor.app.data.people) || []).filter(function (p) { return p && p.id && p.kind !== 'agent' && p.name; });
+    function first(p) { return String(p.name).trim().split(/\s+/)[0]; }
+    if (key === 'both') { var all = people.map(first); return all.length > 1 ? all.slice(0, -1).join(', ') + ' and ' + all[all.length - 1] : ''; }
+    for (var i = 0; i < people.length; i++) if (people[i].id === key) return first(people[i]);
+    return Castor.people && Castor.people.name ? Castor.people.name(key) : '';
+  }
+  var AGENT_WORDS = { gpt: 'GPT', ai: 'AI', llm: 'LLM' };
+  function agentName(id) {
+    var raw = String(id || '').trim();
+    // A name written by a person ("Claude 3.5 Sonnet", "GPT-6") stays exactly as written.
+    if (!raw || /\s|[A-Z]/.test(raw)) return raw;
+    var parts = raw.split('-'), out = [];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i], last = out[out.length - 1];
+      if (!p) continue;
+      if (/^gpt$/.test(p) && /^\d/.test(parts[i + 1] || '')) { out.push('GPT-' + parts[++i]); continue; }
+      if (/^\d+$/.test(p) && /^\d+$/.test(last || '') && p.length < 3) { out[out.length - 1] = last + '.' + p; continue; }
+      out.push(/^\d/.test(p) ? p : (AGENT_WORDS[p] || p.charAt(0).toUpperCase() + p.slice(1)));
+    }
+    return out.join(' ');
+  }
+  function credit(msg) {
+    msg = msg || {};
+    var kind = authorKind(msg), person = configuredPerson(msg), author = String(msg.author || '').trim();
+    if (kind !== 'agent') {
+      var who = person ? person.name : (author || 'Unknown author');
+      return { kind: 'human', label: who, name: who, agent: '', forName: '', short: who.split(/\s+/)[0] };
+    }
+    var generic = !author || author === 'Your agent' || /[’']s agent$/i.test(author);
+    var namedByPerson = !msg.principal && !founderKey(msg.onBehalfOf) && person;
+    var agent = msg.model ? agentName(msg.model) : (generic || namedByPerson ? '' : agentName(author));
+    var key = isWriter(msg.principal) || founderKey(msg.principal) ? msg.principal : (founderKey(msg.onBehalfOf) ? msg.onBehalfOf : '');
+    var forName = key ? founderName(key) : (person ? person.name.split(/\s+/)[0] : '');
+    if (!agent) {
+      var plain = person ? person.name + "'s agent" : (author || 'Agent');
+      return { kind: 'agent', label: plain, name: plain, agent: '', forName: forName, short: plain.split(/\s+/)[0] };
+    }
+    return { kind: 'agent', label: agent + (forName ? ' for ' + forName : ''), name: agent, agent: agent, forName: forName,
+      model: msg.model || author, short: agent.split(/\s+/)[0] };
+  }
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  // One way to write a time everywhere a comment shows one: 4 Oct 2026, or 4 Oct 2026, 14:05.
+  function stampText(stamp, when) {
+    var day = stamp.length === 10 ? new Date(+stamp.slice(0, 4), +stamp.slice(5, 7) - 1, +stamp.slice(8, 10)) : when;
+    var text = day.getDate() + ' ' + MONTHS[day.getMonth()] + ' ' + day.getFullYear();
+    if (stamp.length === 10) return text;
+    function two(n) { return (n < 10 ? '0' : '') + n; }
+    return text + ', ' + two(when.getHours()) + ':' + two(when.getMinutes());
+  }
+
   function provenanceLine(msg, thread, root) {
-    var kind = authorKind(msg), name = msg.author || 'Unknown author', person = configuredPerson(msg);
-    if (person) name = person.name + (kind === 'agent' ? "'s agent" : '');
+    var who = credit(msg), kind = who.kind, name = who.label;
     var line = el('div', 'castor-prov');
     var row = el('div', 'castor-prov-author');
-    var credit = el('span', 'castor-comment-name', (root && thread.done ? '✓ ' : '') + name);
-    credit.setAttribute('data-by', kind);credit.title=name;
+    var credited = el('span', 'castor-comment-name', (root && thread.done ? '✓ ' : '') + (who.agent ? '' : name));
+    if (who.agent) {
+      var agentEl = el('span', 'castor-comment-agent', who.agent);
+      if (who.model) agentEl.setAttribute('data-model', who.model);
+      credited.appendChild(agentEl);
+      if (who.forName) credited.appendChild(el('span', 'castor-comment-for', ' for ' + who.forName));
+    }
+    credited.setAttribute('data-by', kind);credited.title=name;
     var pColor = messagePersonColor(msg);
-    if (pColor) credit.style.color = 'color-mix(in srgb, var(--ink) 65%, ' + pColor + ')';
-    row.appendChild(credit);
+    if (pColor) credited.style.color = 'color-mix(in srgb, var(--ink) 65%, ' + pColor + ')';
+    row.appendChild(credited);
     var dot = el('span', 'castor-person-dot',kind==='agent'?'a':'');
     dot.setAttribute('data-initial', kind === 'agent' ? 'a' : name.charAt(0).toUpperCase());
     dot.setAttribute('aria-hidden', 'true');
@@ -1787,26 +1881,16 @@
       ? 'color-mix(in srgb, ' + pColor + ' 35%, white)' : pColor;
     if (pColor && kind !== 'agent') dot.style.color = avatarInk(pColor);
     row.appendChild(dot);
-    if (kind === 'agent') {
-      var modelName = msg.model || (/^claude/i.test(msg.author || '') ? 'Claude' : null);
-      if (modelName) {
-        var mEl = el('span', 'castor-comment-model', modelName);
-        mEl.setAttribute('data-model', modelName);
-        row.appendChild(mEl);
-      }
-    }
     line.appendChild(row);
     if (msg.created) {
       var stamp = String(msg.created), when = new Date(stamp);
       if (/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(stamp) && !isNaN(when.getTime())) {
         var time = el('time', 'castor-comment-time');
         time.setAttribute('datetime', stamp);time.title=stamp;
-        time.textContent = stamp.length === 10 ? stamp : new Intl.DateTimeFormat('en-GB', {
-          day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
-        }).format(when);
+        time.textContent = stampText(stamp, when);
         var dated = el('span', 'castor-comment-date');
         dated.appendChild(time);
-        row.insertBefore(dated, row.querySelector('.castor-comment-model'));
+        row.appendChild(dated);
       }
     }
     if (msg.basis) {
@@ -2007,10 +2091,9 @@
     if (status) card.appendChild(el('div', 'castor-passage-status', status));
 
     if (opts.quote !== false && thread.anchor && thread.anchor.quote) {
-      var quote = el('details', 'castor-quote');
-      var passage = passageOf(thread.anchor);
-      quote.appendChild(el('summary', null, 'Passage: “' + passage.slice(0, 72).replace(/\n/g, ' ') + (passage.length > 72 ? '…' : '') + '”'));
-      quote.appendChild(el('div', null, passage));
+      // The passage itself, whole: a card never hides words behind a control.
+      var quote = el('div', 'castor-quote');
+      quote.appendChild(el('p', 'castor-quote-words', '\u201C' + passageOf(thread.anchor) + '\u201D'));
       card.appendChild(quote);
     }
 
@@ -2171,10 +2254,10 @@
     actionRecords().filter(function(r){return r.threadId===thread.id&&r.messageRef===(a&&a.messageRef||'')&&!acknowledgedAction(r,true)&&older.indexOf(r)<0;}).forEach(function(r){if(S.actionEditor&&S.actionEditor.record.opId===r.opId)return;var pending=el('div','castor-comment-pending');pending.appendChild(el('p',null,r.submitted?'Pending '+r.request.action:'Unfinished edit'));if(r.text)pending.appendChild(el('p','castor-comment-pending-text',r.text));var error=S.actionErrors[r.opId];if(!error)try{error=global.localStorage.getItem(r.scope+'.action-errors.'+r.opId);}catch(e){}if(error)pending.appendChild(el('p','castor-action-status',error));if(r.submitted&&acknowledgedAction(r,false)){pending.appendChild(el('p','castor-action-status','Saved to the review service. Waiting for its Git copy.'));var check=button(pending,'Check Git copy',function(){sendAction(r);});pendingControl(check,S.actionSending[r.opId],'Saving...');}else if(r.submitted){var retry=button(pending,'Retry action',function(){sendAction(r);});pendingControl(retry,S.actionSending[r.opId],r.request.action==='edit'?'Saving...':'Sending...');}if(!S.actionSending[r.opId])button(pending,'Discard',function(){if(typeof global.confirm==='function'&&!global.confirm('Discard this pending action and its saved input?'))return;removeActionRecord(r);layout();});if(r.request.action==='edit'&&c&&a&&a.permissions.edit&&!a.withdrawn)button(pending,r.submitted?'Compare and edit':'Resume edit',function(){openActionEditor(thread,msg,r);});box.appendChild(pending);});
     if(older.length){
       // Earlier distinct versions of this edit stay until the writer discards them.
-      var past=el('details','castor-comment-older');past.appendChild(el('summary',null,older.length===1?'1 older version':older.length+' older versions'));
+      var olderKey='older-'+thread.id+'-'+(a&&a.messageRef||''),pastBox=disclosure('castor-comment-older',older.length===1?'1 older version':older.length+' older versions',!!S.expanded[olderKey],function(now){S.expanded[olderKey]=now;schedulePlace();}),past=pastBox.body;
       older.forEach(function(r){var row=el('div','castor-comment-older-item');row.appendChild(el('p','castor-comment-pending-text',r.text));button(row,'Copy',function(){if(global.navigator&&global.navigator.clipboard)global.navigator.clipboard.writeText(r.text).catch(function(){});});past.appendChild(row);});
       button(past,'Discard older versions',function(){if(typeof global.confirm==='function'&&!global.confirm('Discard the older versions of this edit? The newest stays.'))return;older.forEach(dropActionDraft);layout();});
-      box.appendChild(past);
+      box.appendChild(pastBox.node);
     }
     if(root)actionRecords().filter(function(r){return r.threadId===thread.id&&!r.messageRef&&r.submitted&&!acknowledgedAction(r,true);}).forEach(function(r){var pending=el('div','castor-comment-pending');pending.appendChild(el('p',null,'Pending '+r.request.action));if(acknowledgedAction(r,false)){pending.appendChild(el('p',null,'Saved to the review service. Waiting for its Git copy.'));var check=button(pending,'Check Git copy',function(){sendAction(r);});pendingControl(check,S.actionSending[r.opId],'Saving...');}else{var retry=button(pending,'Retry action',function(){sendAction(r);});pendingControl(retry,S.actionSending[r.opId],r.request.action==='edit'?'Saving...':'Sending...');}box.appendChild(pending);});
     if(S.actionEditor&&S.actionEditor.record.threadId===thread.id&&S.actionEditor.record.messageRef===(a&&a.messageRef)){if(sameActionActor(S.actionEditor.record.actor)&&S.actionEditor.record.scope===key()&&S.actionEditor.record.path===piecePath())box.appendChild(S.actionEditor.node);else closeActionEditor();}
@@ -2581,6 +2664,11 @@
     schedule();
   }
 
+  // An agent's own name in the author menu, as its messages show it; a person's name as it is.
+  function authorOptionName(label) {
+    var agent = S.threads.some(function (t) { return [t].concat(t.replies || []).some(function (m) { return m && m.author === label && authorKind(m) === 'agent'; }); });
+    return agent ? agentName(label) : label;
+  }
   function renderFilter() {
     if (!S.filterBox) return;
     var names = [];
@@ -2622,7 +2710,7 @@
     var chooser = el('details', 'castor-author-filter');
     chooser.setAttribute('aria-label', 'Filter comments by author');
     var summary = withIcon(el('summary'), 'authors');
-    summary.appendChild(el('span','castor-author-label',S.authorFilter || 'All authors'));summary.setAttribute('data-filtered',String(!!S.authorFilter));summary.title=S.authorFilter || 'All authors';summary.setAttribute('aria-label','Filter comments by author: '+(S.authorFilter || 'All authors'));
+    summary.appendChild(el('span','castor-author-label',S.authorFilter ? authorOptionName(S.authorFilter) : 'All authors'));summary.setAttribute('data-filtered',String(!!S.authorFilter));summary.title=S.authorFilter || 'All authors';summary.setAttribute('aria-label','Filter comments by author: '+(S.authorFilter || 'All authors'));
     chooser.appendChild(summary);
     chooser.addEventListener('keydown', function (event) {
       if (event.key === 'Escape') { event.preventDefault(); chooser.removeAttribute('open'); summary.focus(); }
@@ -2644,7 +2732,7 @@
       menu.style.maxWidth = Math.max(120, Math.floor((at.left + width > right ? at.right - left : right - at.left))) + 'px';
     });
     ['All authors'].concat(names).forEach(function (label) {
-      var btn = el('button', 'castor-author-option', label);
+      var btn = el('button', 'castor-author-option', label === 'All authors' ? label : authorOptionName(label));
       btn.type = 'button';
       var active = label === 'All authors' ? !S.authorFilter : S.authorFilter === label;
       btn.setAttribute('aria-pressed', String(active));
@@ -2706,14 +2794,15 @@
     if (!lost.length) return;
     var total = visibleThreads().length;
     if (lost.length >= BURST && !S.burstOpen) {
-      var band = el('details', 'castor-burst');
-      band.appendChild(el('summary', null, lost.length + ' comments without a passage'));
-      band.addEventListener('toggle', schedulePlace);
+      var refocus = !!(DOC.activeElement && DOC.activeElement.closest && DOC.activeElement.closest('.castor-burst'));
+      var shows = disclosure('castor-burst', lost.length + ' comments without a passage', !!S.burstExpanded,
+        function (now) { S.burstExpanded = now; schedulePlace(); });
+      var band = shows.node, inside = shows.body;
       band.setAttribute('data-castor-ui', 'burst');
-      band.appendChild(el('p', 'castor-burst-line',
+      inside.appendChild(el('p', 'castor-burst-line',
         lost.length + ' of ' + total + (total === 1 ? ' comment has' : ' comments have') +
         ' no passage here. Open them to see which concern the whole article and which have lost their words.'));
-      band.appendChild(el('p', 'castor-burst-note',
+      inside.appendChild(el('p', 'castor-burst-note',
         'Keeping them as history leaves each one attached to the version it was written against. ' +
         'Moving one to where its point now lives is a judgement per comment, so the agent does it one at a time.'));
       var acts = el('div', 'castor-acts');
@@ -2729,8 +2818,9 @@
       acts.appendChild(show);
       var capability=actionCapability();
       if(capability&&capability.actor.kind==='founder-capability'&&lost.every(function(t){return t.statusActions&&t.statusActions.canResolve;}))acts.appendChild(keep);
-      band.appendChild(acts);
+      inside.appendChild(acts);
       S.lostBox.appendChild(band);
+      if (refocus && shows.button.focus) shows.button.focus();
       return;
     }
     var head = el('div', 'castor-lost-head', 'Without a passage');
@@ -2752,8 +2842,8 @@
         find.type = 'button';
         find.addEventListener('click', function (e) { e.stopPropagation(); findIt(t); });
         if (t.anchor.quote) acts.insertBefore(find, acts.firstChild);
-        var less = el('button', null, 'Show less');
-        less.type = 'button';
+        var less = el('button', null, 'Hide the thread');
+        less.type = 'button'; less.setAttribute('aria-expanded', 'true');
         less.addEventListener('click', function (e) {
           e.stopPropagation();
           S.expanded['lost-' + t.id] = false;
@@ -2775,7 +2865,7 @@
       find.type = 'button';
       find.addEventListener('click', function (e) { e.stopPropagation(); findIt(t); });
       var open = el('button', null, 'Show the thread');
-      open.type = 'button';
+      open.type = 'button'; open.setAttribute('aria-expanded', 'false');
       open.addEventListener('click', function (e) {
         e.stopPropagation();
         S.expanded['lost-' + t.id] = true;
@@ -3851,12 +3941,31 @@
     /* Quiet reading puts the thread somewhere the writer is not looking, so the
        panel opens on the first comment. Without it, pressing Enter makes the
        composer vanish and produces nothing visible except a tinted word. */
-    if (quiet() && Castor.panels && Castor.panels.open && !Castor.panels.isOpen('comments')) {
+    var phone = !!(Castor.panels && Castor.panels.state && (Castor.panels.state() || {}).mode === 'phone');
+    if (phone && who === 'human') postedNote();
+    else if (quiet() && Castor.panels && Castor.panels.open && !Castor.panels.isOpen('comments')) {
       Castor.panels.open('comments', 'right');
     }
     lift(thread.id);
     /* An agent that answered its own opening line would be talking to itself. */
     return thread;
+  }
+
+  /* On the phone a posted comment leaves the writer on the text: the sheet would cover the
+     words just commented on. A short note says it went, and goes by itself. */
+  function postedNote() {
+    var host = (DOC.getElementById && DOC.getElementById('app')) || DOC.body;
+    var old = host.querySelector ? host.querySelector('.castor-posted') : S.postedNote;
+    if (old && old.remove) old.remove();
+    var note = el('div', 'castor-posted');
+    note.setAttribute('role', 'status');
+    note.appendChild(el('span', 'castor-posted-word', 'Posted'));
+    host.appendChild(note); S.postedNote = note;
+    global.clearTimeout(S.postedTimer);
+    S.postedTimer = global.setTimeout(function () {
+      note.classList.add('is-leaving');
+      global.setTimeout(function () { if (note.remove) note.remove(); if (S.postedNote === note) S.postedNote = null; }, 240);
+    }, 2400);
   }
 
   /* A quick pass finds exact words only. A comment whose words were since edited
@@ -3951,7 +4060,7 @@
 
     var head = el('div', 'castor-peek-head');
     head.appendChild(el('span', 'castor-peek-dot'));
-    head.appendChild(el('span', 'castor-peek-who', thread.author || 'Someone'));
+    head.appendChild(el('span', 'castor-peek-who', thread.author ? credit(thread).label : 'Someone'));
     var count = (thread.replies || []).length;
     head.appendChild(el('span', 'castor-peek-more', count === 1 ? '1 reply' : count + ' replies'));
     box.appendChild(head);
@@ -4058,7 +4167,10 @@
     if (!ids.length) { closeTouchPeek(); return; }
     var thread = threads.filter(function (thread) { return thread.id === ids[0]; })[0];
     S.touchPeek.ids = ids;
-    S.touchPeek.author = thread.author || 'Someone';
+    // The agent and its founder, as every comment names them (the label falls back to the raw author).
+    var who = thread.author && typeof credit === 'function' ? credit(thread) : (thread.author ? { label: thread.author, short: thread.author } : null);
+    S.touchPeek.author = who ? who.label : 'Someone';
+    S.touchPeek.short = who ? who.short : 'Someone';
     S.touchPeek.words = String(thread.text || '').replace(/\s+/g, ' ').trim().slice(0, 100);
     S.touchPeek.open = function () {
       positionTouchPeek();
@@ -4414,7 +4526,75 @@
     return pending;
   }
 
+  /* For the app shell leaving the screen: an open comment, reply or edit box is kept on this
+     device as typed (never sent), then every comment journal in this browser is read back.
+     `durable` only when each unsent record this page holds reads back with its exact words;
+     `count` is every unsent comment, reply and comment action on this device, any article:
+     unfinished boxes, posted words the server has not confirmed, actions without their Git
+     receipt. A scope marked unsent with no record found still counts one, never zero. */
+  var COMMENT_JOURNAL = /^castor\.[^.]+\.comments\.(articles\/[^/]+\/article\.md)(.*)$/;
+  function unsentComments() {
+    var durable = true, count = 0, marked = Object.create(null), found = Object.create(null);
+    if (S.composer && S.composer.record && !rememberComposer()) durable = false;
+    if (S.actionEditor && !captureActionEditor(S.actionEditor)) durable = false;
+    function read(k) { try { return JSON.parse(global.localStorage.getItem(k)); } catch (e) { return null; } }
+    function scopeOf(k, at) { var i = k.indexOf(at); return i < 0 ? '' : k.slice(0, i); }
+    try {
+      var names = [];
+      for (var i = 0; i < global.localStorage.length; i++) names.push(global.localStorage.key(i));
+      names.forEach(function (k) {
+        if (typeof k !== 'string' || !COMMENT_JOURNAL.test(k)) return;
+        var record;
+        if (/\.unsaved$/.test(k)) { if (global.localStorage.getItem(k)) marked[k.slice(0, -8)] = true; return; }
+        if (k.indexOf('.submitted.') > 0) {
+          record = read(k);
+          if (record && record.message) { count++; found[scopeOf(k, '.submitted.')] = true; }
+          return;
+        }
+        if (k.indexOf('.composer.') > 0) {
+          record = read(k);
+          if (record && record.key === k && typeof record.text === 'string' && record.text.trim() && !record.storedId) { count++; found[scopeOf(k, '.composer.')] = true; }
+          return;
+        }
+        if (k.indexOf('.actions.') > 0) {
+          record = read(k);
+          if (!record || record.key !== k || !record.request) return;
+          var proof = read(record.scope + '.action-receipts.' + record.opId);
+          var done = record.submitted && proof && sameActionRequest(proof.request, record.request) && exactActionReceipt(proof.receipt, record.request) && proof.receipt.gitDurable === true;
+          if (!done) { count++; found[scopeOf(k, '.actions.')] = true; }
+        }
+      });
+      Object.keys(marked).forEach(function (scope) { if (!found[scope]) count++; });
+    } catch (e) { durable = false; }
+    // What this page holds must be what the device holds, word for word.
+    Object.keys(S.composerJournal).forEach(function (k) {
+      var r = S.composerJournal[k], copy = read(k);
+      if (r && typeof r.text === 'string' && r.text.trim() && !r.storedId && !(copy && copy.text === r.text)) durable = false;
+    });
+    Object.keys(S.actionJournal).forEach(function (k) {
+      var r = S.actionJournal[k], copy = read(k);
+      if (r && !(copy && copy.text === r.text && JSON.stringify(copy.request) === JSON.stringify(r.request))) durable = false;
+    });
+    if (S.composer && S.composer.record && S.composer.textarea.value.trim()) {
+      var open = read(S.composer.record.key);
+      if (!open || open.text !== S.composer.textarea.value) durable = false;
+    }
+    if (S.actionEditor) {
+      var editing = read(S.actionEditor.record.key);
+      if (!editing || editing.text !== S.actionEditor.textarea.value) durable = false;
+    }
+    if (S.storageKey && S.threads.some(function (t) { return t.pending; })) {
+      var threads = read(S.storageKey);
+      S.threads.forEach(function (t) {
+        if (t.pending && !(Array.isArray(threads) && threads.some(function (c) { return c && c.id === t.id && c.text === t.text; }))) durable = false;
+      });
+    }
+    return { durable: durable, count: count };
+  }
+
   Castor.comments = {
+    credit: function (message) { return credit(message); },
+    unsent: unsentComments,
     available: available,
     readerPending: readerPending,
     pending: pending,

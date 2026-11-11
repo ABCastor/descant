@@ -50,7 +50,7 @@
         var more = doc.createElement('span'); more.className = 'comment-preview-more'; preview.appendChild(more);
         control.appendChild(preview);
       }
-      var label = peek.author.trim().split(/\s+/)[0], count = peek.ids.length > 1 ? '+' + (peek.ids.length - 1) : '';
+      var label = (peek.short || peek.author).trim().split(/\s+/)[0], count = peek.ids.length > 1 ? '+' + (peek.ids.length - 1) : '';
       if (preview.firstChild.textContent !== label) preview.firstChild.textContent = label;
       if (preview.children[1].textContent !== peek.words) preview.children[1].textContent = peek.words;
       if (preview.lastChild.textContent !== count) preview.lastChild.textContent = count;
@@ -183,8 +183,7 @@
     if (groups) publishRow(groups.publish);
     // Search is not listed: on the phone it sits at the top right of the row.
     move(proxy(sheet, 'menu-share', 'Share', '.descant-share', null, 'share'), groups ? groups.publish : sheet);
-    // The phone's theme lives in Settings, Page, with its value; the dock keeps its toggle.
-    var theme = proxy(sheet, 'menu-theme', 'Theme', '#theme-switch', null, 'theme'); move(theme, sheet);
+    // Theme lives in Settings, Page, with its value: the Menu has no entry for it; the dock keeps its toggle.
     move(proxy(sheet, 'menu-settings', 'Settings', '#castor-settings-gear', null, 'settings'), groups ? groups.app : sheet);
     // Keyboard shortcuts are a keyboard's: the phone's Menu leaves them out.
     var shortcuts = doc.getElementById('castor-shortcuts'); move(shortcuts, sheet);
