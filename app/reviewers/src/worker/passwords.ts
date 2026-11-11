@@ -1,8 +1,8 @@
 // Narrowed from Logbook: random salt, versioned PBKDF2, equal-work unknown-account check.
 // The Workers runtime completes 600,000 iterations within its limits (measured in workerd).
 import { sameText } from './session.ts';
-export const PBKDF2_ITERATIONS = 600_000;
-export const PASSWORD_MIN = 15;
+const PBKDF2_ITERATIONS = 600_000;
+const PASSWORD_MIN = 15;
 export const PASSWORD_MAX = 256;
 const enc = new TextEncoder();
 const fold = (password: string) => password.normalize('NFC');

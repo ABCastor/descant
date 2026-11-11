@@ -26,7 +26,7 @@ function validActionJSON(value:any):boolean {
 }
 const actorKey = (a:Actor) => (a.kind === 'reader' ? 'reader:' : 'founder:') + a.id;
 const receipt = (e:Event, withRequest=true) => ({opId:e.opId,...(withRequest?{request:JSON.parse(e.request)}:{}),resultRev:e.resultRev,authority:'descant',gitDurable:!!e.gitDurable});
-export async function accessEpoch(env:Env, id:string, path:string) {
+async function accessEpoch(env:Env, id:string, path:string) {
  const r=await env.DB.prepare('SELECT epoch FROM grant_generations WHERE personId=? AND path=?').bind(id,path).first<{epoch:number}>();
  return r?String(r.epoch):'';
 }
@@ -60,7 +60,7 @@ function applyActions(t:any, slots:ActionSlotMap, actor?:Actor, immutableLegacy=
  }
  if(!immutableLegacy && t.legacyMessages) t.legacyMessages=t.legacyMessages.filter((m:any)=>(slots.get('message:'+m.commentId)?.rev??0)===0);
 }
-export async function projectActions(db:D1Database, thread:Thread, actor:Actor|undefined, immutableLegacy:boolean, slots:ActionSlotMap):Promise<Thread> {
+export async function projectActions(thread:Thread, actor:Actor|undefined, immutableLegacy:boolean, slots:ActionSlotMap):Promise<Thread> {
  if(!actor&&!slots.size)return thread;
  applyActions(thread,slots,actor,immutableLegacy);
  return thread;

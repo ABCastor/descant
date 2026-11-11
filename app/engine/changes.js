@@ -137,7 +137,7 @@
     v.base = null; v.loading = true; render();
     var ticket = ++S.request, signature = liveKey(v.live);
     var get = Castor.publishState && Castor.publishState.comparison;
-    var request = get ? get(v.path, v.live) : global.fetch('/api/piece/live?path=' + encodeURIComponent(v.path), { cache: 'no-store' }).then(function (r) {
+    var request = get ? get(v.path, v.live) : global.fetch(Castor.endpoints.api('piece/live?path=') + encodeURIComponent(v.path), { cache: 'no-store' }).then(function (r) {
       return r.json().then(function (payload) { if (!r.ok) { var e = Error(payload.error || 'Published text is unavailable'); e.unavailable = [404, 409, 422].indexOf(r.status) >= 0; throw e; } return payload; });
     });
     return request.then(function (payload) {

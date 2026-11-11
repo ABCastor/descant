@@ -5,7 +5,7 @@
 
 // Every field a reader sends is bounded to what a real comment needs, so one account cannot fill the
 // database or the founders' repository: the longest paragraph in any article is under 1,000 characters.
-export const TEXT_MAX = 5000;            // characters in one comment or reply
+const TEXT_MAX = 5000;            // characters in one comment or reply
 export const QUOTE_MAX = 500;            // the words the comment is on
 export const AFFIX_MAX = 200;            // the words either side of them
 export const BLOCK_MAX = 2000;           // the paragraph they are in
@@ -32,7 +32,7 @@ export function isTestArticle(env: { TEST_ARTICLE?: unknown }, path: string): bo
   return prefix !== "" && path.startsWith(prefix);
 }
 // Python's EMAIL_RE, applied to the lowercased address.
-export const EMAIL_RE = /^[a-z0-9._%+-]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63})+$/;
+const EMAIL_RE = /^[a-z0-9._%+-]{1,64}@[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63})+$/;
 // Python's REVIEWER_NAME_RE: a letter first, then letters, digits, spaces, dots, apostrophes and
 // hyphens, at most 40 characters, ending on a letter, digit or dot. Nothing either grammar the name
 // is written into gives a meaning to (`*`, `<`, `:`, a newline).
@@ -93,7 +93,7 @@ const LOOKALIKE: Record<string, string> = {
 };
 
 /** A name reduced to plain lowercase Latin letters, in words: what it looks like, not how it is spelled. */
-export function nameWords(name: string): string[] {
+function nameWords(name: string): string[] {
   const folded = [...name.normalize("NFKC").toLowerCase()].map((c) => LOOKALIKE[c] ?? c).join("")
     .normalize("NFKD").replace(/\p{M}/gu, "")
     .replace(/[0-9]/g, (d) => LOOKALIKE[d] ?? d);

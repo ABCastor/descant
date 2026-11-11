@@ -16,13 +16,13 @@ import { anchorParts, sharedPaths, type Env } from "./store.ts";
 import { json } from "./web.ts";
 import { WRITER_KEY, isWriter } from "./writers.ts";
 
-export const FOUNDER_LINK_MINUTES = 5;
+const FOUNDER_LINK_MINUTES = 5;
 const PUSH_MAX = 8 * 1024 * 1024;
 const TEXT_MAX = 1_500_000;
 const PAGE = 100;
 const FIELD = 20_000;
 
-export async function authorised(req: Request, env: Env): Promise<boolean> {
+async function authorised(req: Request, env: Env): Promise<boolean> {
   const want = (env.SHARE_TOKEN_SHA256 ?? "").trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(want)) return false;          // no token configured: nobody
   const m = /^Bearer ([A-Za-z0-9._~+/=-]{32,256})$/.exec(req.headers.get("Authorization") ?? "");

@@ -18,10 +18,10 @@ const enc = new TextEncoder();
 export const READER_DAYS = 30;
 export const FOUNDER_HOURS = 12;
 export const FOUNDER_DAYS = 30;
-export const FOUNDER_YEAR_DAYS = 365;
+const FOUNDER_YEAR_DAYS = 365;
 export const READER_COOKIE = "__Host-descant";
 export const FOUNDER_COOKIE = "__Host-descant_founder";
-export type Kind = "v1" | "f1";
+type Kind = "v1" | "f1";
 
 async function key(secret: string): Promise<CryptoKey> {
   if (!secret || secret.length < 32) throw new Error("SESSION_SECRET missing or shorter than 32 characters");

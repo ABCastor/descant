@@ -1,7 +1,7 @@
 // Rate limits for code requests and guesses, shared across address and network keys.
 const enc = new TextEncoder();
 
-export const FREE_TRIES = 5;
+const FREE_TRIES = 5;
 const MAX_WAIT_S = 15 * 60;
 const DAY_MS = 86_400_000;
 

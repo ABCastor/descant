@@ -62,7 +62,7 @@
       read.addEventListener('click', function () {
         var who = person, cursor = page.cursor, request = epoch;
         read.disabled = true;
-        return global.fetch('/api/mentions/read', {method: 'POST', headers: {'Content-Type':'application/json'}, body:JSON.stringify({who:who,cursor:cursor})})
+        return global.fetch(C.endpoints.api('mentions/read'), {method: 'POST', headers: {'Content-Type':'application/json'}, body:JSON.stringify({who:who,cursor:cursor})})
           .then(function (r) { if (!r.ok) throw Error('read refused'); return r.json(); })
           .then(function () { if (request === epoch) return refresh(); })
           .catch(function () { if (request !== epoch) return; read.disabled = false; read.textContent = 'Could not mark read. Try again.'; });
@@ -86,7 +86,7 @@
       if (body) body.textContent = 'Choose who is writing to see your mentions.';
       return Promise.resolve();
     }
-    return global.fetch('/api/mentions?who=' + who, {cache:'no-store'})
+    return global.fetch(C.endpoints.api('mentions?who=') + who, {cache:'no-store'})
       .then(function (r) { if (!r.ok) throw Error('mentions unavailable'); return r.json(); })
       .then(function (data) { if (request !== epoch) return; page = data; problem = ''; paint(); })
       .catch(function () {

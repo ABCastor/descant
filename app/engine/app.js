@@ -266,8 +266,8 @@
     setSave('locked', detail || 'Your sign-in has ended. Everything you typed stays on this device. Sign in again to go on writing.', word || 'Signed out');
   }
   Castor.reconfirm = function (reason) { return reconfirm(reason === 'comment'); };
-  // A send that finds the session ended keeps the writer named, marked ended: his threads and
-  // pending comments stay in view, read-only, and nothing is sent as him until he signs in again.
+  // A send that finds the session ended keeps the writer named, marked ended: their threads and
+  // pending comments stay in view, read-only, and nothing is sent as them until they sign in again.
   Castor.signedOut = function () {
     if (!PUBLIC_WRITER) return;
     keptOperation = (keptOperation || 0) + 1;
@@ -1481,6 +1481,8 @@
      carries an Install word that opens it; otherwise the line only informs. */
   var installPrompt = null;          // dismissal is remembered as castor.<world>.installHint
   function canInstallHere() {
+    var host = global.Castor && global.Castor.host;
+    if (host && host.native()) return false;                     // the app is installed already
     if (installPrompt) return true;
     var nav = global.navigator || {};
     var ua = nav.userAgent || '';
@@ -3226,6 +3228,37 @@
     flushSave(false);
   }, true);
 
+  /* The open article's words for flush(): 'none' when nothing here is written to, 'saved' when
+     the server has them, 'journalled' when this device keeps them until they can be sent, and
+     'at-risk' when neither does. The save it starts carries on after the answer. */
+  function flushWords() {
+    if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
+    if (!Castor.editor || (!saver.typed && saver.text === null) || !writableHere()) return Promise.resolve('none');
+    var path = saver.path, text = editorSource();
+    if (text === saver.text) return Promise.resolve('saved');
+    function answer() {
+      if (saver.path === path && saver.text === text) return 'saved';
+      return Castor.keep && Castor.keep.receipt && Castor.keep.receipt(path, text) ? 'journalled' : null;
+    }
+    journal();
+    var kept = Promise.resolve().then(function () { return keepOn() ? Castor.keep.now() : false; }).catch(function () { return false; });
+    var sent = Promise.resolve().then(function () { return flushSave(false); }).catch(function () { return null; });
+    return kept.then(function () { return answer() || sent.then(function () { return answer() || 'at-risk'; }); });
+  }
+
+  /* Everything written so far, either confirmed by the server or kept on this device, for a
+     host that may stop the page without warning (the app, leaving the screen). Resolves
+     { words, comments }, each 'none', 'saved', 'journalled' or 'at-risk'. Never rejects. */
+  Castor.flush = function () {
+    function settle(run) {
+      return Promise.resolve().then(run).then(function (v) { return v || 'none'; }, function () { return 'at-risk'; });
+    }
+    return Promise.all([
+      settle(flushWords),
+      settle(function () { return Castor.comments && Castor.comments.flush ? Castor.comments.flush() : 'none'; })
+    ]).then(function (r) { return { words: r[0], comments: r[1] }; });
+  };
+
   Castor.saver = {
     state: function () { return saver.state; },
     refusal: function () { var r = saver.refusal; return r ? { rule: r.rule, line: r.line, words: r.words, at: r.at } : null; },
@@ -3536,9 +3569,6 @@
       /* the design-review island writes design notes; a reviewer has none to write */
     } else if (Castor.review && typeof Castor.review.install === 'function') {
       try { Castor.review.install(ctx()); } catch (e) { console.error('[castor] review', e); }
-    } else if (global.reviewLayer && typeof global.reviewLayer.install === 'function') {
-      Castor.review = global.reviewLayer;
-      try { global.reviewLayer.install(); } catch (e) { console.error('[castor] review layer', e); }
     }
     /* canvas.js registers and mounts itself into the Workspace panel body */
   }
@@ -3837,7 +3867,6 @@
         cap.setAttribute('aria-hidden', 'true');
         cap.textContent = c.words;
         document.body.appendChild(cap);
-        var first = words[0].getBoundingClientRect();
         var last = words[words.length - 1].getBoundingClientRect();
         var w = cap.offsetWidth, h = cap.offsetHeight;
         var tip = document.getElementById('install-hint');

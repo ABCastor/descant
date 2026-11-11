@@ -886,13 +886,19 @@
 
   var sep = null;
 
+  function separatorPair(target) {
+    var side = target.dataset.side;
+    var idx = parseInt(target.dataset.index, 10);
+    var ids = visibleIds(side);
+    var a = target.dataset.before || ids[idx - 1], b = ids[idx];
+    return a && b ? { side: side, a: a, b: b } : null;
+  }
+
   function onSepPointerDown(e) {
     if (e.button !== 0) return;
-    var side = e.currentTarget.dataset.side;
-    var idx = parseInt(e.currentTarget.dataset.index, 10);
-    var ids = visibleIds(side);
-    var a = e.currentTarget.dataset.before || ids[idx - 1], b = ids[idx];
-    if (!a || !b) return;
+    var pair = separatorPair(e.currentTarget);
+    if (!pair) return;
+    var a = pair.a, b = pair.b, side = pair.side;
     var ar = reg[a].el.getBoundingClientRect();
     var br = reg[b].el.getBoundingClientRect();
     sep = {
@@ -927,11 +933,9 @@
 
   function onSepKey(e) {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-    var side = e.currentTarget.dataset.side;
-    var idx = parseInt(e.currentTarget.dataset.index, 10);
-    var ids = visibleIds(side);
-    var a = e.currentTarget.dataset.before || ids[idx - 1], b = ids[idx];
-    if (!a || !b) return;
+    var pair = separatorPair(e.currentTarget);
+    if (!pair) return;
+    var a = pair.a, b = pair.b, side = pair.side;
     var d = e.key === 'ArrowUp' ? -0.1 : 0.1;
     state.share[a] = Math.max(0.2, (state.share[a] || 1) + d);
     state.share[b] = Math.max(0.2, (state.share[b] || 1) - d);

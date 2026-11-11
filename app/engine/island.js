@@ -471,9 +471,47 @@
     if (bus && bus.emit) bus.emit('keyboard:change', { up: state === 'up' });
   }
 
+  /* The row as data, for a renderer other than this page (the app's keyboard bar): every
+     command button in the order the page draws it, with its words, its markup, whether it can
+     be pressed and, for the heading button, the level in force. null while there is no row.
+     A tap from elsewhere goes through run(id), as a tap here does. */
+  var GROUP = { undo: 'history', redo: 'history', 'hide-keyboard': 'keyboard', done: 'done' };
+  function describe() {
+    if (!S.root) return null;
+    var items = [];
+    (function walk(node) {
+      Array.prototype.forEach.call(node.children || [], function (child) {
+        var id = child.dataset && child.dataset.command;
+        if (!id) { walk(child); return; }
+        var level = id === 'heading' ? headingLabel() : null;
+        items.push({ id: id, group: GROUP[id] || 'format', label: child.getAttribute('aria-label') || '',
+          text: child.textContent || '', html: child.innerHTML || '', enabled: !child.disabled,
+          active: level === null ? null : level === 'Paragraph' ? 'p' : level.toLowerCase() });
+      });
+    })(S.root);
+    return { arrangement: S.root.dataset.arrangement, open: S.root.dataset.open === '1', items: items };
+  }
+
+  /* Who hears a changed description. Nothing is described while nobody listens. */
+  var listeners = [], described = null;
+  function onChange(fn) {
+    listeners.push(fn);
+    described = JSON.stringify(describe());
+    return function () { listeners = listeners.filter(function (f) { return f !== fn; }); };
+  }
+  function announce() {
+    if (!listeners.length) return;
+    var d = describe(), json = JSON.stringify(d);
+    if (json === described) return;
+    described = json;
+    listeners.slice().forEach(function (fn) {
+      try { fn(d); } catch (err) { console.error('[castor] island listener', err); }
+    });
+  }
+
   function refreshControls() {
     var e = editor();
-    if (!S.actions && !S.desktopActions) return;
+    if (!S.actions && !S.desktopActions) { announce(); return; }
     var state = e && e.historyState ? e.historyState() : {};
     var saved = keyboardCaret();
     if (editFocused() && saved) S.keyboardCaret = saved;
@@ -494,6 +532,7 @@
       button.disabled = id === 'undo' || id === 'redo' ? !state[id] : !e || !!(e.can && !e.can(id));
       button.setAttribute('aria-disabled', button.disabled ? 'true' : 'false');
     });
+    announce();
   }
 
   function refresh() {
@@ -594,6 +633,8 @@
     mount: mount,
     run: run,
     refresh: refresh,
+    describe: describe,
+    onChange: onChange,
     setTouchEnabled: function (on) { S.touchEnabled = !!on; refresh(); },
     hide: function () { S.dismissed = true; refresh(); },
     tuck: function (on) { tuck(on); return tucked(); },

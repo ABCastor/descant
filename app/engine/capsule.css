@@ -326,7 +326,7 @@
 #app[data-mode="phone"] #footline { display: none; }
 #app[data-mode="phone"] #topbar.mast { height: 52px; gap: 8px; padding: 0 8px; justify-content: space-between; }
 #app[data-mode="phone"] #topbar.mast :is(#castor-tabs, .folded-article, .castor-tabs-fold, .descant-share) { display: none !important; }
-/* Search always sits at the top right (S2): the bar's own lens, alone, after Menu. */
+/* Search always sits at the top right: the bar's own lens, alone, after Menu. */
 #app[data-mode="phone"] #topbar.mast .bar-tools { display: flex; align-items: center; order: 9; gap: 0; margin: 0; height: 44px; }
 #app[data-mode="phone"] #topbar.mast .bar-tools > :not(.find) { display: none; }
 #app[data-mode="phone"] #topbar.mast .find-lens { width: 44px; height: 44px; }

@@ -69,7 +69,7 @@
     if (node.kind === 'material') {
       var folder = graph.centre.path.slice(0, graph.centre.path.lastIndexOf('/')), relative = node.path.slice(folder.length + 1);
       if (/\.(md|txt)$/i.test(node.path) && C.files && C.files.open) C.files.open(relative);
-      else if (global.open) global.open('/api/files/content?piece=' + encodeURIComponent(folder) + '&path=' + encodeURIComponent(relative), '_blank', 'noopener');
+      else if (global.open) global.open(C.endpoints.api('files/content?piece=') + encodeURIComponent(folder) + '&path=' + encodeURIComponent(relative), '_blank', 'noopener');
     } else if (C.pieces && C.pieces.open) C.pieces.open(node.path);
   }
   function paintList() {
@@ -252,7 +252,7 @@
       if (message) message.textContent = 'Open an article to see its connections.'; return Promise.resolve();
     }
     if ((!graph || graph.centre.path !== path) && message) message.textContent = 'Loading connections...';
-    return global.fetch('/api/graph?path=' + encodeURIComponent(path), { cache: 'no-store' })
+    return global.fetch(C.endpoints.api('graph?path=') + encodeURIComponent(path), { cache: 'no-store' })
       .then(function (response) { if (!response.ok) throw Error('links unavailable'); return response.json(); })
       .then(function (data) {
         if (request !== epoch || path !== current() || !founder()) return;

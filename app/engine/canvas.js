@@ -422,7 +422,6 @@
     var menu = el('div', 'cv-menu', document.body);
     menu.hidden = true;
     menu.setAttribute('role', 'menu');
-    var menuState = null;
     var pageEl = document.getElementById('page');
     var articleEl = document.getElementById('page-article');
     var currentTextBlock = null;
@@ -938,24 +937,30 @@
         r2(bx + dy * s * 0.42) + ',' + r2(by - dx * s * 0.42)].join(' ');
     }
 
+    function edgeGeometry(e) {
+      var from = findCard(e.fromNode), to = findCard(e.toNode);
+      if (!from || !to) return null;
+      var a = sidePoint(from, e.fromSide, to);
+      var b = sidePoint(to, e.toSide, from);
+      var geom = edgePath(a, b);
+      return { d: geom.d, head: arrowHead(b, geom.c2), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    }
+
     function renderEdges() {
       edgeLayer.textContent = '';
       edgeEls = {};
       var labels = [];
       S.edges.forEach(function (e) {
-        var from = findCard(e.fromNode), to = findCard(e.toNode);
-        if (!from || !to) return;
-        var a = sidePoint(from, e.fromSide, to);
-        var b = sidePoint(to, e.toSide, from);
-        var geom = edgePath(a, b);
+        var geom = edgeGeometry(e);
+        if (!geom) return;
         var hit = svgEl('path', 'cv-edge-hit', edgeLayer);
         hit.setAttribute('d', geom.d);
         var line = svgEl('path', 'cv-edge', edgeLayer);
         line.setAttribute('d', geom.d);
         var head = svgEl('polygon', 'cv-edge-head', edgeLayer);
-        head.setAttribute('points', arrowHead(b, geom.c2));
+        head.setAttribute('points', geom.head);
         edgeEls[e.id] = { line: line, head: head, hit: hit };
-        labels.push({ edge: e, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+        labels.push({ edge: e, x: geom.x, y: geom.y });
         hit.addEventListener('dblclick', function (ev) {
           ev.stopPropagation();
           var lab = cardLayer.querySelector('.cv-elabel[data-edge="' + e.id + '"]');
@@ -989,16 +994,13 @@
       S.edges.forEach(function (e) {
         var g = edgeEls[e.id];
         if (!g) return;
-        var from = findCard(e.fromNode), to = findCard(e.toNode);
-        if (!from || !to) return;
-        var a = sidePoint(from, e.fromSide, to);
-        var b = sidePoint(to, e.toSide, from);
-        var geom = edgePath(a, b);
+        var geom = edgeGeometry(e);
+        if (!geom) return;
         g.line.setAttribute('d', geom.d);
         g.hit.setAttribute('d', geom.d);
-        g.head.setAttribute('points', arrowHead(b, geom.c2));
+        g.head.setAttribute('points', geom.head);
         var lab = cardLayer.querySelector('.cv-elabel[data-edge="' + e.id + '"]');
-        if (lab) { lab.style.left = ((a.x + b.x) / 2) + 'px'; lab.style.top = ((a.y + b.y) / 2) + 'px'; }
+        if (lab) { lab.style.left = geom.x + 'px'; lab.style.top = geom.y + 'px'; }
       });
     }
 
@@ -1370,7 +1372,6 @@
       if (menu.hidden) return;
       menu.hidden = true;
       menu.textContent = '';
-      menuState = null;
       if (returnFocus) root.focus({ preventScroll: true });
     }
 
@@ -1408,7 +1409,6 @@
 
     function showMenu(state, clientX, clientY) {
       hideMenu();
-      menuState = state;
       var card = state.card;
       if (card) {
         menuButton('Delete', function () { removeCards([card.id]); }, false, true, 'Backspace / Delete');
@@ -1614,7 +1614,7 @@
 
     function uploadFile(card, name, dataUrl, declaredType) {
       if (!card || !/^https?:$/.test(location.protocol) || !pieceFolder) return Promise.resolve(null);
-      var flight = fetch('/api/files/upload', {
+      var flight = fetch(Castor.endpoints.api('files/upload'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ piece: pieceFolder, name: name, type: declaredType, data: dataUrl,
           who: Castor.who && (Castor.who.session ? Castor.who.session().map(function (person) { return person.id || { name: person.name, email: person.email }; }) : Castor.who.get()) })
@@ -1874,7 +1874,7 @@
           base.kind = held.kind || fileKind(base.text, base.fileType);
           base.group = held.group || fileGroup(base.text, base.fileType);
           base.url = held.url || (pieceFolder && base.path
-            ? '/api/files/content?piece=' + encodeURIComponent(pieceFolder) + '&path=' + encodeURIComponent(base.path) : '');
+            ? Castor.endpoints.api('files/content?piece=') + encodeURIComponent(pieceFolder) + '&path=' + encodeURIComponent(base.path) : '');
           if (base.type === 'link') base.target = base.path || String(n.file || '').replace(/\.md$/i, '');
           if (base.type === 'image') { if (img) base.src = img; base.resized = true; }
           return base;
@@ -2076,7 +2076,7 @@
         return freshWriter().then(function (allowed) {
           if (!currentLineage(attempt, true)) return null;
           if (!allowed || !mayReplay()) { accountError(); return null; }
-          return fetch('/api/canvas?piece=' + encodeURIComponent(pieceFolder) +
+          return fetch(Castor.endpoints.api('canvas?piece=') + encodeURIComponent(pieceFolder) +
           '&who=' + encodeURIComponent(JSON.stringify(who)) + '&base=' + encodeURIComponent(attempt.version), {
           method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(json)
         }).then(function (response) {
@@ -2100,7 +2100,7 @@
         var timer = setTimeout(function () { if (abort) abort.abort(); finish(false); }, 5000);
         function finish(value) { if (finished) return; finished = true; clearTimeout(timer); resolve(value); }
         try {
-          fetch('/api/whoami', Object.assign({ cache: 'no-store' }, abort ? { signal: abort.signal } : {})).then(function (response) {
+          fetch(Castor.endpoints.api('whoami'), Object.assign({ cache: 'no-store' }, abort ? { signal: abort.signal } : {})).then(function (response) {
             return response.ok ? response.json() : null;
           }).then(function (identity) {
             finish(!!identity && identity.role === 'founder' && identity.publicWriter === true && identity.id === account && identity.who === account.slice('founder:'.length) && identity.offline !== true && mayReplay());
@@ -2140,7 +2140,7 @@
         return;
       }
       // Git is loaded first. A pending journal is replayed only over its own base.
-      serverReady = fetch('/api/canvas?state=1&piece=' + encodeURIComponent(pieceFolder)).then(function (response) {
+      serverReady = fetch(Castor.endpoints.api('canvas?state=1&piece=') + encodeURIComponent(pieceFolder)).then(function (response) {
         if (!response.ok) throw new Error('The workspace could not be loaded from Git.');
         return response.json();
       }).then(function (state) {
@@ -2176,7 +2176,7 @@
         if (!mayReplay() || previewCopy) { accountError(); return; }
         var attempt = lineage(), accepted = null;
         keepMine.disabled = true;
-        fetch('/api/canvas?state=1&piece=' + encodeURIComponent(pieceFolder)).then(function (response) {
+        fetch(Castor.endpoints.api('canvas?state=1&piece=') + encodeURIComponent(pieceFolder)).then(function (response) {
           if (!response.ok) throw new Error('The Git workspace cannot be read yet.');
           return response.json();
         }).then(function (current) {
@@ -2451,10 +2451,8 @@
     commands: COMMANDS
   };
 
-  /* Panel registration. panels.js may load before or after this file, so try
-     now and again once the document is ready; commands.js gets the same
-     treatment, and if its API is a shape we do not know, COMMANDS is still
-     hanging on Castor.canvas for it to read. */
+  /* Panel and command registration. panels.js and commands.js may load before
+     or after this file, so try now and again once the document is ready. */
   var registered = false;
   function registerPanel() {
     if (registered) return;
@@ -2466,7 +2464,7 @@
         mount: function (bodyEl) { return mount(bodyEl, { world: Castor.app && Castor.app.world }); }
       });
       registered = true;
-    } catch (e) { /* a different panels API; app.js can call Castor.canvas.mount */ }
+    } catch (e) { /* not registered: the next wire() tries again */ }
   }
 
   var commandsRegistered = false;
@@ -2474,14 +2472,13 @@
     if (commandsRegistered) return;
     var c = Castor.commands;
     if (!c) return;
-    var fn = c.register || c.add || c.addCommand;
-    if (typeof fn !== 'function') return;
+    if (typeof c.register !== 'function') return;
     try {
       COMMANDS.forEach(function (cmd) {
-        fn.call(c, { id: cmd.id, title: cmd.title, name: cmd.title, section: 'Workspace', run: cmd.run });
+        c.register({ id: cmd.id, title: cmd.title, section: 'Workspace', run: cmd.run });
       });
       commandsRegistered = true;
-    } catch (e) { /* commands.js will read Castor.canvas.commands instead */ }
+    } catch (e) { /* not registered: the next wire() tries again */ }
   }
 
   function wire() { registerPanel(); registerCommands(); }
@@ -2489,7 +2486,6 @@
   if (typeof document !== 'undefined') {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
     else setTimeout(wire, 0);
-    document.addEventListener('castor:ready', wire);
   }
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Castor.canvas;

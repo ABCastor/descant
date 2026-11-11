@@ -93,7 +93,7 @@
         store(k, state);
       }
       var pending = state.pending;
-      var response = await global.fetch('/api/agent/batch', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pending.body)});
+      var response = await global.fetch(C.endpoints.api('agent/batch'), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pending.body)});
       var receipt = await response.json();
       state = read(k);
       var ownsPending = state.pending && state.pending.body.request_id === pending.body.request_id;

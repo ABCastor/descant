@@ -31,6 +31,14 @@
     return '⌘⌥' + ({ Comma: ',', Backslash: '\\', BracketRight: ']', BracketLeft: '[', Quote: "'" }[code] || code.slice(3));
   }
 
+  /* The Descant app's message bridge, when the page runs inside the app; null in a browser.
+     Only the bridge says the page is in the app: there WebKit leaves "Safari" out of the user
+     agent, an iPad reports a Mac, and the display mode reads as a browser tab. */
+  function bridge() {
+    var w = global.webkit;
+    return (w && w.messageHandlers && w.messageHandlers.descant) || null;
+  }
+
   var keys = (function () {
     var nav = global.navigator || {};
     var loc = global.location || {};
@@ -95,6 +103,7 @@
        keeps them. */
     function standalone() {
       if (typeof ENV.standalone === 'boolean') return ENV.standalone;
+      if (bridge()) return true;          // the app's window has no browser tabs either
       return media('(display-mode: standalone)') || media('(display-mode: window-controls-overlay)') ||
         nav.standalone === true;
     }
@@ -239,6 +248,20 @@
     };
   })();
   Castor.keys = keys;
+
+  /* Where the page runs: 'app' (the Descant app), 'installed' (an installed window) or
+     'browser' (a tab). post() hands the app one message and answers whether there was one
+     to take it. */
+  Castor.host = {
+    native: function () { return !!bridge(); },
+    kind: function () { return bridge() ? 'app' : keys.standalone() ? 'installed' : 'browser'; },
+    post: function (type, data) {
+      var b = bridge();
+      if (!b) return false;
+      b.postMessage({ type: type, data: data });
+      return true;
+    }
+  };
 
   var registry = [];
   var byId = {};
@@ -674,7 +697,7 @@
     { id: 'card', label: 'Workspace card', insert: '> [!example] Workspace card\n> ', detail: 'goes to the canvas' }
   ];
 
-  function nextFootnote(doc) {
+  function nextFootnote() {
     return Castor.editor && Castor.editor.nextFootnote ? Castor.editor.nextFootnote() : '1';
   }
 
@@ -711,7 +734,7 @@
       return out;
     }
     if (kind === 'footnote') {
-      var next = nextFootnote(doc);
+      var next = nextFootnote();
       out.push({ id: 'fn:' + next, label: '[^' + next + ']', detail: 'the next footnote', insert: '[^' + next + ']' });
       return out;
     }

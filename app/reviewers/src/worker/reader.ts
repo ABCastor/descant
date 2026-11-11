@@ -227,7 +227,7 @@ async function post(req: Request, env: Env, person: Person): Promise<Response> {
           const receipt = replyId && receipts.get(replyId);
           return !!receipt && saved.id === replyId && receipt.kind === "reply" && receipt.threadId === Number(id) && receipt.payload === replyPayload(incoming);
         };
-        if (head(t) !== head(was) || list.length < kept.length || kept.some((r, i) => !matches(list[i], i))) {
+        if (head(t) !== head(was) || list.length < kept.length || kept.some((_, i) => !matches(list[i], i))) {
           throw new Refused(403, "reviewer-cannot-edit", "A reader can start a comment or add a reply. What is already written stays as it is.");
         }
         // Existing prefix IDs are also reserved, so a duplicate cannot be appended.
@@ -257,7 +257,7 @@ async function post(req: Request, env: Env, person: Person): Promise<Response> {
         separate(t, "thread", [...current.values()].flatMap(thread => (thread.legacyMessages ?? []).filter(m => m.kind === "thread" && m.author === person.name &&
           m.text === readerMessage(t.text) && JSON.stringify(m.anchor) === JSON.stringify(anchorFrom(t.anchor))).map(original => ({ thread, original }))));
         const a = anchorFrom(t.anchor);
-        // A passage over paragraphs (S8): every part, the first too, is bounded like its paragraph.
+        // A passage over paragraphs: every part, the first too, is bounded like its paragraph.
         const anchor: Anchor = {
           quote: readerString(a.quote, a.more ? BLOCK_MAX : QUOTE_MAX, "the quoted passage"), prefix: readerString(a.prefix, AFFIX_MAX, "the words before it"),
           suffix: readerString(a.suffix, AFFIX_MAX, "the words after it"), blockText: readerString(a.blockText, BLOCK_MAX, "its paragraph"),

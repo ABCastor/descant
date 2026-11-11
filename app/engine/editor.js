@@ -92,7 +92,6 @@
   function own(fn) { return function (e) { if (foreign(e && e.target)) return; return fn.apply(this, arguments); }; }
   var ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return ESCAPES[c]; }); }
-  function isAlnum(c) { return !!c && /[A-Za-z0-9]/.test(c); }
   function clamp(n, lo, hi) { return n < lo ? lo : (n > hi ? hi : n); }
   var idSeq = 0;
   function mintId() { return (isArticle ? 'e' : role + '-e') + (++idSeq); }
@@ -1403,14 +1402,6 @@
     }
     return { node: r.startContainer, offset: r.startOffset };
   }
-  function placePreciseCaret(id, x, y) {
-    var host = editOf(id);
-    if (!host) return false;
-    var off = offsetFromPoint(host, x, y);
-    if (off == null) return false;
-    setCaret(id, off);
-    return true;
-  }
 
   function blockTextOffset(el, node, offset) {
     var r = document.createRange();
@@ -1544,8 +1535,6 @@
     revealPending = true;
     if (tap && coarsePointer()) revealNotBefore = Date.now() + 460;
     if (revealTimer) global.clearTimeout(revealTimer);
-    var vv = global.visualViewport;
-    var opening = tap && coarsePointer() && vv && vv.height >= global.innerHeight - 120;
     // Keyboard geometry settles before the ONE visibility scroll. Resize events
     // renew this debounce only for the writer's outstanding tap/input intent.
     revealTimer = global.setTimeout(function () { revealTimer = 0; revealPending = false; undoFocusScroll(); focusScroll = null; revealCaret(); }, Math.max(80, revealNotBefore - Date.now()));
@@ -2219,7 +2208,7 @@
   // Shift+Enter. A bare '\n' is Markdown's SOFT break: md.js renders it as a
   // space, so the break the writer just made disappears the moment the block
   // loses focus. Two trailing spaces are Markdown's line break and md.js gives
-  // them a <br>, so what he sees is what the file keeps. A heading is one line
+  // them a <br>, so what the writer sees is what the file keeps. A heading is one line
   // by definition, so there Shift+Enter is Enter.
   function softBreak(id) {
     var b = blockOf(id), c = caretSource();
@@ -2517,7 +2506,7 @@
     if (systemMenuOver(range)) hideSelMenu(); else showSelMenu(range.getBoundingClientRect());
   }
   // A scroll or resize hides the menu where it stood; once the page is still it is back over the
-  // words (N12): a long press iOS answers with a scroll still offers Comment.
+  // words: a long press iOS answers with a scroll still offers Comment.
   var menuReturn = 0;
   function menuAfterMove() {
     if (!menuReturn && (!selMenu || selMenu.hidden)) return;
@@ -2541,7 +2530,7 @@
     var host = r.commonAncestorContainer;
     if (host.nodeType === 3) host = host.parentNode;
     var el = host && host.closest ? host.closest('.cw-block') : null;
-    // A selection over paragraphs is one passage (S8); comments.js reads its parts.
+    // A selection over paragraphs is one passage; comments.js reads its parts.
     if (!el && isArticle && Castor.comments && Castor.comments.passageFromRange) return Castor.comments.passageFromRange(r, version);
     if (!el || !page.contains(el)) return null;
     var id = el.getAttribute('data-block-id');
@@ -4077,7 +4066,7 @@
               out += pad + ticks;
             } else {
               open = { bold: variant % 3 === 1 ? '__' : '**', italic: variant % 3 === 2 ? '_' : '*', highlight: '==', strike: '~~' }[key];
-              var at = indexes.get(items[lo]), stop = indexes.get(items[hi - 1]) + 1;
+              var stop = indexes.get(items[hi - 1]) + 1;
               var prev = out.slice(-1), next = hi === items.length && boundary ? boundary : list[stop] ? list[stop].text : '';
               var first = items[lo].text, last = items[hi - 1].text;
               var punct = function (c) { return !!c && /[\p{P}\p{S}]/u.test(c); };
@@ -5546,7 +5535,7 @@
   }
   // The pair of `d` markers that encloses `at`, or null. Bounded to the caret's
   // own line: emphasis that "matches" three paragraphs away is a coincidence,
-  // not a pair, and toggling it off would rewrite text he cannot see.
+  // not a pair, and toggling it off would rewrite text the writer cannot see.
   function enclosingPair(src, at, d) {
     var n = d.length, i;
     var lineStart = src.lastIndexOf('\n', Math.max(0, at - 1)) + 1;
@@ -5647,8 +5636,6 @@
     var line = lineBounds(b, at), head = b.source.slice(line.start, line.end);
 
     if (WRAPS[id]) {
-      var d = WRAPS[id], n = d.length, src = b.source;
-
       if (c.end > c.start) {
         replaceVisible(focusId, c.start, c.end, { kind: 'style', style: id }, 'command:' + id);
         return commandResult(id);
@@ -5740,7 +5727,7 @@
     for (var i = blocks.length - 1; i >= 0; i--) if (visible(blocks[i])) { last = blocks[i]; break; }
     if (!last) return;
     // Only where the reader already is: with the article's end off screen, a key
-    // would scroll the page away from what he is reading.
+    // would scroll the page away from what they are reading.
     var end = elOf(last.id), box = end && end.getBoundingClientRect && end.getBoundingClientRect();
     var height = global.innerHeight || (document.documentElement && document.documentElement.clientHeight);
     if (box && height && (box.top >= height || (box.bottom != null ? box.bottom : box.top + (box.height || 0)) <= 0)) return;
@@ -5750,7 +5737,7 @@
     applyEdit(last.id, last.source.length, last.source.length, e.key);
   }
 
-  // The page visibly waits when the writer clicks away — but only once he has
+  // The page visibly waits when the writer clicks away — but only once they have
   // actually been writing, so a page nobody has touched (a screenshot, a first
   // load) never wears it.
   function markAway(on) {

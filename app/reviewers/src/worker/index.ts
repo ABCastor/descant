@@ -6,7 +6,7 @@ import { adminRoute } from "./admin.ts";
 import { authenticatedFounder, founderPasswordSettings, founderPasswordSignIn } from './founder-password.ts';
 import { emailCodeRoute, founderLinkRoute, joinRoute, readerCookie, resetRoute, signInRoute, signOutRoute } from "./auth.ts";
 import { readerApi } from "./reader.ts";
-import { FOUNDER_COOKIE, READER_COOKIE, READER_DAYS, readCookie, signedInAt, verifySession } from "./session.ts";
+import { READER_COOKIE, READER_DAYS, readCookie, signedInAt, verifySession } from "./session.ts";
 import { syncRoute } from "./sync.ts";
 import { knownFounder, writerRoute } from "./writer.ts";
 import { getPerson, readable, type Env, type Person } from "./store.ts";

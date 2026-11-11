@@ -131,7 +131,7 @@ export interface Thread {
   refersTo: string;
 }
 
-export interface CommentRow {
+interface CommentRow {
   seq: number;
   id: string;
   threadId: number;
@@ -164,7 +164,6 @@ export async function clientReceipts(db: D1Database, personId: string, path: str
 
 export const getPerson = (db: D1Database, id: string) => db.prepare("SELECT * FROM people WHERE id=?").bind(id).first<Person>();
 export const personByEmail = (db: D1Database, email: string) => db.prepare("SELECT * FROM people WHERE email=?").bind(email).first<Person>();
-export const getArticle = (db: D1Database, path: string) => db.prepare("SELECT * FROM articles WHERE path=?").bind(path).first<Article>();
 
 export async function allArticles(db: D1Database): Promise<Article[]> {
   return (await db.prepare("SELECT * FROM articles ORDER BY CASE WHEN ord > 0 THEN ord ELSE 999 END, path").all<Article>()).results;
@@ -176,10 +175,6 @@ export async function founders(db: D1Database): Promise<{ key: string; name: str
 
 export async function founderNames(db: D1Database): Promise<Set<string>> {
   return founderNamesFrom(await founders(db));
-}
-
-export async function grantsOf(db: D1Database, personId: string): Promise<string[]> {
-  return (await db.prepare("SELECT path FROM grants WHERE personId=? ORDER BY path").bind(personId).all<{ path: string }>()).results.map((r) => r.path);
 }
 
 /** Every article a person can read now, or that a live link would let someone read. */
@@ -211,7 +206,7 @@ export async function mayRead(db: D1Database, personId: string, path: string): P
   return a ?? undefined;
 }
 
-export type InviteState = "live" | "used" | "expired" | "revoked";
+type InviteState = "live" | "used" | "expired" | "revoked";
 export function inviteState(i: { usesLeft: number; expiresAt: string; revokedAt: string | null }, now = new Date()): InviteState {
   if (i.revokedAt) return "revoked";
   if (i.usesLeft <= 0) return "used";
@@ -221,7 +216,7 @@ export function inviteState(i: { usesLeft: number; expiresAt: string; revokedAt:
 
 const EMPTY_ANCHOR: Anchor = { quote: "", prefix: "", suffix: "", blockText: "", version: "" };
 
-export function anchorOf(raw: string | null): Anchor {
+function anchorOf(raw: string | null): Anchor {
   try {
     const a = JSON.parse(raw ?? "{}") as Partial<Anchor>, more = anchorParts(a.more);
     return { quote: a.quote ?? "", prefix: a.prefix ?? "", suffix: a.suffix ?? "", blockText: a.blockText ?? "", version: a.version ?? "", ...(more.length ? { more } : {}) };
@@ -232,7 +227,7 @@ export function anchorOf(raw: string | null): Anchor {
 
 const storedColor = (c: CommentRow) => typeof c.color === "string" && /^#[0-9a-fA-F]{6}$/.test(c.color) ? { color:c.color } : {};
 
-export const messageOf = (c: CommentRow): Message => ({ ...storedColor(c), author: c.name, text: c.text, created: c.created, by: "human", basis: "", offer: null });
+const messageOf = (c: CommentRow): Message => ({ ...storedColor(c), author: c.name, text: c.text, created: c.created, by: "human", basis: "", offer: null });
 
 type ThreadRow = { id: number; personId: string; snap: string | null; gen: number | null };
 
@@ -308,8 +303,20 @@ async function projectThreads(db: D1Database, out: Thread[], actor?: Actor, immu
   return Promise.all(out.map((thread) => {
     const known = slots.get(Number(thread.id)) ?? new Map();
     if (!actor && !known.size) return thread;
-    return projectActions(db, thread, actor, immutableLegacy, known);
+    return projectActions(thread, actor, immutableLegacy, known);
   }));
+}
+
+/** Threads in the page's shape from their rows, comments and client receipts, with actions projected. */
+function assembleThreads(db: D1Database, threads: ThreadRow[], rows: CommentRow[], receipts: ClientReceipt[], actor: Actor | undefined, immutableLegacy: boolean): Promise<Thread[]> {
+  const identity = new Map(receipts.map((r) => [r.commentId, r.clientId]));
+  const message = (c: CommentRow): Message => ({ ...messageOf(c), messageRef:c.id, writer:"reader:"+c.personId, ...(identity.has(c.id) ? { id: identity.get(c.id) } : {}) });
+  const out: Thread[] = [];
+  for (const t of threads) {
+    const thread = buildThread(t, rows.filter((c) => c.threadId === t.id), receipts, identity, message);
+    if (thread) out.push(thread);
+  }
+  return projectThreads(db, out, actor, immutableLegacy);
 }
 
 export async function readerThreads(db: D1Database, personId: string, path: string, actor?: Actor, immutableLegacy = false): Promise<Thread[]> {
@@ -322,14 +329,7 @@ export async function readerThreads(db: D1Database, personId: string, path: stri
     `SELECT c.* FROM comments c JOIN threads t ON t.id = c.threadId WHERE t.personId = ? AND t.path = ? ORDER BY c.seq`,
   ).bind(personId, path).all<CommentRow>();
   const receipts = await clientReceipts(db, personId, path);
-  const identity = new Map(receipts.map((r) => [r.commentId, r.clientId]));
-  const message = (c: CommentRow): Message => ({ ...messageOf(c), messageRef:c.id, writer:"reader:"+c.personId, ...(identity.has(c.id) ? { id: identity.get(c.id) } : {}) });
-  const out: Thread[] = [];
-  for (const t of threads) {
-    const thread = buildThread({ ...t, personId }, rows.filter((c) => c.threadId === t.id), receipts, identity, message);
-    if (thread) out.push(thread);
-  }
-  return projectThreads(db, out, actor, immutableLegacy);
+  return assembleThreads(db, threads.map((t) => ({ ...t, personId })), rows, receipts, actor, immutableLegacy);
 }
 
 /** The requested threads of one article, whoever their readers, in one bounded read. */
@@ -348,14 +348,7 @@ export async function readerThreadsByIds(db: D1Database, path: string, ids: numb
   const { results: receipts } = await db.prepare(
     `SELECT clientId, kind, threadId, commentId, payload FROM client_receipts WHERE path = ? AND personId IN (${owners.map(() => "?").join(",")})`,
   ).bind(path, ...owners).all<ClientReceipt>();
-  const identity = new Map(receipts.map((r) => [r.commentId, r.clientId]));
-  const message = (c: CommentRow): Message => ({ ...messageOf(c), messageRef:c.id, writer:"reader:"+c.personId, ...(identity.has(c.id) ? { id: identity.get(c.id) } : {}) });
-  const out: Thread[] = [];
-  for (const t of threads) {
-    const thread = buildThread(t, rows.filter((c) => c.threadId === t.id), receipts, identity, message);
-    if (thread) out.push(thread);
-  }
-  return projectThreads(db, out, actor, immutableLegacy);
+  return assembleThreads(db, threads, rows, receipts, actor, immutableLegacy);
 }
 
 /** Python's ISO form with an explicit UTC offset, to the second: what a thread file carries. */

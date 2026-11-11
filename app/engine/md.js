@@ -136,6 +136,10 @@
     return String(value).replace(/\\([!-/:-@\[-`{-~])/g, '$1');
   }
 
+  function numericEntity(number) {
+    return String.fromCodePoint(!number || number > 0x10ffff || number >= 0xd800 && number <= 0xdfff || number < 0x20 && ![9, 10, 13].includes(number) || number >= 0x7f && number <= 0x9f ? 0xfffd : number);
+  }
+
   // Decode Markdown escapes and entities in one pass. An escaped ampersand
   // cannot become the start of an entity during a second decoding pass.
   function destinationText(value) {
@@ -144,7 +148,7 @@
       const entity = whole.slice(1, -1);
       if (entity[0] !== '#') return HTML_ENTITIES[entity] || whole;
       const n = /^#x/i.test(entity) ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
-      return String.fromCodePoint(!n || n > 0x10ffff || n >= 0xd800 && n <= 0xdfff || n < 0x20 && ![9, 10, 13].includes(n) || n >= 0x7f && n <= 0x9f ? 0xfffd : n);
+      return numericEntity(n);
     });
   }
 
@@ -571,7 +575,7 @@
     return slashes % 2 === 1;
   }
 
-  function emphasisCanOpen(text, index, size) {
+  function emphasisFlanking(text, index, size) {
     let lo = index, hi = index + size;
     while (hi < text.length && text[hi] === text[index]) hi++;
     const previous = (text.slice(Math.max(0, lo - 2), lo).match(/.$/u) || [''])[0], next = (text.slice(hi).match(/^./u) || [''])[0];
@@ -582,79 +586,7 @@
     const adjacent = c => (text[index] === '*' || text[index] === '_') && (c === '*' || c === '_' || c === '~');
     const left = !!next && !/\p{White_Space}/u.test(next) && (adjacent(next) || !punct(next) || !previous || /\p{White_Space}/u.test(previous) || punct(previous));
     const right = !!previous && !/\p{White_Space}/u.test(previous) && (adjacent(previous) || !punct(previous) || !next || /\p{White_Space}/u.test(next) || punct(next));
-    return left && (text[index] !== '_' || !right || punct(previous));
-  }
-
-  function emphasisCanClose(text, index, size) {
-    let lo = index, hi = index + size;
-    while (hi < text.length && text[hi] === text[index]) hi++;
-    const previous = (text.slice(Math.max(0, lo - 2), lo).match(/.$/u) || [''])[0], next = (text.slice(hi).match(/^./u) || [''])[0];
-    const punct = c => !!c && /[\p{P}\p{S}]/u.test(c);
-    const adjacent = c => (text[index] === '*' || text[index] === '_') && (c === '*' || c === '_' || c === '~');
-    const right = !!previous && !/\p{White_Space}/u.test(previous) && (adjacent(previous) || !punct(previous) || !next || /\p{White_Space}/u.test(next) || punct(next));
-    const left = !!next && !/\p{White_Space}/u.test(next) && (adjacent(next) || !punct(next) || !previous || /\p{White_Space}/u.test(previous) || punct(previous));
-    return right && (text[index] !== '_' || !left || punct(next));
-  }
-
-  // Every suffix/delimiter pair is solved once. Explicit frames avoid both
-  // exponential revisits of failed nested searches and a JS recursion limit on
-  // an unmatched block. The cache belongs to this inline render only.
-  function findEmphasisClose(text, delimiter, start, searches) {
-    searches = searches || { results: new Map(), closing: new Map(), links: new Map() };
-    function results(mark) {
-      if (!searches.results.has(mark)) searches.results.set(mark, new Map());
-      return searches.results.get(mark);
-    }
-    function closing(mark, at) {
-      const key = mark + ':' + at;
-      if (!searches.closing.has(key)) searches.closing.set(key, findClosing(text, mark, at));
-      return searches.closing.get(key);
-    }
-    function frame(mark, at) { return { mark, at, visited: [], pending: null }; }
-    const stack = [frame(delimiter, start)];
-    let answer = -1;
-    function finish(value) {
-      const current = stack.pop(), cache = results(current.mark);
-      for (const at of current.visited) cache.set(at, value);
-      answer = value;
-    }
-    while (stack.length) {
-      const current = stack[stack.length - 1], cache = results(current.mark);
-      if (current.pending) {
-        const nested = current.pending;
-        if (answer >= 0 && !(current.mark === '**' && nested === '*' && /^\*{2}(?!\*)/.test(text.slice(answer)))) current.at = answer + nested.length;
-        else current.at++;
-        current.pending = null;
-        continue;
-      }
-      if (cache.has(current.at)) { finish(cache.get(current.at)); continue; }
-      if (current.at >= text.length) { finish(-1); continue; }
-      const index = current.at;
-      current.visited.push(index);
-      if (text[index] === '\\') { current.at += 2; continue; }
-      if (text[index] === '[') {
-        if (!searches.links.has(index)) {
-          const close = closing(']', index + 1);
-          searches.links.set(index, close >= 0 && text[close + 1] === '(' && inlineDestination(text, close + 2));
-        }
-        const link = searches.links.get(index);
-        if (link) { current.at = link.end + 1; continue; }
-      }
-      if (text[index] === '`') {
-        let ticks = 1;
-        while (text[index + ticks] === '`') ticks++;
-        const end = closing('`'.repeat(ticks), index + ticks);
-        if (end >= 0) { current.at = end + ticks; continue; }
-        current.at += ticks; continue;
-      }
-      if (text.startsWith(current.mark, index) && (current.mark === '==' || emphasisCanClose(text, index, current.mark.length))) { finish(index); continue; }
-      const nested = ['**', '~~', '==', '*', '_'].find(d => d !== current.mark && text.startsWith(d, index) && emphasisCanOpen(text, index, d.length));
-      if (nested) {
-        current.pending = nested;
-        stack.push(frame(nested, index + nested.length));
-      } else current.at++;
-    }
-    return answer;
+    return { open: left && (text[index] !== '_' || !right || punct(previous)), close: right && (text[index] !== '_' || !left || punct(next)) };
   }
 
   /* Footnote numbers, 1..n by first appearance in the page.
@@ -771,7 +703,7 @@
       return value.replace(/&(#x[0-9a-f]+|#\d+|[A-Za-z][A-Za-z0-9]+);/gi, (whole, entity) => {
         if (entity[0] !== '#') return HTML_ENTITIES[entity] || whole;
         const n = /^#x/i.test(entity) ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
-        return String.fromCodePoint(!n || n > 0x10ffff || n >= 0xd800 && n <= 0xdfff || n < 0x20 && ![9, 10, 13].includes(n) || n >= 0x7f && n <= 0x9f ? 0xfffd : n);
+        return numericEntity(n);
       });
     }
     let out = '', units = [], hidden = '', blocked = 0;
@@ -899,7 +831,6 @@
     // A link label's brackets remain punctuation for delimiter flanking and
     // the rule of three, even though its body is rendered recursively.
     const emphasisText = opts.inLink ? '[' + text + ']' : text, emphasisOffset = opts.inLink ? 1 : 0;
-    const searches = { results: new Map(), closing: new Map(), links: new Map() };
     let brackets = 0;
     const automaticCandidate = /https?:\/\/|www\.|@/i.test(text);
     const labels = new Map();
@@ -971,7 +902,7 @@
       }
 
       {
-        const tail = text.slice(index), previous = text[index - 1] || '';
+        const tail = text.slice(index);
         // Opaque inline HTML owns its contents before bare-link discovery.
         // The app displays it safely as literal source; do not invent links
         // inside declarations, comments or complete processing instructions.
@@ -999,7 +930,7 @@
           let value = entity[0];
           if (value[1] === '#') {
             const number = /^&#[xX]/.test(value) ? parseInt(value.slice(3), 16) : parseInt(value.slice(2), 10);
-            value = escapeHtml(String.fromCodePoint(!number || number > 0x10ffff || number >= 0xd800 && number <= 0xdfff || number < 0x20 && ![9, 10, 13].includes(number) || number >= 0x7f && number <= 0x9f ? 0xfffd : number));
+            value = escapeHtml(numericEntity(number));
           }
           html += opts.editSource ? `<span class="cw-atom" contenteditable="false" data-label="${value}">${sourceMark(entity[0], opts)}</span>` : value;
           index += entity[0].length;
@@ -1134,7 +1065,8 @@
         const marker = text[index];
         let size = 1;
         while (text[index + size] === marker) size++;
-        stars.push({ at: index, marker, size, left: size, open: emphasisCanOpen(emphasisText, index + emphasisOffset, size), close: emphasisCanClose(emphasisText, index + emphasisOffset, size), opens: [], closes: [] });
+        const flanking = emphasisFlanking(emphasisText, index + emphasisOffset, size);
+        stars.push({ at: index, marker, size, left: size, open: flanking.open, close: flanking.close, opens: [], closes: [] });
         html += `<cw-star-${stars.length - 1}>`;
         index += size;
         continue;
@@ -1144,7 +1076,8 @@
         let size = 1;
         while (text[index + size] === '~') size++;
         if (size <= 2) {
-          stars.push({ at: index, marker: '~', size, left: size, open: emphasisCanOpen(emphasisText, index + emphasisOffset, size), close: emphasisCanClose(emphasisText, index + emphasisOffset, size), opens: [], closes: [] });
+          const flanking = emphasisFlanking(emphasisText, index + emphasisOffset, size);
+          stars.push({ at: index, marker: '~', size, left: size, open: flanking.open, close: flanking.close, opens: [], closes: [] });
           html += `<cw-star-${stars.length - 1}>`;
         } else html += '~'.repeat(size);
         index += size;
@@ -1304,7 +1237,7 @@
     value = value.replace(/<\/?(?:br|sup|sub)\s*\/?>/gi, ' ');
     value = value.replace(/\[\^([^\]]+)\]/g, '$1');
     value = value.replace(/__([^_]+)__/g, '$1').replace(/\*\*([^*]+)\*\*/g, '$1').replace(/~~([^~]+)~~/g, '$1').replace(/==([^=]+)==/g, '$1');
-    value = value.replace(/\*([^*]+)\*/g, (raw, body, at) => emphasisCanOpen(value, at, 1) && emphasisCanClose(value, at + raw.length - 1, 1) ? body : raw).replace(/(^|[^\p{L}\p{N}])_([^\n]+?)_(?=$|[^\p{L}\p{N}])/gu, '$1$2');
+    value = value.replace(/\*([^*]+)\*/g, (raw, body, at) => emphasisFlanking(value, at, 1).open && emphasisFlanking(value, at + raw.length - 1, 1).close ? body : raw).replace(/(^|[^\p{L}\p{N}])_([^\n]+?)_(?=$|[^\p{L}\p{N}])/gu, '$1$2');
     return value.replace(/[ \t]*\n[ \t]*/g, ' ').replace(/[ \t]+/g, ' ').trim();
   }
 

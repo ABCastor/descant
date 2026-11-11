@@ -50,7 +50,7 @@ export function message(title: string, text: string, status: number, extra = "")
 }
 
 // Pages made here run no script at all; the reader's page carries its own policy (index.ts).
-export const PAGE_CSP = "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+const PAGE_CSP = "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 /** The headers every answer carries, whatever made it. */
 export function secure(res: Response, csp = PAGE_CSP, cache = "no-store"): Response {

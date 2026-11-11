@@ -65,8 +65,8 @@
      edits and other mutations require server-confirmed per-target capabilities. */
   function reviewing() { return !!(Castor.role && Castor.role.reviewer); }
   function roleConfirmed() { return !!(Castor.role && Castor.role.confirmed); }
-  /* The session ended while this writer's page was open (app.js Castor.signedOut): his threads
-     and pending comments stay in view in his place, read-only, until he signs in again. */
+  /* The session ended while this writer's page was open (app.js Castor.signedOut): their threads
+     and pending comments stay in view in their place, read-only, until they sign in again. */
   function ended() { return !!(Castor.role && Castor.role.ended && Castor.role.id); }
 
   // One structural stylesheet, inserted as the FIRST child of <head> so that engine.css
@@ -2170,7 +2170,7 @@
     var drafts=c&&a?consolidateEditDrafts(thread,msg):[],older=drafts.slice(1);
     actionRecords().filter(function(r){return r.threadId===thread.id&&r.messageRef===(a&&a.messageRef||'')&&!acknowledgedAction(r,true)&&older.indexOf(r)<0;}).forEach(function(r){if(S.actionEditor&&S.actionEditor.record.opId===r.opId)return;var pending=el('div','castor-comment-pending');pending.appendChild(el('p',null,r.submitted?'Pending '+r.request.action:'Unfinished edit'));if(r.text)pending.appendChild(el('p','castor-comment-pending-text',r.text));var error=S.actionErrors[r.opId];if(!error)try{error=global.localStorage.getItem(r.scope+'.action-errors.'+r.opId);}catch(e){}if(error)pending.appendChild(el('p','castor-action-status',error));if(r.submitted&&acknowledgedAction(r,false)){pending.appendChild(el('p','castor-action-status','Saved to the review service. Waiting for its Git copy.'));var check=button(pending,'Check Git copy',function(){sendAction(r);});pendingControl(check,S.actionSending[r.opId],'Saving...');}else if(r.submitted){var retry=button(pending,'Retry action',function(){sendAction(r);});pendingControl(retry,S.actionSending[r.opId],r.request.action==='edit'?'Saving...':'Sending...');}if(!S.actionSending[r.opId])button(pending,'Discard',function(){if(typeof global.confirm==='function'&&!global.confirm('Discard this pending action and its saved input?'))return;removeActionRecord(r);layout();});if(r.request.action==='edit'&&c&&a&&a.permissions.edit&&!a.withdrawn)button(pending,r.submitted?'Compare and edit':'Resume edit',function(){openActionEditor(thread,msg,r);});box.appendChild(pending);});
     if(older.length){
-      // Earlier distinct versions of this edit stay until he discards them himself.
+      // Earlier distinct versions of this edit stay until the writer discards them.
       var past=el('details','castor-comment-older');past.appendChild(el('summary',null,older.length===1?'1 older version':older.length+' older versions'));
       older.forEach(function(r){var row=el('div','castor-comment-older-item');row.appendChild(el('p','castor-comment-pending-text',r.text));button(row,'Copy',function(){if(global.navigator&&global.navigator.clipboard)global.navigator.clipboard.writeText(r.text).catch(function(){});});past.appendChild(row);});
       button(past,'Discard older versions',function(){if(typeof global.confirm==='function'&&!global.confirm('Discard the older versions of this edit? The newest stays.'))return;older.forEach(dropActionDraft);layout();});
@@ -2339,16 +2339,7 @@
     if (!reviewing() && !ta.castorEditor) wireAt(ta, box);   // the editor has its own @name picker
     trackComposer();
     if (!card) placeComposer();
-    ta.addEventListener('keydown', function (e) {
-      if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === 'Enter' && !e.shiftKey && !box.querySelector('.castor-at')) {
-        e.preventDefault();
-        submit();
-      } else if (e.key === 'Escape' && !box.querySelector('.castor-at')) {
-        e.preventDefault();
-        cancelComposer();
-      }
-    });
+    composerKeys(ta, box, submit);
     box.addEventListener('click', function (e) { e.stopPropagation(); });
     positionPanel();focusPanelCard(thread.id,ta);scheduleCommentFocus();
   }
@@ -2372,6 +2363,15 @@
   var READINGS = { quiet: true, inline: true };
   function quiet() { return S.reading !== 'inline'; }
 
+  /* The panel head's view control follows a change of reading or layout. */
+  function refreshShows() {
+    if (!S.panelEl) return;
+    var sec = S.panelEl.closest ? S.panelEl.closest('section') : (S.panelEl.parentElement && S.panelEl.parentElement.tagName === 'SECTION' ? S.panelEl.parentElement : null);
+    if (!sec) return;
+    var headShows = sec.querySelector ? sec.querySelector('[data-castor-ui="comment-shows"]') : null;
+    if (headShows) updateShows(headShows);
+  }
+
   function setReading(name) {
     name = String(name || '').toLowerCase();
     if (!READINGS[name]) {
@@ -2382,13 +2382,7 @@
     try { localStorage.setItem('castor.' + S.world + '.comments.reading', name); } catch (e) { /* private mode */ }
     closePeek();
     layout();
-    if (S.panelEl) {
-      var sec = S.panelEl.closest ? S.panelEl.closest('section') : (S.panelEl.parentElement && S.panelEl.parentElement.tagName === 'SECTION' ? S.panelEl.parentElement : null);
-      if (sec) {
-        var headShows = sec.querySelector ? sec.querySelector('[data-castor-ui="comment-shows"]') : null;
-        if (headShows) updateShows(headShows);
-      }
-    }
+    refreshShows();
     return name;
   }
 
@@ -2404,13 +2398,7 @@
     if (S.wrap) S.wrap.style.top = '';
     closePeek();
     layout();
-    if (S.panelEl) {
-      var sec = S.panelEl.closest ? S.panelEl.closest('section') : (S.panelEl.parentElement && S.panelEl.parentElement.tagName === 'SECTION' ? S.panelEl.parentElement : null);
-      if (sec) {
-        var headShows = sec.querySelector ? sec.querySelector('[data-castor-ui="comment-shows"]') : null;
-        if (headShows) updateShows(headShows);
-      }
-    }
+    refreshShows();
     return name;
   }
 
@@ -2674,15 +2662,6 @@
 
   }
 
-  function toggle(label, hint, isOn, run) {
-    var b = el('button', null, label);
-    b.type = 'button';
-    b.title = hint;
-    b.setAttribute('aria-pressed', String(!!isOn()));
-    b.addEventListener('click', function () { run(); renderFilter(); });
-    return b;
-  }
-
   var EMPTY = {
     open: 'No open comments. Select words and choose Comment.',
     done: 'Nothing marked done yet.'
@@ -2853,8 +2832,8 @@
     }
 
     // On a phone the sheet lies under the page, not beside it: a card is level with its passage when it
-    // sits as far under the top of the sheet's list as the passage sits under the top of the page he can
-    // see (N9). Measured from the sheet's own top, every passage he can read had its card above the list.
+    // sits as far under the top of the sheet's list as the passage sits under the top of the visible page.
+    // Measured from the sheet's own top instead, every readable passage would have its card above the list.
     var from = band.top, panels = Castor.panels;
     if (panels && panels.state && panels.state().mode === 'phone') {
       var scroller = S.page.closest && S.page.closest('.page-scroll'), bar = DOC.getElementById('topbar');
@@ -2934,7 +2913,7 @@
     var layerH = Math.max(band.height, maxBottom + 16, target + band.height);
     S.canvas.style.height = layerH + 'px';
     target = Math.max(0, Math.min(target, layerH - band.height));
-    // A comment being written keeps the place its reveal gave it (N9): on a phone the keyboard and
+    // A comment being written keeps the place its reveal gave it: on a phone the keyboard and
     // every key run this, and the list must not move the field and its Save edit away under them.
     var writing = S.actionEditor && holdsFocus(S.actionEditor.textarea) && S.wrap.contains(S.actionEditor.node) ||
       S.composer && holdsFocus(S.composer.textarea) && S.wrap.contains(S.composer.node);
@@ -3190,7 +3169,7 @@
     return { top: vv ? vv.offsetTop || 0 : 0, bottom: bottom - (keyboard ? 72 : 0) };
   }
 
-  // The words that send or close a comment, in one row that can hold to the list's bottom (N9).
+  // The words that send or close a comment, in one row that can hold to the list's bottom.
   function sendRow(box) { var row = el('div', 'castor-sendrow'); box.appendChild(row); return row; }
   function revealPanelCard(card,field){
     if (!card) return;
@@ -3211,7 +3190,7 @@
       var top = Math.max(box.top, viewport.top) + 8, bottom = Math.min(box.bottom, viewport.bottom) - 8;
       var end = input.bottom, editor = field.closest && field.closest('.castor-comment-editor, .castor-composer');
       var row = editor && editor.querySelector && editor.querySelector('.castor-sendrow');
-      // The send row holds to the list's bottom on a phone (N9): it is in view; the caret stays above it.
+      // The send row holds to the list's bottom on a phone: it is in view; the caret stays above it.
       if (row && global.getComputedStyle && global.getComputedStyle(row).position === 'sticky') bottom -= row.offsetHeight;
       // Keep the action words beside the caret when that whole interval fits.
       else if (editor) Array.prototype.forEach.call(editor.querySelectorAll('button'), function (button) {
@@ -3557,6 +3536,21 @@
     if (S.composer && S.composer.node) S.composer.node.remove();
     S.composer = null;
   }
+  /* A composer's keys. Enter sends and Escape cancels; Shift+Enter stays a new line. While
+     the @name list is open, and while an input method is composing, the keys are theirs. */
+  function composerKeys(ta, box, submit) {
+    ta.addEventListener('keydown', function (e) {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Enter' && !e.shiftKey && !box.querySelector('.castor-at')) {
+        e.preventDefault();
+        submit();
+      } else if (e.key === 'Escape' && !box.querySelector('.castor-at')) {
+        e.preventDefault();
+        cancelComposer();
+      }
+    });
+  }
+
   function cancelComposer() {
     var c = S.composer;
     if (!c) return;
@@ -3742,16 +3736,7 @@
 
     if (!reviewing() && !ta.castorEditor) wireAt(ta, box);   // the editor has its own @name picker
     trackComposer();
-    ta.addEventListener('keydown', function (e) {
-      if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === 'Enter' && !e.shiftKey && !box.querySelector('.castor-at')) {
-        e.preventDefault();
-        submit();
-      } else if (e.key === 'Escape' && !box.querySelector('.castor-at')) {
-        e.preventDefault();
-        cancelComposer();
-      }
-    });
+    composerKeys(ta, box, submit);
     ta.focus({ preventScroll: true });
     scheduleCommentFocus();
     return slot;
@@ -3801,7 +3786,7 @@
     };
   }
 
-  // A selection that starts in one paragraph and ends in a later one (S8), or null.
+  // A selection that starts in one paragraph and ends in a later one, or null.
   function passageFromRange(range, version) {
     var blocks = pageBlocks(), first = -1, last = -1;
     for (var i = 0; i < blocks.length; i++) {
@@ -4386,7 +4371,15 @@
   function readerPending() {
     var identity = roleConfirmed() && reviewing() && reviewerIdentity(Castor.role);
     if (!identity) return {};
-    var prefix = 'castor.' + S.world + '.comments.', suffix = '.reader.' + encodeURIComponent(identity.id);
+    return pendingIn('.reader.' + encodeURIComponent(identity.id));
+  }
+  /* The comments this device holds that no server has confirmed, in the scope of whoever is
+     signed in here (this installation's writer, a public-writer account or a reader), as
+     { path: [storage key, …] }: unsent threads (their .unsaved mark), unacknowledged actions
+     and composer drafts with words. comments.js stays the one owner of these keys. */
+  function pending() { return pendingIn(key().slice(legacyKey().length)); }
+  function pendingIn(suffix) {
+    var prefix = 'castor.' + S.world + '.comments.';
     var pending = {}, records = {};
     function add(path, operation) {
       var list = pending[path] || (pending[path] = []);
@@ -4424,9 +4417,19 @@
   Castor.comments = {
     available: available,
     readerPending: readerPending,
+    pending: pending,
     readerDrafts: function () {
       return reviewing() && (journalRecords(true).some(function (record) { return !record.storedId && record.text.trim(); }) ||
         actionRecords().some(function (record) { return !record.submitted; }));
+    },
+    /* For Castor.flush(): 'none' when this page shows no comments, 'saved' when the server has
+       every one, 'journalled' when some wait on this device to be sent (the send goes on), and
+       'at-risk' when this device could not keep them. Drafts in an open box are kept as typed. */
+    flush: function () {
+      if (!available()) return Promise.resolve('none');
+      if (!save()) return Promise.resolve('at-risk');
+      var unsent = !Castor.comments.durable || S.threads.some(function (t) { return t.pending; });
+      return Promise.resolve(unsent ? 'journalled' : 'saved');
     },
     whenSaved: function () {
       var path = S.loadedPath;

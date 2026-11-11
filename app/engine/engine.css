@@ -2153,9 +2153,8 @@ html[data-keys="off"] .shortcut-hint { display: none; }
 }
 [data-outline-guides="plain"]  { --guide-w: 1.5px; --guide-a: 52%; }
 
-/* "Make the font even bigger, let's give it a try." Three, so he can feel the
-   difference rather than be told about it. The row grows with the type or the
-   line-height fights the beads. */
+/* The outline's label size. The row grows with the type or the line-height
+   fights the beads. */
 [data-outline-size="m"]  .castor-row { font-size: 14.5px; min-height: 34px; }
 
 .castor-row:hover, .castor-row.is-preview { color: var(--ink, #23231f); }
@@ -2441,8 +2440,9 @@ html[data-keys="off"] .shortcut-hint { display: none; }
   background: var(--pane-solid, var(--paper, #fbfbfa));
 }
 
-/* A touch format bar reserves its own row inside the W16 viewport frame.
-   The shorter editor scrollport also supplies W17's overlay clipping bounds. */
+/* A touch format bar reserves its own row inside the app frame, which fits the viewport left visible
+   above the keyboard. The editor's scrollport, shorter by that row, is also the box the writing overlays
+   are clipped to. */
 #app[data-touch-format="1"] { --format-h: auto; }
 .command-island[data-docked="1"] {
   position: relative;

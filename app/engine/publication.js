@@ -74,7 +74,7 @@
   function refresh() {
     var captured = epoch;
     if (!path || !founder()) return Promise.resolve();
-    return request('/api/publication?path=' + encodeURIComponent(path)).then(function (data) {
+    return request(C.endpoints.api('publication?path=') + encodeURIComponent(path)).then(function (data) {
       if (captured !== epoch || !card) return;
       configured = data.configured; existing = !!data.site_existing;
       card.hidden = !configured;
@@ -93,14 +93,14 @@
     return C.saver.flush().then(function () {
       if (captured !== epoch || founder() !== who) throw Error('Open this article again to prepare it.');
       if (['saved', 'ready'].indexOf(C.saver.state()) < 0) throw Error('Save the article before preparing publication.');
-      return request('/api/piece?path=' + encodeURIComponent(article));
+      return request(C.endpoints.api('piece?path=') + encodeURIComponent(article));
     }).then(function (data) {
       var latest = data.versions && data.versions[data.versions.length - 1];
       if (!latest || latest.markdown !== C.app.source) throw Error('The saved article differs from this page. Save or reload it first.');
-      return request('/api/publication?path=' + encodeURIComponent(article));
+      return request(C.endpoints.api('publication?path=') + encodeURIComponent(article));
     }).then(function (data) {
       if (captured !== epoch || founder() !== who) throw Error('Open this article again to prepare it.');
-      return request('/api/publication/prepare', {path:article, who:who, source:data.current_source, metadata:metadata});
+      return request(C.endpoints.api('publication/prepare'), {path:article, who:who, source:data.current_source, metadata:metadata});
     }).then(function (data) {
       if (captured !== epoch) return;
       candidate = data; changed = revision !== capturedRevision;
@@ -125,10 +125,10 @@
       if (!key.value.trim()) { key.focus(); return; }
       var entered = key.value.trim(); key.value = '';
       closeDialog(); busy = true; controls(); say('Publishing the reviewed version.');
-      return request('/api/publication/approve', {id:release.id, path:path, who:who, key:entered})
+      return request(C.endpoints.api('publication/approve'), {id:release.id, path:path, who:who, key:entered})
         .then(function (approval) {
           if (captured !== epoch || founder() !== who || changed || release !== candidate) throw Error('Open this article again to approve it.');
-          return request('/api/publication/publish', {id:release.id, path:path, who:who, confirm:true, approval:approval.approval});
+          return request(C.endpoints.api('publication/publish'), {id:release.id, path:path, who:who, confirm:true, approval:approval.approval});
         })
         .then(function (data) { if (captured === epoch) { candidate = data; return C.app.reload && C.app.reload(); } })
         .catch(function (error) { if (captured === epoch) card._error = error.message; })
@@ -163,7 +163,7 @@
     actions = el('div'); actions.className = 'publication-actions'; card.appendChild(actions);
     context.article.parentNode.appendChild(card);
     var captured = epoch;
-    request('/api/publication?path=' + encodeURIComponent(path)).then(function (data) {
+    request(C.endpoints.api('publication?path=') + encodeURIComponent(path)).then(function (data) {
       if (captured !== epoch) return;
       configured = data.configured; existing = !!data.site_existing; candidate = data.id ? data : null; changed = !!data.changed; fill(data); controls();
       card.hidden = !configured;

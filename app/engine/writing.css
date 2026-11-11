@@ -142,8 +142,8 @@
    the caret is ever wrapped — the rule that keeps typing exact. Where the
    Custom Highlight API is missing the feature is simply absent. */
 
-/* The page waits when he clicks away. It only ever appears after he has put the
-   caret in the piece at least once, so a page nobody has touched (a screenshot,
+/* The page waits when the writer clicks away. It only ever appears after they have
+   put the caret in the piece at least once, so a page nobody has touched (a screenshot,
    a first load) never wears it. */
 .cw-editor-page { position: relative; }
 .cw-editor-page::after {

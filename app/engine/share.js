@@ -16,7 +16,7 @@
   function personal() { var install = C.app && C.app.data && C.app.data.install; return !!(install && install.kind === 'personal'); }
   function close() { if (sheet) { var old = sheet; sheet = null; old.close(); old.remove(); } }
   function request(article, who, action, fields) {
-    return global.fetch('/api/share/article', {method:'POST', headers:{'Content-Type':'application/json'},
+    return global.fetch(C.endpoints.api('share/article'), {method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify(Object.assign({path:article, who:who, action:action}, fields || {}))}).then(function (r) {
         return r.json().then(function (data) { if (!r.ok) throw Error(data.error || 'Sharing could not be loaded. Try again.'); return data; });
       });

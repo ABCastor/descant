@@ -156,7 +156,7 @@
       if (!site.value) { suggestions = []; close(); renderChips(); message.textContent = ''; return Promise.resolve(); }
       var selected = site.value, held = ++generation; suggestions = []; liveAvailable = false; close(); renderChips();
       message.textContent = words.loading;
-      return request('/api/site-tags?site=' + encodeURIComponent(selected)).then(function (data) {
+      return request(C.endpoints.api('site-tags?site=') + encodeURIComponent(selected)).then(function (data) {
         if (sheet !== box || held !== generation || selected !== site.value) return;
         suggestions = Array.isArray(data.tags) ? data.tags : []; liveAvailable = data.liveAvailable === true;
         message.textContent = liveAvailable ? '' : words.unavailable; renderChips();
@@ -222,7 +222,7 @@
   }
   function comparison(article, record) {
     if (!record || !record.commit || !record.article_sha256) return Promise.reject(Error('Published text is unavailable.'));
-    return global.fetch('/api/piece/live?path=' + encodeURIComponent(article), {cache:'no-store'}).then(function (r) {
+    return global.fetch(C.endpoints.api('piece/live?path=') + encodeURIComponent(article), {cache:'no-store'}).then(function (r) {
       return r.json().then(function (data) {
         if (!r.ok) { var e = Error(data.error || 'Published text is unavailable.'); e.unavailable = [404,409,422].indexOf(r.status) >= 0; throw e; }
         if (data.commit !== record.commit || typeof data.markdown !== 'string') throw Error('The website changed while loading. Try again.');
@@ -244,7 +244,7 @@
     if (inFlight && inFlight.epoch === captured && inFlight.path === article && inFlight.who === who && inFlight.piece === p && inFlight.text === text && inFlight.saved === p.savedMarkdown && inFlight.save === saveRevision) return inFlight.promise;
     var held = { epoch: captured, path: article, who: who, piece: p, text: text, saved: p.savedMarkdown, save: saveRevision }, sequence = ++requestSeq;
     inFlight = held;
-    held.promise = request('/api/piece?path=' + encodeURIComponent(article)).then(function (data) {
+    held.promise = request(C.endpoints.api('piece?path=') + encodeURIComponent(article)).then(function (data) {
       if (captured !== epoch || sequence !== requestSeq || who !== founder() || article !== path || p !== piece()
         || C.pieces && C.pieces.current && C.pieces.current() !== article) return;
       p.live = data.live || null; p.article_sha256_now = data.article_sha256_now;
@@ -277,7 +277,7 @@
     var article = path, captured = epoch, current = source();
     var box = dialog('Changes since publication'), status = el('p', 'Reading the published version.');
     box.appendChild(status); box.appendChild(button('Close', hideSheet));
-    return request('/api/piece/live?path=' + encodeURIComponent(article)).then(function (data) {
+    return request(C.endpoints.api('piece/live?path=') + encodeURIComponent(article)).then(function (data) {
       if (captured !== epoch || sheet !== box) return;
       status.textContent = 'Removed text is struck through. Added text is underlined.';
       var diff = el('pre'); diff.className = 'descant-live-diff';
@@ -370,7 +370,7 @@
         var ready = health.sites && health.sites[selected];
         if (ready !== 'ready') throw Error(ready || 'The receiving site is not ready.');
         // The remote save must have reached origin/main before the helper fetches it.
-        return request('/api/piece?path=' + encodeURIComponent(article));
+        return request(C.endpoints.api('piece?path=') + encodeURIComponent(article));
       }).then(function (saved) {
         if (captured !== epoch || !clean() || source() !== original || saved.markdown !== original) throw Error('Save first');
         if (!saved.save || !saved.save.shared || saved.save.shared.ok !== true) throw Error('The save has not reached the shared copy yet. Try again after it syncs.');
@@ -433,7 +433,7 @@
     marker = button('', paint); marker.className = 'descant-live-marker';
     panel = el('div'); panel.className = 'descant-live-popover'; panel.id = 'descant-live-popover';
     panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Published version');
-    // It lives in the status row beside the save state, where he looks for "is this safe": bottom right, part of Save.
+    // It lives in the status row beside the save state, where the writer looks for "is this safe": bottom right, part of Save.
     var foot = D.querySelector ? D.querySelector('.foot-meta') : null, save = foot && foot.querySelector('.foot-save');
     if (foot) { marker.classList.add('in-foot'); foot.insertBefore(marker, save || null); }
     else (ctx.page || ctx.article.parentNode).appendChild(marker);

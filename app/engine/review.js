@@ -202,7 +202,7 @@
   }
   function storeAsset(pin, data) {
     if (!/^https?:$/.test(global.location.protocol)) return Promise.resolve(null);
-    return global.fetch('/api/review/asset', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    return global.fetch(Castor.endpoints.api('review/asset'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ world: S.world, pinId: pin.id, image: data }) })
       .then(function (r) { return r.ok ? r.json() : null; }).then(function (out) {
         if (out && out.path) { pin.image = out.path; pin._preview = out.path; save(); renderPins(); }
@@ -251,7 +251,7 @@
   }
   function postPin(pin) {
     if (!/^https?:$/.test(global.location.protocol)) return;
-    try { global.fetch('/api/review', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    try { global.fetch(Castor.endpoints.api('review'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ world: S.world, id: pin.id, size: app().size || '', theme: app().theme || '',
         path: pin.path, text: pin.text, x: pin.x, y: pin.y, note: pin.note, image: pin.image || '', time: pin.time }) }).catch(function () {}); }
     catch (e) {}

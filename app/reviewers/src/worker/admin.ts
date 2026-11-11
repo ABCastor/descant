@@ -10,7 +10,7 @@ import { FOUNDER_COOKIE, cookie, newToken, randomId } from "./session.ts";
 import { allArticles, founders, inviteState, type Article, type Env } from "./store.ts";
 import { day, esc, message, page, redirect } from "./web.ts";
 
-export const INVITE_DAYS = 14;
+const INVITE_DAYS = 14;
 const MAX_USES = 50;
 const MAX_DAYS = 60;
 

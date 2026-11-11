@@ -46,7 +46,7 @@
     var e = o.entry;
     if (!e || (e.recorded !== false && e.sha)) return Promise.resolve();
     if (!mine(e)) return Promise.reject(new Error((names[e.person] || e.person) + '’s version is not committed yet. Ask their agent to commit it.'));
-    return call('/api/drafts', { action: 'record', piece: piece(), who: who(), path: e.path, markdown: e.markdown }).then(function (got) {
+    return call(Castor.endpoints.api('drafts'), { action: 'record', piece: piece(), who: who(), path: e.path, markdown: e.markdown }).then(function (got) {
       e.sha = got.sha; e.recorded = true; o.origin = e.path + '@' + got.sha;
     });
   }
@@ -116,7 +116,7 @@
     renderBanner();
     var wanted = ++P.request, folder = piece(), person = who();
     if (!/^articles\/[^/]+$/.test(folder) || !names[person]) { P.entries = []; P.away = []; render(); return Promise.resolve(); }
-    return call('/api/drafts?piece=' + encodeURIComponent(folder) + '&who=' + person + '&away=1').then(function (got) {
+    return call(Castor.endpoints.api('drafts?piece=') + encodeURIComponent(folder) + '&who=' + person + '&away=1').then(function (got) {
       if (wanted !== P.request || folder !== piece() || person !== who()) return;
       P.entries = got.drafts || []; P.away = got.away || [];
       // First choice: this writer's own versions, newest first. Another writer's is one tap away.
@@ -202,7 +202,7 @@
       form.addEventListener('submit', function (e) {
         e.preventDefault(); var name = title.value.trim(); if (!name) return;
         return act(function () {
-          return saved().then(function () { return call('/api/drafts', { action: 'create', piece: piece(), who: who(), title: name, copy: true }); })
+          return saved().then(function () { return call(Castor.endpoints.api('drafts'), { action: 'create', piece: piece(), who: who(), title: name, copy: true }); })
             .then(function (entry) { return open(entry.path); });
         });
       });
@@ -217,7 +217,7 @@
         var tools = node('div', null, 'versions-tools');
         tools.appendChild(node('span', 'Put away ' + day(c.when) + '.', 'versions-note'));
         tools.appendChild(button('Bring back', function () { return act(function () {
-          return call('/api/drafts', { action: 'restore', piece: piece(), who: who(), path: c.away.path, sha: c.away.sha }).then(refresh);
+          return call(Castor.endpoints.api('drafts'), { action: 'restore', piece: piece(), who: who(), path: c.away.path, sha: c.away.sha }).then(refresh);
         }); }, 'versions-link'));
         row.appendChild(tools);
       }
@@ -234,7 +234,7 @@
     });
   }
   function putAway(entry) {
-    return saved().then(function () { return recorded({ entry: entry }); }).then(function () { return call('/api/drafts', { action: 'away', piece: piece(), who: who(), path: entry.path, base: entry.sha }); }).then(function () {
+    return saved().then(function () { return recorded({ entry: entry }); }).then(function () { return call(Castor.endpoints.api('drafts'), { action: 'away', piece: piece(), who: who(), path: entry.path, base: entry.sha }); }).then(function () {
       P.message = 'Put away: ' + entry.title + '. Its text stays in history, under From history.';
       return refresh();
     });
@@ -497,7 +497,7 @@
       var snap = Castor.saver.snapshot(), origin = v == null ? [] : [V.versions[v].origin];
       if (snap.path !== articlePath() || !snap.base || !snap.clean || Castor.editor.getSource() !== V.expected) throw new Error('The article changed while comparing. Open the comparison again.');
       if (Castor.editor.setReadOnly) Castor.editor.setReadOnly(true);
-      return call('/api/piece', { path: articlePath(), markdown: markdown, base: snap.base, who: who(), subject: subject, taken: origin });
+      return call(Castor.endpoints.api('piece'), { path: articlePath(), markdown: markdown, base: snap.base, who: who(), subject: subject, taken: origin });
     }).then(function () {
       V.expected = markdown; V.carried = info.carried || {};
       return Castor.app.reload();
@@ -563,7 +563,7 @@
     var go = button('Finish', function () {
       go.disabled = true; go.textContent = 'Putting away…'; go.classList.add('castor-pending'); go.setAttribute('aria-busy', 'true');
       V.versions.filter(function (o, v) { return o.entry && !keep[v]; }).reduce(function (chain, o) {
-        return chain.then(function () { return recorded(o); }).then(function () { return call('/api/drafts', { action: 'away', piece: piece(), who: who(), path: o.entry.path, base: o.entry.sha }); });
+        return chain.then(function () { return recorded(o); }).then(function () { return call(Castor.endpoints.api('drafts'), { action: 'away', piece: piece(), who: who(), path: o.entry.path, base: o.entry.sha }); });
       }, Promise.resolve()).then(function () { dialog.close(); close(); }, function (e) {
         go.disabled = false; go.textContent = 'Finish'; go.classList.remove('castor-pending'); go.removeAttribute('aria-busy'); status.textContent = 'Not put away: ' + e.message;
       });

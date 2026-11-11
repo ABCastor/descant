@@ -27,7 +27,7 @@
   var SHOWN = { title: 10, text: 12, comment: 8, command: 8 };
   var WAIT = 180;                        // ms of quiet before a query goes to the server
 
-  var panel = null, input = null, results = null, lens = null, empty = null;
+  var panel = null, input = null, results = null, lens = null;
   var timer = 0, request = null, generation = 0;
   var rows = [], active = -1, query = '';
   var returnTo = null;                   // the writer's caret, when the keys opened the box from the text
@@ -155,7 +155,7 @@
     if ((proto !== 'http:' && proto !== 'https:') || !global.fetch) return Promise.resolve(localHits(q));
     var ctl = global.AbortController ? new global.AbortController() : null;
     request = ctl;
-    return global.fetch('/api/search?q=' + encodeURIComponent(q), { cache: 'no-store', signal: ctl ? ctl.signal : undefined })
+    return global.fetch(Castor.endpoints.api('search?q=') + encodeURIComponent(q), { cache: 'no-store', signal: ctl ? ctl.signal : undefined })
       .then(function (r) {
         if (!r.ok) throw new Error('search answered ' + r.status);
         return r.json();

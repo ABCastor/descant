@@ -189,23 +189,23 @@
     });
     var explicit = S.order['@' + group] || [];
     return rows.sort(function (a, b) {
-      var ai = explicit.indexOf(a.path), bi = explicit.indexOf(b.path);
-      if (ai >= 0 || bi >= 0) {
-        if (ai < 0) return 1;
-        if (bi < 0) return -1;
-        return ai - bi;
-      }
+      var listed = listedOrder(explicit, a, b);
+      if (listed !== null) return listed;
       if (parentOf(a.path) === parentOf(b.path)) {
-        var siblings = S.order[parentOf(a.path)] || [];
-        ai = siblings.indexOf(a.path); bi = siblings.indexOf(b.path);
-        if (ai >= 0 || bi >= 0) {
-          if (ai < 0) return 1;
-          if (bi < 0) return -1;
-          return ai - bi;
-        }
+        listed = listedOrder(S.order[parentOf(a.path)] || [], a, b);
+        if (listed !== null) return listed;
       }
       return baseName(a.path).localeCompare(baseName(b.path));
     });
+  }
+  /* An explicit order puts the entries it lists first, in its order, ahead of the
+     ones it leaves out; null when it lists neither entry. */
+  function listedOrder(order, a, b) {
+    var ai = order.indexOf(a.path), bi = order.indexOf(b.path);
+    if (ai < 0 && bi < 0) return null;
+    if (ai < 0) return 1;
+    if (bi < 0) return -1;
+    return ai - bi;
   }
   function childrenOf(folder) {
     var list = S.entries.filter(function (entry) { return parentOf(entry.path) === folder; });
@@ -219,12 +219,8 @@
       return 5;
     }
     return list.sort(function (a, b) {
-      var ai = explicit.indexOf(a.path), bi = explicit.indexOf(b.path);
-      if (ai >= 0 || bi >= 0) {
-        if (ai < 0) return 1;
-        if (bi < 0) return -1;
-        return ai - bi;
-      }
+      var listed = listedOrder(explicit, a, b);
+      if (listed !== null) return listed;
       var aw = defaultWeight(a), bw = defaultWeight(b);
       return aw === bw ? baseName(a.path).localeCompare(baseName(b.path)) : aw - bw;
     });
@@ -261,7 +257,7 @@
     if (!served() || entry.kind === 'folder') return '';
     var folder = pieceFolder();
     if (folder.indexOf('design/app/') === 0) return '/' + folder.slice('design/app/'.length) + '/' + entry.path;
-    return '/api/files/content?piece=' + encodeURIComponent(folder) + '&path=' + encodeURIComponent(entry.path);
+    return Castor.endpoints.api('files/content?piece=') + encodeURIComponent(folder) + '&path=' + encodeURIComponent(entry.path);
   }
 
   function thumbnail(entry) {
@@ -321,7 +317,7 @@
   function postFileRoute(route, body) {
     if (!served()) return Promise.resolve({ saved: false, local: true });
     body.who = Castor.who && (Castor.who.session ? Castor.who.session().map(function (person) { return person.id || { name: person.name, email: person.email }; }) : Castor.who.get && Castor.who.get());
-    return global.fetch('/api/files/' + route, {
+    return global.fetch(Castor.endpoints.api('files/') + route, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     }).then(function (response) {
@@ -841,7 +837,7 @@
         return;
       }
       var want = S.target;
-      global.fetch('/api/piece?path=' + encodeURIComponent(pathOf(want)))
+      global.fetch(Castor.endpoints.api('piece?path=') + encodeURIComponent(pathOf(want)))
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (payload) {
           if (S.target !== want) return;
@@ -861,11 +857,7 @@
         return block.html != null ? block.html : (Castor.md.blockToHtml ? Castor.md.blockToHtml(block) : '');
       }).filter(Boolean).join('\n');
     } else article.appendChild(el('pre', null, src));
-    article.addEventListener('click', function (event) {
-      var link = event.target && event.target.closest && event.target.closest('a.wikilink[data-target]');
-      if (!link) return;
-      event.preventDefault(); openBeside(link.getAttribute('data-target'));
-    });
+    article.addEventListener('click', followWikiLink);
     body.appendChild(article);
     var id = headingId(S.target);
     if (id) {
@@ -890,7 +882,7 @@
       held.markdown = Castor.editor.getCurrentSource(); renderBeside(); return Promise.resolve(true);
     }
     renderBeside();
-    return global.fetch('/api/piece?path=' + encodeURIComponent(path)).then(function (r) {
+    return global.fetch(Castor.endpoints.api('piece?path=') + encodeURIComponent(path)).then(function (r) {
       if (!r.ok) throw Error('This article could not be opened.');
       return r.json();
     }).then(function (payload) {
@@ -900,14 +892,16 @@
     }).catch(function () { if (S.articleAside === held) { held.error = 'This article could not be opened.'; renderBeside(); } return false; });
   }
 
+  function followWikiLink(event) {
+    var link = event.target && event.target.closest && event.target.closest('a.wikilink[data-target]');
+    if (!link) return;
+    event.preventDefault(); openBeside(link.getAttribute('data-target'));
+  }
+
   function wirePage(page) {
     if (!page || page.dataset.besideWired) return;
     page.dataset.besideWired = '1';
-    page.addEventListener('click', function (event) {
-      var link = event.target && event.target.closest && event.target.closest('a.wikilink[data-target]');
-      if (!link) return;
-      event.preventDefault(); openBeside(link.getAttribute('data-target'));
-    });
+    page.addEventListener('click', followWikiLink);
   }
 
   function mount(ctx) {

@@ -132,10 +132,11 @@
     for (i = 0; i < wanted.length; i++) col.insertBefore(wanted[i], after);
   }
 
-  function marginNote(key, html, label) {
+  /* A note's number and body, in the margin or under its paragraph. */
+  function noteShell(kind, key, html, label) {
     var n = DOC.createElement('aside');
-    n.className = 'footnote-margin';
-    n.setAttribute('data-castor-fn', 'margin');
+    n.className = 'footnote-' + kind;
+    n.setAttribute('data-castor-fn', kind);
     n.setAttribute('data-key', key);
     var num = DOC.createElement('span');
     num.className = 'footnote-margin-key';
@@ -145,6 +146,11 @@
     body.className = 'footnote-margin-body';
     body.innerHTML = html;
     n.appendChild(body);
+    return n;
+  }
+
+  function marginNote(key, html, label) {
+    var n = noteShell('margin', key, html, label);
     n.tabIndex = 0;
     n.setAttribute('aria-label', 'Footnote ' + label + ', editable');
     n.addEventListener('click', function (ev) {
@@ -228,21 +234,7 @@
     schedulePosition();
   }
 
-  function inlineNote(key, html, label) {
-    var n = DOC.createElement('aside');
-    n.className = 'footnote-inline';
-    n.setAttribute('data-castor-fn', 'inline');
-    n.setAttribute('data-key', key);
-    var num = DOC.createElement('span');
-    num.className = 'footnote-margin-key';
-    num.textContent = label == null ? key : label;
-    n.appendChild(num);
-    var body = DOC.createElement('span');
-    body.className = 'footnote-margin-body';
-    body.innerHTML = html;
-    n.appendChild(body);
-    return n;
-  }
+  function inlineNote(key, html, label) { return noteShell('inline', key, html, label); }
 
   /* Every definition at the foot gets one back link to the first reference. The
      arrow is the brief's, and it is the one control in the engine that is a glyph

@@ -847,7 +847,6 @@ def files_order(piece):
 
 
 def relative_url(value):
-    from urllib.parse import quote
     return quote(str(value), safe="")
 
 
@@ -874,7 +873,6 @@ def _load_people():
 AUTHORS = _load_people()
 # The writers of this installation, in people.json's order (a key is 1 to 24 lowercase
 # letters, digits or -: space_config.WRITER_KEY). A space that names nobody has one writer, "writer".
-WRITER_KEY_RE = re.compile(space_config.WRITER_KEY + r"\Z")
 FOUNDERS = tuple(key for key in AUTHORS if space_config.is_writer_key(key)) or ("writer",)
 WRITER_PATTERN = "|".join(re.escape(key) for key in FOUNDERS)
 WRITERS_SAID = " or ".join(FOUNDERS) if len(FOUNDERS) < 3 else ", ".join(FOUNDERS[:-1]) + " or " + FOUNDERS[-1]
@@ -1089,24 +1087,6 @@ def piece_versions(path, media):
         })
     versions.reverse()                     # newest last, the shape changes.js reads
     return versions
-
-
-def piece_files(folder):
-    build = build_module()
-    entries = []
-    if not folder.is_dir():
-        return entries
-    for p in sorted(x for x in folder.rglob("*") if x.is_file()):
-        rel = p.relative_to(folder).as_posix()
-        stat = p.stat()
-        date = datetime.datetime.fromtimestamp(stat.st_mtime).date().isoformat()
-        if build:
-            blob = p.read_bytes() if build.preview_kind(rel) == "image" else None
-            entries.append(build.file_entry(rel, stat.st_size, date, blob))
-        else:
-            entries.append({"path": rel, "kind": "file", "size": stat.st_size,
-                            "date": date, "type": "application/octet-stream", "preview": "file"})
-    return entries
 
 
 def article_path(value):
@@ -2571,6 +2551,17 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         return self.rfile.read(length)
 
+    def json_body(self):
+        """The request body parsed as JSON: (value, None), or (None, why) when the body is
+        missing, too large or not JSON."""
+        raw = self.read_body()
+        if raw is None:
+            return None, "empty or oversized body"
+        try:
+            return json.loads(raw.decode("utf-8")), None
+        except (ValueError, UnicodeDecodeError):
+            return None, "the body is not JSON"
+
     # ----------------------------------------------------- who is asking (hooks)
     #
     # The founders' answers, unchanged. ReviewerHandler overrides these and nothing in
@@ -3598,15 +3589,10 @@ class Handler(SimpleHTTPRequestHandler):
 
     def api_comments_write(self):
         """Create new thread files and rewrite only submitted threads that changed."""
-        raw = self.read_body()
-        if raw is None:
+        body, why = self.json_body()
+        if why:
             return self.reply(400, {"ok": False, "reason": "bad-request",
-                                    "error": "empty or oversized body"})
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return self.reply(400, {"ok": False, "reason": "bad-request",
-                                    "error": "the body is not JSON"})
+                                    "error": why})
         if not isinstance(body, dict) or not isinstance(body.get("threads"), list):
             return self.reply(400, {"ok": False, "reason": "bad-request",
                                     "error": "threads must be one complete list"})
@@ -3785,15 +3771,10 @@ class Handler(SimpleHTTPRequestHandler):
 
     def api_piece_write(self):
         """Save one human-authored article version, or refuse before losing context."""
-        raw = self.read_body()
-        if raw is None:
+        body, why = self.json_body()
+        if why:
             return self.reply(400, {"ok": False, "reason": "bad-request",
-                                    "error": "empty or oversized body"})
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return self.reply(400, {"ok": False, "reason": "bad-request",
-                                    "error": "the body is not JSON"})
+                                    "error": why})
         if not isinstance(body, dict):
             return self.reply(400, {"ok": False, "reason": "bad-request",
                                     "error": "the body must be one object"})
@@ -3951,13 +3932,9 @@ class Handler(SimpleHTTPRequestHandler):
 
 
     def api_review(self):
-        raw = self.read_body()
-        if raw is None:
-            return self.reply(400, {"error": "empty or oversized body"})
-        try:
-            note = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return self.reply(400, {"error": "the body is not JSON"})
+        note, why = self.json_body()
+        if why:
+            return self.reply(400, {"error": why})
         if not isinstance(note, dict):
             return self.reply(400, {"error": "the body must be one note object"})
         world = safe_world(note.get("world"))
@@ -3977,13 +3954,9 @@ class Handler(SimpleHTTPRequestHandler):
         return self.reply(200, {"saved": True, "count": len(notes), "file": target.name})
 
     def api_review_asset(self):
-        raw = self.read_body()
-        if raw is None:
-            return self.reply(400, {"error": "empty or oversized body"})
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return self.reply(400, {"error": "the body is not JSON"})
+        body, why = self.json_body()
+        if why:
+            return self.reply(400, {"error": why})
         if not isinstance(body, dict):
             return self.reply(400, {"error": "the body must be one asset object"})
         match = re.match(r"^data:image/(png|jpeg);base64,([A-Za-z0-9+/=]+)$", str(body.get("image") or ""))
@@ -4069,13 +4042,9 @@ class Handler(SimpleHTTPRequestHandler):
         return self.reply(200, raw, content_type)
 
     def files_body(self):
-        raw = self.read_body()
-        if raw is None:
-            return None, (400, {"error": "empty or oversized body"})
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return None, (400, {"error": "the body is not JSON"})
+        body, why = self.json_body()
+        if why:
+            return None, (400, {"error": why})
         if not isinstance(body, dict):
             return None, (400, {"error": "the body must be an object"})
         piece = safe_piece(body.get("piece"))
@@ -4136,13 +4105,9 @@ class Handler(SimpleHTTPRequestHandler):
     @file_errors
     def api_pieces_new(self):
         """POST {who, title}: a new article folder with its article.md, committed."""
-        raw = self.read_body()
-        if raw is None:
-            return self.reply(400, {"error": "empty or oversized body"})
-        try:
-            body = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return self.reply(400, {"error": "the body is not JSON"})
+        body, why = self.json_body()
+        if why:
+            return self.reply(400, {"error": why})
         if not isinstance(body, dict):
             return self.reply(400, {"error": "the body must be an object"})
         try:

@@ -159,6 +159,14 @@
     const pairedOld = new Set();
     const pairedNew = new Set();
     const pairs = [];
+    function claimPairs(candidates) {
+      for (const candidate of candidates) {
+        if (pairedOld.has(candidate.oldIndex) || pairedNew.has(candidate.newIndex)) continue;
+        pairedOld.add(candidate.oldIndex);
+        pairedNew.add(candidate.newIndex);
+        pairs.push(candidate);
+      }
+    }
 
     // Exact prose is paired before the similarity pass. This is what makes a
     // paragraph moved across another paragraph remain the same paragraph.
@@ -171,12 +179,7 @@
       }
     }
     exact.sort((a, b) => a.distance - b.distance || a.newIndex - b.newIndex || a.oldIndex - b.oldIndex);
-    for (const candidate of exact) {
-      if (pairedOld.has(candidate.oldIndex) || pairedNew.has(candidate.newIndex)) continue;
-      pairedOld.add(candidate.oldIndex);
-      pairedNew.add(candidate.newIndex);
-      pairs.push(candidate);
-    }
+    claimPairs(exact);
 
     const candidates = [];
     for (let oldIndex = 0; oldIndex < oldBlocks.length; oldIndex += 1) {
@@ -188,12 +191,7 @@
       }
     }
     candidates.sort((a, b) => b.score - a.score || a.distance - b.distance || a.newIndex - b.newIndex);
-    for (const candidate of candidates) {
-      if (pairedOld.has(candidate.oldIndex) || pairedNew.has(candidate.newIndex)) continue;
-      pairedOld.add(candidate.oldIndex);
-      pairedNew.add(candidate.newIndex);
-      pairs.push(candidate);
-    }
+    claimPairs(candidates);
     return { pairs, pairedOld, pairedNew };
   }
 
