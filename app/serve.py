@@ -1372,12 +1372,64 @@ def comment_document(target, text=None):
     }
 
 
-def comment_threads(path):
-    folder = piece_folder(path) / "review"
+CLIENT_ID_LINE_RE = re.compile(r'^client_id:[ \t]*"?([A-Za-z0-9_-]{1,80})"?[ \t]*$', re.M)
+
+
+def comment_documents(folder):
+    """Every review file of an article that reads as a thread, as (file, document), in thread order,
+    and the thread numbers held.
+
+    A thread is held when its file does not read (a note written by hand that the parser refuses,
+    a name without a padded number) or two files share its number: then neither file is taken for
+    the thread, since the file name order would pick one by chance. A held thread is left out and
+    named in the log, so it never hides the article's other comments; `held` maps its number to
+    why, whether the file could not be read at all just now (`unreadable`), and the client IDs its
+    files carry, read line by line, so no write gives that number to a new thread, writes over its
+    files, or makes one of its comments again as a new one."""
+    documents, held, groups = [], {}, {}
     if not folder.is_dir():
-        return []
-    documents = [comment_document(target) for target in comment_files(folder)]
-    return [document["thread"] for document in documents]
+        return documents, held
+    for target in sorted(folder.glob('[0-9]*-*.md')):
+        match = re.fullmatch(r'([0-9]+)-.*\.md', target.name)
+        if match:
+            groups.setdefault(match[1], []).append(target)
+    for identifier, targets in groups.items():
+        why, unreadable = None, False
+        if int(identifier) <= 0 or identifier != '%03d' % int(identifier):
+            why = "its file name needs a padded number, like 004-words.md"
+        elif len(targets) > 1:
+            why = "two files share its number (%s)" % ", ".join(t.name for t in targets)
+        else:
+            try:
+                document = comment_document(targets[0])
+            except OSError:
+                why, unreadable = "its file could not be read just now", True
+            except (UnicodeError, ValueError) as error:
+                why = "its file does not read as a comment (%s)" % str(error)[:120]
+        if why is None:
+            documents.append((targets[0], document))
+            continue
+        client_ids = set()
+        for target in targets:
+            try:
+                client_ids.update(CLIENT_ID_LINE_RE.findall(target.read_bytes().decode("utf-8", "replace")))
+            except OSError:
+                unreadable = True
+        held[identifier] = {"why": why, "unreadable": unreadable, "clientIds": client_ids}
+        print("  comments: %s/%s left out, comment %s is held: %s"
+              % (folder.parent.name, ", ".join(t.name for t in targets), identifier, why), flush=True)
+    return documents, held
+
+
+def comment_held_list(held):
+    """The held threads as a reply names them, so a phone keeps its own copy of each."""
+    return [{"id": identifier, "error": "comment %s is not shown: %s" % (identifier, held[identifier]["why"])}
+            for identifier in sorted(held)]
+
+
+def comment_threads(path):
+    documents, _held = comment_documents(piece_folder(path) / "review")
+    return [document["thread"] for _target, document in documents]
 
 
 
@@ -1528,7 +1580,8 @@ def comment_projected_threads(path, events=None):
 def comment_action_document(path, who, events=None):
     if events is None: events = comment_action_events(path, committed_only=True)
     threads, receipts = [], []
-    targets = [comment_document(t) for t in comment_files(piece_folder(path) / "review")]
+    readable, held = comment_documents(piece_folder(path) / "review")
+    targets = [document for _target, document in readable]
     private_ids = {m.group(1): d["thread"]["id"] for d in targets for m in [DESCANT_SOURCE_RE.match(d["source"])] if m}
     descant_ids = list(private_ids.keys())
     remote_map = {}
@@ -1584,7 +1637,7 @@ def comment_action_document(path, who, events=None):
             request["threadId"] = local_id
         elif authority_of_event != "git": continue
         receipts.append({"opId": request["opId"], "request": request, "resultRev": event["resultRev"], "authority": authority_of_event, "gitDurable": True})
-    return {"threads": threads, "commentActions": {"version": 1, "authority": authority,
+    return {"threads": threads, "held": comment_held_list(held), "commentActions": {"version": 1, "authority": authority,
         "actor": {"kind": "founder-capability", "id": who}, "accessEpoch": "founder", "reactionKeys": list(COMMENT_REACTIONS), "receipts": list({r["opId"]:r for r in receipts}.values())}}
 
 
@@ -3467,7 +3520,13 @@ class Handler(SimpleHTTPRequestHandler):
             if not isinstance(base, int) or isinstance(base, bool) or base < 0: return self.reply(400, {"ok": False, "reason": "bad-request"})
         except (ValueError, TypeError, AttributeError): return self.reply(400, {"ok": False, "reason": "bad-request"})
         with COMMENTS_LOCK:
-            doc = next((comment_document(t) for t in comment_files(piece_folder(path) / "review") if comment_document(t)["thread"]["id"] == body.get("threadId")), None)
+            readable, held = comment_documents(piece_folder(path) / "review")
+            if body.get("threadId") in held:
+                # Only this thread waits: its file does not read, or two files share its number.
+                hold = held[body["threadId"]]
+                return self.reply(503 if hold["unreadable"] else 409, {"ok": False, "reason": "held-thread",
+                    "error": "Comment %s cannot be changed now: %s." % (body["threadId"], hold["why"])})
+            doc = next((document for _target, document in readable if document["thread"]["id"] == body.get("threadId")), None)
             if not doc: return self.reply(403, {"ok": False, "reason": "not-allowed"})
             shared = DESCANT_SOURCE_RE.match(doc["source"])
             if shared:
@@ -3575,18 +3634,26 @@ class Handler(SimpleHTTPRequestHandler):
             existing_targets = {}
             try:
                 events = comment_action_events(path, committed_only=True)
-                for target in comment_files(folder):
-                    document = comment_document(target)
+                readable, held = comment_documents(folder)
+                for target, document in readable:
                     identifier = document["thread"]["id"]
                     existing_documents[identifier] = document
                     existing_targets[identifier] = target
             except (OSError, UnicodeError, ValueError) as error:
                 return self.reply(422, {"ok": False, "reason": "parse-failed",
                                         "error": "a review thread could not be parsed: " + str(error)[:200]})
+            if any(hold["unreadable"] for hold in held.values()):
+                # A file that cannot be read at all just now (a pull replacing it) could be any of
+                # these comments: nothing is written, and the phone sends the words again.
+                return self.reply(503, {"ok": False, "reason": "review-unreadable",
+                                        "error": "A comment file could not be read just now. Your words stay on this device and are sent again."})
 
             previous_documents = dict(existing_documents)
             submitted_ids = set()
-            highest = max([int(identifier) for identifier in existing_documents] or [0])
+            # A held thread keeps its number: a new thread is numbered above it.
+            highest = max([int(identifier) for identifier in existing_documents] + [int(identifier) for identifier in held] or [0])
+            held_clients = {client: identifier for identifier, hold in held.items() for client in hold["clientIds"]}
+            refused = []
             changes = []
             for submitted in body["threads"]:
                 if not isinstance(submitted, dict):
@@ -3597,6 +3664,11 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.reply(409, {"ok": False, "reason": "duplicate-thread",
                                             "error": "the submitted list repeats thread " + raw_id})
                 submitted_ids.add(raw_id)
+                held_id = raw_id if raw_id in held else held_clients.get(raw_id)
+                if held_id:
+                    # Never written, never taken for a new comment: refused for this thread only.
+                    refused.append({"id": raw_id, "thread": held_id, "error": "Comment %s was not changed: %s. Your words on it stay on this device." % (held_id, held[held_id]["why"])})
+                    continue
                 previous_document = existing_documents.get(raw_id)
                 if not raw_id.isdigit():
                     previous_document = next((doc for doc in existing_documents.values()
@@ -3658,8 +3730,8 @@ class Handler(SimpleHTTPRequestHandler):
             if not changes:
                 # Append receipts must carry the same actor-bound controls as a
                 # read. Polling deliberately pauses while another edit is open.
-                document = comment_action_document(path, str(self._comment_actor).strip().lower(), events=events) if self._comment_actor else {"threads": comment_projected_threads(path, events=events)}
-                return self.reply(200, dict(document, ok=True, changed=0))
+                document = comment_action_document(path, str(self._comment_actor).strip().lower(), events=events) if self._comment_actor else {"threads": comment_projected_threads(path, events=events), "held": comment_held_list(held)}
+                return self.reply(200, dict(document, ok=True, changed=0, refused=refused))
 
             written = []
             before_sha = git("rev-parse", "HEAD").stdout.strip()
@@ -3701,8 +3773,8 @@ class Handler(SimpleHTTPRequestHandler):
 
             # Never return the validation snapshot after a commit/push/rebase.
             events = comment_action_events(path, committed_only=True)
-            document = comment_action_document(path, str(self._comment_actor).strip().lower(), events=events) if self._comment_actor else {"threads": comment_projected_threads(path, events=events)}
-            return self.reply(200, dict(document, ok=True, changed=len(changes),
+            document = comment_action_document(path, str(self._comment_actor).strip().lower(), events=events) if self._comment_actor else {"threads": comment_projected_threads(path, events=events), "held": comment_held_list(held)}
+            return self.reply(200, dict(document, ok=True, changed=len(changes), refused=refused,
                                        sha=git("rev-parse", "HEAD").stdout.strip()))
         except CommentRefused as refused:
             # Raised only by the hooks, which all run while `changes` is being built,

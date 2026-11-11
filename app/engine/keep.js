@@ -21,6 +21,7 @@
   var chain = Promise.resolve();
   var inAir = null;                    // the entry handed to a store and not yet stored
   var receipts = {};                  // the exact text whose device write has committed
+  var copySerial = 0, ownedPaths = Object.create(null), handoffs = Object.create(null);
 
   function pageId() {
     try {
@@ -30,6 +31,35 @@
     } catch (e) {
       return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     }
+  }
+
+  function copyPage(label) {
+    var unique;
+    try { unique = global.crypto.randomUUID(); } catch (e) { unique = pageId(); }
+    return 'copy-' + PAGE + '-' + unique + '-' + (++copySerial).toString(36) + (label ? '-' + label : '');
+  }
+
+  function ownedKey(entry) { return entry.page === PAGE || String(entry.page).indexOf('copy-' + PAGE + '-') === 0; }
+  function writerOf(entry) { var first = entry.who && entry.who[0]; return (typeof first === 'string' ? first : first && first.id) || ''; }
+  function acknowledgement(entry) { return !!entry && entry.confirmed && typeof entry.key === 'string' && entry.key.indexOf('saved|') === 0; }
+
+  function beginHandoff(path) {
+    var guard = handoffs[path] || (handoffs[path] = { active: 0, copies: Object.create(null) });
+    guard.active++;
+    return guard;
+  }
+
+  function endHandoff(path, guard, ok) {
+    guard.active--;
+    // A failed handoff remains guarded: its already-queued mutable write must
+    // not destroy a variant whose independent copy could not commit.
+    if (ok && !guard.active && handoffs[path] === guard) delete handoffs[path];
+  }
+
+  function independentCopy(entry, label) {
+    var page = copyPage(label);
+    return { key: page + '|' + entry.path, path: entry.path, text: entry.text, base: entry.base || '',
+      who: (entry.who || []).slice(), at: typeof entry.at === 'number' ? entry.at : 0, page: page };
   }
 
   function noop() {}
@@ -176,7 +206,7 @@
   /* One transaction; resolves with the request's result once it has committed. */
   function idb(mode, work) {
     return openDatabase().then(function (handle) {
-      if (!handle) throw new Error('IndexedDB is not available here');
+      if (!handle) { var absent = new Error('IndexedDB is not available here'); absent.code = 'IDB_UNAVAILABLE'; throw absent; }
       return new Promise(function (resolve, reject) {
         var tx, request;
         try {
@@ -200,10 +230,34 @@
     try { s.setItem(LOCAL + entry.key, JSON.stringify(entry)); return true; } catch (e) { return false; }
   }
 
-  function localRead(name) {
-    var s = local();
-    if (!s) return null;
-    try { return JSON.parse(s.getItem(name)); } catch (e) { return null; }
+  // Synchronous lifecycle writes can run while an independent IDB copy is
+  // still uncommitted. Reusing that mutable fallback first would erase its
+  // only words if the pending copy later aborts. This extra snapshot is scoped
+  // to handoffs, never every ordinary local-only keystroke.
+  function putFallback(entry) {
+    if (entry.key !== keyOf(entry.path)) return localPut(entry);
+    var previous;
+    try { previous = localRead(LOCAL + entry.key, true); } catch (e) { return false; }
+    if (!previous) return localPut(entry);
+    if (!valid(previous) || previous.path !== entry.path || previous.who && !Array.isArray(previous.who)) return false;
+    var signature = snapshotSignature(previous);
+    if (signature === snapshotSignature(entry)) return localPut(entry);
+    // A rejected older flight must not replace a newer synchronous journal,
+    // including equal-clock snapshots when a later store is already in air.
+    if ((previous.at || 0) > (entry.at || 0) || previous.at === entry.at && inAir && inAir !== entry) return false;
+    var guard = handoffs[entry.path];
+    if (guard && !guard.copies[signature]) {
+      var copy = independentCopy(previous, 'lifecycle');
+      if (!localPut(copy)) return false;
+      guard.copies[signature] = copy; // setItem completed before mutable reuse.
+    }
+    return localPut(entry);
+  }
+
+  function localRead(name, strict) {
+    var s;
+    try { s = global.localStorage; return s ? JSON.parse(s.getItem(name)) : null; }
+    catch (e) { if (strict) throw e; return null; }
   }
 
   function localDrop(name) {
@@ -212,17 +266,17 @@
     try { s.removeItem(name); } catch (e) { /* nothing to drop */ }
   }
 
-  function localAll() {
-    var s = local(), out = [], names = [];
-    if (!s) return out;
-    try { for (var i = 0; i < s.length; i++) names.push(s.key(i)); } catch (e) { return out; }
+  function localAll(strict) {
+    var s, out = [], names = [];
+    try { s = global.localStorage; if (!s) return out; for (var i = 0; i < s.length; i++) names.push(s.key(i)); }
+    catch (e) { if (strict) throw e; return out; }
     names.forEach(function (name) {
       if (typeof name !== 'string') return;
       if (name.indexOf(LOCAL) === 0) {
-        var entry = localRead(name);
+        var entry = localRead(name, strict);
         if (valid(entry)) out.push(entry);
       } else if (name.indexOf(LEGACY) === 0) {
-        var old = localRead(name);
+        var old = localRead(name, strict);
         if (old && typeof old.markdown === 'string') {
           out.push({ key: name, path: name.slice(LEGACY.length), text: old.markdown, base: '',
             at: Date.parse(old.at) || 0, page: '', legacy: true });
@@ -232,31 +286,72 @@
     return out;
   }
 
-  /* Every entry in both stores, one per key, the newest copy of each. */
-  function everything() {
-    var fromLocal = localAll();
+  function snapshotSignature(entry) {
+    return JSON.stringify([entry.path, entry.text, entry.base || '', entry.who || [], entry.at || 0]);
+  }
+
+  /* A timestamp cannot choose between divergent physical-store revisions. */
+  function everything(strict) {
+    var fromLocal;
+    try { fromLocal = localAll(strict); } catch (e) { return Promise.reject(e); }
     return idb('readonly', function (s) { return s.getAll(); })
-      .then(function (rows) { return rows || []; }, function () { return []; })
+      .then(function (rows) { return rows || []; }, function (e) {
+        // A cached absent handle cannot later overwrite unread IndexedDB data.
+        // A failed read on an available handle can: never treat that as empty.
+        if (strict && e.code !== 'IDB_UNAVAILABLE') throw e;
+        return [];
+      })
       .then(function (rows) {
-        var byKey = {};
+        var seen = Object.create(null), out = [];
         rows.concat(fromLocal).forEach(function (entry) {
           if (!valid(entry)) return;
-          var had = byKey[entry.key];
-          if (!had || (entry.at || 0) > (had.at || 0)) byKey[entry.key] = entry;
+          var signature = JSON.stringify([entry.key, entry.page || '', !!entry.confirmed, snapshotSignature(entry)]);
+          if (!seen[signature]) { seen[signature] = true; out.push(entry); }
         });
-        return Object.keys(byKey).map(function (k) { return byKey[k]; });
+        return out;
       });
   }
 
   function remove(entry) {
-    if (entry.legacy) { localDrop(entry.key); return Promise.resolve(); }
-    localDrop(LOCAL + entry.key);
-    return idb('readwrite', function (s) { return s.delete(entry.key); }).then(noop, noop);
+    // localStorage has no compare-and-delete transaction. Only our own mutable
+    // key (or our unique immutable key) can be checked and removed in this task.
+    var ours = ownedKey(entry);
+    var localName = entry.legacy ? entry.key : LOCAL + entry.key;
+    var localCopy = localRead(localName);
+    if (ours && localCopy && snapshotSignature(localCopy) === snapshotSignature(entry)) localDrop(localName);
+    if (entry.legacy) return Promise.resolve(false);
+    var removed = false;
+    return idb('readwrite', function (s) {
+      var request = s.getAll();
+      request.onsuccess = function () {
+        var current = (request.result || []).find(function (e) { return e.key === entry.key; });
+        if (current && (current.page || '') === (entry.page || '') && snapshotSignature(current) === snapshotSignature(entry)) {
+          s.delete(entry.key); removed = true;
+        }
+      };
+      return request;
+    }).then(function () { return removed; }, function () { return false; });
+  }
+
+  function dismissed(entry, entries) {
+    // A canceled recovery may still finish an immutable clone under another
+    // key. Disposition follows the exact snapshot, never merely its source key
+    // or text (another writer's same-text work remains independent).
+    return entries.some(function (receipt) {
+      return receipt.confirmed && (receipt.key.indexOf('discarded|') === 0 || receipt.key.indexOf('saved|' + entry.path + '|') === 0) &&
+        snapshotSignature(receipt) === snapshotSignature(entry);
+    });
   }
 
   function tell(entry, ok) {
-    if (ok) receipts[entry.path] = { text: entry.text, at: entry.at };
-    else delete receipts[entry.path];
+    if (ok && entry.page === PAGE) ownedPaths[entry.path] = true;
+    if (ok) {
+      var previous = receipts[entry.path];
+      // Byte storage is new at ACK commit; that is not new typing/selection.
+      var activity = entry.key === 'saved|' + entry.path ? 0 : entry.at || 0;
+      if (previous && previous.text === entry.text) activity = Math.max(activity, previous.activity || 0);
+      receipts[entry.path] = { text: entry.text, at: acknowledgement(entry) ? Date.now() : entry.at, activity: activity };
+    } else delete receipts[entry.path];
     if (Castor.bus && Castor.bus.emit) Castor.bus.emit('keep:written', { path: entry.path, ok: ok });
   }
 
@@ -264,21 +359,30 @@
      than what IndexedDB now holds is dropped, a newer one is left alone. */
   function store(entry) {
     inAir = entry;
-    var flight = queue(function () {
+    var flight = queue(function () { return write(entry); });
+    return Castor.saveStatus ? Castor.saveStatus.track(flight) : flight;
+  }
+
+  // Called within the journal queue so a multi-copy handoff cannot interleave writes.
+  function write(entry) {
+    var guard = handoffs[entry.path], mutable = entry.key === keyOf(entry.path);
+    var prepared = guard && mutable ? everything(true).then(function (entries) { return protectCurrent(entry.path, entries); }, function () { return false; }) : Promise.resolve(true);
+    return prepared.then(function (ok) {
+      if (!ok) return false;
       return idb('readwrite', function (s) { return s.put(entry); }).then(function () {
         var copy = localRead(LOCAL + entry.key);
-        if (copy && (copy.at || 0) <= entry.at) localDrop(LOCAL + entry.key);
+        // Only this page's mutable/immutable keys, or already server-backed
+        // ACKs, may be cleaned; foreign pending words are never deleted here.
+        if (copy && (ownedKey(entry) && snapshotSignature(copy) === snapshotSignature(entry) || acknowledgement(entry) && acknowledgement(copy))) localDrop(LOCAL + entry.key);
         return true;
-      }, function () {
-        return localPut(entry);
-      }).then(function (ok) {
-        if (inAir === entry) inAir = null;
-        healthy = ok;
-        tell(entry, ok);
-        return ok;
-      });
+      }, function () { return putFallback(entry); });
+    }).then(function (ok) {
+      if (inAir === entry) inAir = null;
+      healthy = ok;
+      tell(entry, ok);
+      if (ok && mutable && handoffs[entry.path] && !handoffs[entry.path].active) delete handoffs[entry.path];
+      return ok;
     });
-    return Castor.saveStatus ? Castor.saveStatus.track(flight) : flight;
   }
 
   /* --- what app.js calls ---------------------------------------------------- */
@@ -320,41 +424,102 @@
     if (entry) store(entry);
     var pending = entry || inAir;
     if (!pending) return healthy;
-    var copied = localPut(pending);
-    return copied || healthy;
+    var copied = putFallback(pending);
+    if (copied && pending.page === PAGE) ownedPaths[pending.path] = true;
+    // Even a same-text mutable receipt can be erased by an older outstanding
+    // write. Only this completed synchronous copy can certify pending closing.
+    return copied;
   }
 
-  /* The server holds exactly `text` for `path`: every entry with that text goes. */
+  // Only ACK text is already known to exist on the server. Its reserved keys
+  // may be bounded even when another page concurrently replaces an ACK there;
+  // this permission NEVER applies to pending writing or Discard archives.
+  function removeAcknowledgement(entry) {
+    var current = localRead(LOCAL + entry.key);
+    if (acknowledgement(entry) && acknowledgement(current)) localDrop(LOCAL + entry.key);
+    return remove(entry);
+  }
+
+  /* One exact latest ACK per article/primary writer, in the existing namespace.
+     Replacing an older ACK cannot lose sole words: both were server-confirmed.
+     An old late clone may reappear after replacement; keep its bytes, rather
+     than fill the device with a full-text receipt for every ordinary save. */
   function confirm(path, text, writer) {
     if (queued && queued.path === path) now();
-    return queue(function () {
-      return everything().then(function (entries) {
-        return Promise.all(entries.filter(function (e) {
-          var first = e.who && e.who[0];
-          return e.path === path && e.text === text && (!writer || (typeof first === 'string' ? first : first && first.id) === writer);
-        }).map(remove));
+    var flight = queue(async function () {
+      var entries = await everything();
+      var accepted = entries.filter(function (e) {
+        return !e.confirmed && e.path === path && e.text === text && (!writer || writerOf(e) === writer);
       });
-    }).then(function () {
-      return store({ key: 'saved|' + path, path: path, text: text, base: '', at: Date.now(), page: '', confirmed: true });
+      if (!accepted.length && !writer) {
+        // No source revision and no verified writer: do not invent an
+        // unscoped receipt, nor prune any existing writing or ACK. An already
+        // exact server ACK may still prove these bytes on this device.
+        var existing = entries.find(function (e) { return acknowledgement(e) && e.path === path && e.text === text; });
+        if (existing) tell(existing, true);
+        return true;
+      }
+      var latest = Object.create(null);
+      accepted.forEach(function (entry) { var id = writerOf(entry); if (!latest[id] || (entry.at || 0) > (latest[id].at || 0)) latest[id] = entry; });
+      if (!accepted.length) latest[writer || ''] = { path: path, text: text, base: '', who: writer ? [writer] : [], at: 0 };
+      for (var id of Object.keys(latest)) {
+        var chosen = latest[id], key = 'saved|' + path + '|writer-' + encodeURIComponent(id);
+        // Prune only obsolete ACK keys (including older per-revision
+        // ACKs). In-place replacement needs no growing localStorage budget.
+        for (var old of entries) if (acknowledgement(old) && old.path === path && writerOf(old) === id && old.key !== key) await removeAcknowledgement(old);
+        if (!await write({ key: key, path: path, text: text, base: chosen.base || '', who: (chosen.who || []).slice(),
+          at: chosen.at || 0, page: '', confirmed: true })) return false;
+      }
+      for (var entry of accepted) await remove(entry);
+      return true;
+    });
+    return Castor.saveStatus ? Castor.saveStatus.track(flight) : flight;
+  }
+
+  function unverifiedLegacy(entry, entries) {
+    if (entry.confirmed) return false;
+    // The released fixed receipt proves bytes, not this writer/revision. Keep
+    // ambiguous old copies available as history; never silently ACK them all.
+    return entries.some(function (receipt) {
+      return receipt.confirmed && receipt.key === 'saved|' + entry.path && receipt.text === entry.text &&
+        (!receipt.at || !entry.at || entry.at <= receipt.at);
     });
   }
 
   function shape(entry, open) {
-    return {
+    var copyOwner = /^copy-([a-z0-9]+)-/.exec(String(entry.page || ''));
+    var owner = copyOwner ? copyOwner[1] : entry.page;
+    var result = {
       key: entry.key, path: entry.path, text: entry.text, base: entry.base || '', who: entry.who || [], at: entry.at || 0,
       page: entry.page || '', legacy: !!entry.legacy,
       mine: entry.page === PAGE,
-      live: !!entry.page && entry.page !== PAGE && !!open[entry.page]
+      live: !!owner && owner !== PAGE && !!open[owner]
     };
+    if (entry.confirmed) result.confirmed = true;
+    return result;
   }
 
   /* Every entry for one article, newest first. `live` marks an entry another
      open page is still writing; `mine` one this page wrote. */
-  function list(path) {
+  function list(path, options) {
+    options = options || {};
     return queue(function () {
-      return Promise.all([everything(), openPages()]).then(function (got) {
-        return got[0].filter(function (e) { return (path === undefined || e.path === path) && !e.confirmed; })
-          .map(function (e) { return shape(e, got[1]); })
+      return Promise.all([everything(!!options.strict), openPages()]).then(function (got) {
+        return got[0].filter(function (e) {
+          if (path !== undefined && e.path !== path) return false;
+          if (options.includeKept) return !e.confirmed || e.key.indexOf('discarded|') === 0;
+          // The application can request acknowledged matching-text evidence
+          // for age checks without exporting it as pending writing by default.
+          // The fixed saved|path time is an acknowledgement time, NOT a
+          // typing time. Only captured-revision receipts supply age evidence.
+          if (e.confirmed) return !!options.includeEvidence && (e.key.indexOf('discarded|') === 0 || e.key.indexOf('saved|' + e.path + '|') === 0);
+          return !dismissed(e, got[0]);
+        })
+          .map(function (e) {
+            var result = shape(e, got[1]);
+            if (unverifiedLegacy(e, got[0])) Object.defineProperty(result, 'unverified', { value: true });
+            return result;
+          })
           .sort(function (a, b) { return b.at - a.at; });
       });
     });
@@ -371,36 +536,98 @@
     });
   }
 
-  /* An entry left by a closed page becomes this page's: written under this
-     page's key first, then the old key goes. */
-  function adopt(entry) {
-    if (!entry || entry.mine) return Promise.resolve(true);
-    var copy = { key: keyOf(entry.path), path: entry.path, text: entry.text, base: entry.base || '', who: entry.who || [],
-      at: entry.at || Date.now(), page: PAGE };
-    return store(copy).then(function (ok) {
-      if (!ok) return false;
-      return queue(function () { return remove(entry); }).then(function () { return true; });
+  function independent(entry) { return /^copy-[a-z0-9]+-/.test(String(entry.page || '')); }
+
+  // Immutable copies never share a writer's next mutable journal destination.
+  async function protect(entry, entries, label) {
+    var signature = snapshotSignature(entry);
+    var guard = handoffs[entry.path];
+    var existing = entries.find(function (e) { return !e.confirmed && independent(e) && snapshotSignature(e) === signature; }) || guard && guard.copies[signature];
+    if (existing) { if (guard) guard.copies[signature] = existing; tell(existing, true); return true; }
+    var copy = independentCopy(entry, label);
+    if (!await write(copy)) {
+      // A lifecycle callback may have synchronously committed the same exact
+      // snapshot under another immutable key while this IDB attempt waited.
+      var emergency = guard && guard.copies[signature];
+      if (!emergency) return false;
+      healthy = true; tell(emergency, true); entries.push(emergency); return true;
+    }
+    if (guard) guard.copies[signature] = copy;
+    entries.push(copy);
+    return true;
+  }
+
+  async function protectCurrent(path, entries) {
+    var current = entries.filter(function (e) { return e.key === keyOf(path) && !e.confirmed; });
+    for (var previous of current) if (!await protect(previous, entries)) return false;
+    return true;
+  }
+
+  // A server baseline is also a handoff: later typing must not overwrite an
+  // older own draft merely because that draft has a different Git base.
+  function preserveCurrent(path, observedOwn) {
+    if (!ownedPaths[path] && !observedOwn) return Promise.resolve(true);
+    var guard = beginHandoff(path);
+    return queue(async function () {
+      var ok = false;
+      try { ok = await protectCurrent(path, await everything(true)); return ok; }
+      catch (e) {
+        healthy = false;
+        if (Castor.bus && Castor.bus.emit) Castor.bus.emit('keep:written', { path: path, ok: false });
+        return false;
+      } finally { endHandoff(path, guard, ok); }
     });
+  }
+
+  /* Adoption protects both sides, without replacing a mutable key or deleting
+     a source that another page may resume writing at any moment. */
+  function adopt(entry) {
+    if (!entry) return Promise.resolve(false);
+    var guard = beginHandoff(entry.path);
+    var flight = queue(async function () {
+      var ok = false;
+      try {
+        var entries = await everything(true);
+        if (!await protectCurrent(entry.path, entries)) return false;
+        ok = await protect(entry, entries); return ok;
+      } catch (e) { healthy = false; tell(entry, false); return false; }
+      finally { endHandoff(entry.path, guard, ok); }
+    });
+    return Castor.saveStatus ? Castor.saveStatus.track(flight) : flight;
   }
 
   /* The writer chose Discard. */
   function discard(entry) {
-    if (!entry || !entry.key) return Promise.resolve();
-    if (queued && entry.mine && queued.path === entry.path) { clearTimeout(timer); timer = 0; queued = null; }
-    return queue(function () { return remove(entry); });
+    if (!entry || !entry.key) return Promise.resolve(false);
+    return queue(async function () {
+      var entries = await everything(true);
+      var prefix = 'discarded|' + encodeURIComponent(entry.key) + '|';
+      var receipt = entries.find(function (e) { return e.confirmed && e.key.indexOf('discarded|') === 0 && snapshotSignature(e) === snapshotSignature(entry); });
+      if (!receipt) {
+        var page = copyPage('discarded');
+        receipt = { key: prefix + page, path: entry.path, text: entry.text,
+          base: entry.base || '', who: (entry.who || []).slice(), at: typeof entry.at === 'number' ? entry.at : 0, page: page, confirmed: true };
+        if (!await write(receipt)) return false;
+      }
+      await remove(entry);
+      return true;
+    });
   }
 
   /* A recovery import adds independent copies. Existing entries and receipts
      are never replaced, and opening still compares the original base revision. */
   async function importCopies(entries, importId) {
-    var copies = entries.map(function (entry, index) {
+    var copies = entries.map(function (entry) {
       if (!entry || typeof entry.text !== 'string' || typeof entry.base !== 'string' || !Array.isArray(entry.who) ||
           !/^articles\/[A-Za-z0-9._-]+\/(?:article\.md|drafts\/[A-Za-z0-9._/-]+\.md)$/.test(entry.path) || /(?:^|\/)\.\.(?:\/|$)/.test(entry.path)) throw Error('Invalid recovery writing.');
-      var page = 'recovery-' + (importId ? importId + '-' + index : global.crypto.randomUUID());
-      return { key: page + '|' + entry.path, page: page, path: entry.path, text: entry.text, base: entry.base, who: entry.who.slice(), at: entry.at || Date.now() };
+      return { path: entry.path, text: entry.text, base: entry.base, who: entry.who.slice(), at: typeof entry.at === 'number' ? entry.at : 0 };
     });
-    for (var copy of copies) if (!await store(copy)) throw Error('This device could not retain every recovered copy. Keep the recovery file.');
-    return copies.length;
+    var flight = queue(async function () {
+      var existing = await everything();
+      for (var copy of copies) if (!await protect(copy, existing, importId)) throw Error('This device could not retain every recovered copy. Keep the recovery file.');
+      return copies.length;
+    });
+    return Castor.saveStatus ? Castor.saveStatus.track(flight) : flight;
   }
 
   Castor.keep = {
@@ -414,9 +641,10 @@
     snapshot: snapshot,
     mine: mine,
     adopt: adopt,
+    preserveCurrent: preserveCurrent,
     discard: discard,
     importCopies: importCopies,
-    receipt: function (path, text) { var r = receipts[path]; return r && r.text === text ? r.at : 0; },
+    receipt: function (path, text, options) { var r = receipts[path]; return r && r.text === text ? options && options.activity ? r.activity || 0 : r.at : 0; },
     healthy: function () { return healthy; }
   };
 })(typeof window !== 'undefined' ? window : this);

@@ -13,7 +13,8 @@
       function (error) { activity(-1); throw error; });
   }
   function time(at) {
-    return at ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+    // 24-hour, as the rest of the app (Versions): never "03:41:01 PM" in an American-language browser.
+    return at ? new Date(at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
   }
   function describe(s) {
     var current = s.current === true;
@@ -22,7 +23,9 @@
     var shared = history && !!(s.shared && s.shared.ok === true && s.shared.at);
     var sharedFailed = history && !shared && !!(s.shared && s.shared.failed === true);
     var lastConfirmed = s.shared && s.shared.last_confirmed_at;
-    var word = s.saving ? 'Saving…' : !current ? (device ? 'Kept on this device' : 'Saving…')
+    // Words typed since the last save are saving: the pause before it is part of saving. "Kept on
+    // this device" is for words that cannot reach the server (offline), below.
+    var word = s.saving || !current ? 'Saving…'
       : !history ? 'Checking…' : !shared ? (sharedFailed ? 'Not backed up' : 'Checking backup…') : !device ? 'Kept in history' : 'Saved';
     var rows = [
       { ok: device, label: 'On this device', detail: device ? time(s.deviceAt) : 'Waiting for this browser to keep a copy.' },

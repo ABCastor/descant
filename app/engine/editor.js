@@ -68,7 +68,20 @@
   var instanceCount = 0;
   function createEditor(role) {
   var isArticle = role === 'article';
-  var bus = isArticle ? Castor.bus : privateBus();
+  var made = isArticle ? Castor.bus : privateBus();
+  // app.js puts its own bus in Castor.bus after this file has loaded and made the article editor,
+  // and every module listens there. The article speaks on the live one too, or none of them hears
+  // its edits (the bar's heading and undo, the word count, publication, comments); a module that
+  // listens on the first bus still hears each event once.
+  var bus = !isArticle ? made : {
+    on: function (k, fn) { return made.on(k, fn); },
+    off: function (k, fn) { return made.off(k, fn); },
+    emit: function (k, payload) {
+      var live = Castor.bus;
+      if (live && live !== made && typeof live.emit === 'function') live.emit(k, payload);
+      return made.emit(k, payload);
+    }
+  };
   // An editor mounted inside this one (a comment composer or a side note on the
   // article page) owns its own events: this one ignores them.
   function foreign(node) {
@@ -123,21 +136,37 @@
 
   function headingLevel(type) { return /^h[1-6]$/.test(type) ? +type.slice(1) : 0; }
 
-  function renderInline(source) { return { html: MD().renderInline(source, { editSource: true }) }; }
+  function renderInline(source) { return { html: MD().renderInline(source, { editSource: true, showMarks: !!opts.showMarks }) }; }
   // Resolve from the current source, including edits made before the delayed
   // reparse. Focus and serialization must share the same reference authority.
-  var referenceContextSource = null, referenceContext = {};
+  var referenceContextKey = null, referenceContext = {};
   function currentReferences() {
-    var source = getSource();
-    if (source !== referenceContextSource) {
-      referenceContext = source.indexOf(']:') < 0 ? {} : MD().parse(source).references || {};
-      referenceContextSource = source;
+    var definitions = [], boundaries = [];
+    blocks.forEach(function (b, at) {
+      // Fences and raw blocks can hide a later definition even across a blank line.
+      var boundary = b.source.match(/(?:^|\n) {0,3}(?:`{3,}|~{3,}|---)[^\n]*|<\/?(?:script|pre|style|textarea)\b|<!--|-->|<\?|\?>|<!\[CDATA\[|\]\]>|<![A-Z]|>/gi);
+      if (boundary) boundaries.push([b.id, b.sep, b.source]);
+      if (b.source.indexOf(']:') < 0) return;
+      var context = b.source;
+      // A definition joined to prose is prose. Include those structural neighbours,
+      // but ordinary edits elsewhere cannot change the reference dictionary.
+      for (var i = at; i > 0; i--) {
+        var gap = typeof blocks[i].sep === 'string' ? blocks[i].sep : '\n\n';
+        if (!gap || /\n[ \t]*\n/.test(gap)) break;
+        context = blocks[i - 1].source + gap + context;
+      }
+      definitions.push([b.id, b.sep, context]);
+    });
+    var key = JSON.stringify([definitions, boundaries]);
+    if (key !== referenceContextKey) {
+      referenceContext = definitions.length ? MD().parse(getSource()).references || {} : {};
+      referenceContextKey = key;
     }
     doc.references = referenceContext;
     return referenceContext;
   }
   function liveHtml(block) {
-    var parsed = MD().parse(block.source, { editSource: true, showWriterNotes: opts.showWriterNotes !== false,
+    var parsed = MD().parse(block.source, { editSource: true, showMarks: !!opts.showMarks, showWriterNotes: opts.showWriterNotes !== false,
       footnoteNumbers: doc && doc.footnoteNumbers, footnotes: doc && doc.footnotes, references: currentReferences() });
     // A reference definition is all Markdown, so it would be all hidden marks: the
     // writer edits its plain source, dimmed by its block (definitionSource below).
@@ -190,7 +219,7 @@
   }
   // The paragraph text the site prints for such a stranded line.
   function strandedHtml(b, editing) {
-    return '<p>' + MD().renderInline(b.source, { editSource: !!editing, references: doc && doc.references }) + '</p>';
+    return '<p>' + MD().renderInline(b.source, { editSource: !!editing, showMarks: !!(editing && opts.showMarks), references: doc && doc.references }) + '</p>';
   }
   /* Such a block is written as source, like a code fence: what the writer types is
      what is saved, with no escape, no white-space span and no auto-closed pair. Only
@@ -219,6 +248,10 @@
     if (!Castor.md || !Castor.md.parse) throw new Error('Castor editor requires md.js before mount');
     return Castor.md;
   }
+  function showMarksOn(el, on) {
+    if (!el || !el.setAttribute) return;
+    if (on) el.setAttribute('data-marks', 'shown'); else if (el.removeAttribute) el.removeAttribute('data-marks');
+  }
 
   // Plain hosts use one text node; formatted hosts retain source runs and map
   // native text and element-boundary positions to Markdown offsets.
@@ -245,8 +278,9 @@
     }
     return out;
   }
+  // With the marks shown they are text like any other; only their line breaks stay hidden.
   function hiddenSource(node) {
-    return !!(node && node.parentElement && node.parentElement.closest('.cw-mk,.cw-atom'));
+    return !!(node && node.parentElement && node.parentElement.closest(node.parentElement.closest('[data-marks="shown"]') ? '.cw-mk-nl,.cw-atom' : '.cw-mk,.cw-atom'));
   }
   function interactionRuns(host) {
     return sourceNodes(host).filter(function (n) {
@@ -264,7 +298,12 @@
         if (child.nodeType === 1 && !hiddenSource(child) &&
             (/^(STRONG|EM|MARK|DEL|CODE|A|SUP|SUB|SPAN)$/.test(child.tagName) || /(?:^| )cw-atom(?: |$)/.test(child.className))) {
           if (offset === at || offset === end) {
-            if (!boundary) boundary = { node: parent, offset: index + (offset === end ? 1 : 0) };
+            // The end of a hard break's hidden run (its marks and new line, a quote's next "> ", a list
+            // item's indent) is the start of the next line: after its <br>, not before it, where
+            // Backspace would take the last letter of the line above.
+            var lineBreak = offset === end && /(?:^| )cw-mk(?: |$)/.test(child.className) && /\n/.test(child.textContent) &&
+              child.nextSibling && child.nextSibling.tagName === 'BR';
+            if (!boundary) boundary = { node: parent, offset: index + (offset === end ? (lineBreak ? 2 : 1) : 0) };
           }
         }
         if (child.nodeType === 1 && !boundary) visit(child, at);
@@ -559,7 +598,7 @@
     }
   }
 
-  function refreshRendered(b) {
+  function refreshRendered(b, references) {
     var md = MD();
     function keepHeadingIds(all) {
       syncHeadings();
@@ -579,7 +618,7 @@
     }
     /* the page's footnote numbers travel with the re-parse, or a block that loses
        focus renumbers its own note to 1 */
-    var sub = md.parse(b.source, { footnoteNumbers: doc && doc.footnoteNumbers, references: md.parse(getSource()).references });
+    var sub = md.parse(b.source, { footnoteNumbers: doc && doc.footnoteNumbers, references: references || currentReferences() });
     if (!sub.blocks.length) {
       // Enter can leave an empty head. It has no parsed HTML to replace the old cache.
       rawHtml[b.id] = rendered[b.id] = '';
@@ -616,12 +655,60 @@
     return wrap;
   }
 
+  /* A paragraph's own notes (%%words%%, [NAME: words]) are drawn in its reading view,
+     dimmed, as they are while he writes it, unless he turned notes off. rendered[] stays
+     what a reader gets, which decides whether a block is the writer's alone. The tap that
+     places the caret counts the characters he sees, notes included (tappedSourceOffset). */
+  var notedHtml = {};
+  function withNotes(b, html) {
+    var source = String(b && b.source || '');
+    if (opts.showWriterNotes === false || !html || (source.indexOf('%%') < 0 && !/\[[A-Z][A-Z0-9 ]+:/.test(source))) return html;
+    var hit = notedHtml[b.id];
+    if (hit && hit.source === source && hit.reader === html) return hit.out;
+    var out = html;
+    try {
+      var sub = MD().parse(source, { showWriterNotes: true, footnoteNumbers: doc && doc.footnoteNumbers, references: doc && doc.references });
+      var one = sub.blocks.length === 1 && sub.blocks[0], open = /^<([a-z0-9]+)\b[^>]*>/i, mine = open.exec(html), theirs = one && one.html && open.exec(one.html);
+      // The page's render owns the block's opening tag: its anchor id and its block id.
+      if (mine && theirs && mine[1].toLowerCase() === theirs[1].toLowerCase()) out = mine[0] + one.html.slice(theirs[0].length);
+    } catch (e) { out = html; }
+    notedHtml[b.id] = { source: source, reader: html, out: out };
+    return out;
+  }
+
+  // The words a reader reads in a drawn block: his notes and any shown marks left out.
+  // at[i] is the reader offset at drawn offset i; drawn[j] the drawn offset of reader character j.
+  // comments.js reads a block the same way (readerText there).
+  function readerText(root) {
+    var text = '', at = [0], drawn = [], seen = 0;
+    (function walk(node, hidden) {
+      if (node.nodeType === 3) {
+        var value = node.nodeValue || '';
+        for (var i = 0; i < value.length; i++, seen++) { if (!hidden) { text += value.charAt(i); drawn.push(seen); } at.push(text.length); }
+        return;
+      }
+      var kids = node.childNodes || [], name = typeof node.className === 'string' ? node.className : '';
+      var skip = hidden || /(?:^| )(?:writer-note|cw-mk)(?: |$)/.test(name);
+      for (var k = 0; k < kids.length; k++) walk(kids[k], skip);
+    })(root, false);
+    drawn.push(seen);
+    return { text: text, at: at, drawn: drawn };
+  }
+
   function writerNoteHtml(b) {
     var md = MD(), out = '';
     try { out = md.blockToHtml(b, { showWriterNotes: true }) || ''; } catch (e) { out = ''; }
     if (out.replace(/<[^>]*>/g, '').trim()) return out;
     // An empty note (`%%%%`) shows its markers, so the writer sees what the caret reaches.
     return esc(String(b.source || '').replace(/%%/g, '').trim() || String(b.source || '').trim());
+  }
+
+  /* With the marks shown, a block being read is drawn exactly as the mirror of a block
+     being written, marks and all, so placing the caret changes nothing on the page. */
+  function markedReadHtml(b) {
+    var html = liveHtml(b), id = /^<h[1-6]\b[^>]*\sid="([^"]*)"/.exec(String(rendered[b.id] || ''));
+    if (id) html = html.replace(/^(<h[1-6]\b[^>]*\s)id="[^"]*"/, function (m, head) { return head + 'id="' + id[1] + '"'; });
+    return '<div class="cw-editor-stack"><div class="cw-mirror cw-read">' + html + '</div></div>';
   }
 
   function focusedContents(wrap, b) {
@@ -705,7 +792,9 @@
       /* asked of what the block RENDERS, not of whether the string is empty: a
          `**[NAME: …]**` block renders `<strong></strong>`, which is a non-empty
          string and an empty paragraph on the page. */
-      wrap.innerHTML = !writerOnly(b) ? html
+      // With the marks shown a block is read as it is written, notes included; otherwise its notes are drawn in.
+      if (!writerOnly(b) && !opts.showMarks) html = withNotes(b, html);
+      wrap.innerHTML = !writerOnly(b) ? (opts.showMarks ? markedReadHtml(b) : html)
         : (opts.showWriterNotes === false ? ''
           : shown ? '<p>' + esc(b.source) + '</p>'
           : '<div class="cw-writer-only">' + writerNoteHtml(b) + '</div>');
@@ -713,7 +802,7 @@
     wrap.setAttribute('data-type', b.type);
     // A block painted afresh has lost every decoration others drew on it (comment
     // marks): say so, as the mirror does for the block being written.
-    if (b.id !== focusId && wrap.isConnected && Castor.bus && Castor.bus.emit) Castor.bus.emit('editor:paint', { blockId: b.id });
+    if (b.id !== focusId && wrap.isConnected && bus && bus.emit) bus.emit('editor:paint', { blockId: b.id });
   }
 
   function renderAll() {
@@ -724,9 +813,11 @@
       page.innerHTML = blocks.filter(visible).map(function (b) {
         var html = rendered[b.id] != null ? rendered[b.id] : MD().blockToHtml(b);
         var shown = writerOnly(b) && opts.showWriterNotes !== false && standsAsDefinition(b);
+        if (!writerOnly(b) && opts.showMarks) html = markedReadHtml(b);
         if (writerOnly(b)) html = opts.showWriterNotes === false ? ''
           : shown ? '<p>' + esc(b.source) + '</p>'
           : '<div class="cw-writer-only">' + writerNoteHtml(b) + '</div>';
+        else if (!opts.showMarks) html = withNotes(b, html);
         return '<div class="cw-block' + (shown ? ' cw-writer-source' + (unusedDefinition(b) ? ' cw-unused' : '') : '') + '" data-block-id="' + esc(b.id) + '" data-type="' + esc(b.type) + '">' + html + '</div>';
       }).join('');
       if (bus && bus.emit) bus.emit('editor:paint', {});
@@ -793,6 +884,7 @@
   }
 
   function setCaret(id, start, end, keepTypingStyle) {
+    if (typeof tapGuard !== 'undefined') tapGuard = null;
     var el = editOf(id); if (!el) return;
     if (!keepTypingStyle && typingStyles && (typingStyles.blockId !== id || typingStyles.at !== start || end != null && end !== start)) typingStyles = null;
     var b = blockOf(id); if (!b) return;
@@ -809,7 +901,7 @@
     } catch (err) {
       r.selectNodeContents(el); r.collapse(false);
     }
-    sel.removeAllRanges(); sel.addRange(r);
+    if (typeof selectionTurn !== 'undefined') selectionTurn++; sel.removeAllRanges(); sel.addRange(r);
     frameReads.invalidateSelection();
     rememberNativeCaret({ start: Math.min(start, end), end: Math.max(start, end) });
     if (document.activeElement !== el) el.focus({ preventScroll: true });
@@ -895,14 +987,15 @@
     });
     return out;
   }
-  function rectsBetween(host, a, b) {
+  // `edges` keeps boxes with no width: a space that ends a line hangs there with none.
+  function rectsBetween(host, a, b, edges) {
     var nodes = sourceNodes(host), rects = [];
     nodes.forEach(function (n) {
       if (hiddenSource(n.node) || n.at >= b || n.at + n.len <= a) return;
       var r = document.createRange();
       try { r.setStart(n.node, Math.max(0, a - n.at)); r.setEnd(n.node, Math.min(n.len, b - n.at)); }
       catch (e) { return; }
-      Array.prototype.forEach.call(r.getClientRects(), function (x) { if (x.height > 0 && x.width > 0) rects.push(x); });
+      Array.prototype.forEach.call(r.getClientRects(), function (x) { if (x.height > 0 && (x.width > 0 || edges)) rects.push(x); });
     });
     return rects;
   }
@@ -928,6 +1021,24 @@
     if (left == null && offset < len && data.charAt(offset) !== '\n') {
       rects = rectsBetween(text, offset, offset + 1);
       if (rects.length) { r = rects[0]; left = r.left; fontTop = r.top; fontHeight = r.height; }
+    }
+    // Nothing after it on the line: after a space that ends the line (it hangs there with no width).
+    if (left == null && offset > 0 && data.charAt(offset - 1) !== '\n') {
+      rects = rectsBetween(text, offset - 1, offset, true);
+      if (rects.length) { r = rects[rects.length - 1]; left = r.right; fontTop = r.top; fontHeight = r.height; }
+    }
+    // Beside an atom (a footnote number) with nothing visible on that side: the atom's edge, on the line
+    // of the nearest character before it, or of the atom itself when that character is on another line.
+    var atom = left == null && typeof atomAt === 'function' ? atomAt(host, offset) : null, edge = atom && atom.el.getBoundingClientRect();
+    if (edge && edge.height) {
+      for (var back = atom.start; back > 0 && left == null; back--) {
+        if (data.charAt(back - 1) === '\n') break;
+        rects = rectsBetween(text, back - 1, back);
+        if (rects.length) { r = rects[rects.length - 1]; left = offset === atom.end ? edge.right : edge.left; fontTop = r.top; fontHeight = r.height; }
+      }
+      if (left == null || Math.abs(fontTop + fontHeight / 2 - (edge.top + edge.bottom) / 2) > lineHeight * .75) {
+        left = offset === atom.end ? edge.right : edge.left; fontTop = edge.top; fontHeight = edge.height;
+      }
     }
     if (left == null && data.length && data.charAt(offset - 1) !== '\n') {
       for (var near = 1; near < data.length && left == null; near++) {
@@ -1215,7 +1326,7 @@
       } catch (err) { return; }
       if (next.collapsed) return;
       draggingHandle.range = next;
-      sel.removeAllRanges(); sel.addRange(next);
+      if (typeof selectionTurn !== 'undefined') selectionTurn++; sel.removeAllRanges(); sel.addRange(next);
       requestOverlay('navigate');
     }
     function up() {
@@ -1255,11 +1366,24 @@
       if (dy < bestDy) bestDy = dy;
       cands.push({ i: i, rect: rc, dy: dy });
     }
+    // An atom (a footnote number, a label) has no character of its own to measure: its box is one,
+    // with the source before it on its left and the source after it on its right.
+    var atoms = [];
+    Array.prototype.forEach.call(host.querySelectorAll ? host.querySelectorAll('.cw-atom') : [], function (a) {
+      var parent = a.parentNode, at = parent ? domOffset(host, parent, Array.prototype.indexOf.call(parent.childNodes, a)) : null;
+      var box = at == null ? null : a.getBoundingClientRect();
+      if (!box || !box.height || at + a.textContent.length < lo || at > hi) return;
+      var dy = y < box.top ? box.top - y : (y > box.bottom ? y - box.bottom : 0);
+      if (dy < bestDy) bestDy = dy;
+      atoms.push({ start: at, end: at + a.textContent.length, rect: box, dy: dy });
+    });
     var line = cands.filter(function (c) { return c.dy <= bestDy + .5; });
-    if (!line.length) return approx;
+    var atomLine = atoms.filter(function (c) { return c.dy <= bestDy + .5; });
+    if (!line.length && !atomLine.length) return approx;
     var bounds = line.map(function (c) { return { off: c.i, x: c.rect.left, w: c.rect.width }; });
     var tail = line[line.length - 1];
-    bounds.push({ off: tail.i + 1, x: tail.rect.right, w: tail.rect.width });
+    if (tail) bounds.push({ off: tail.i + 1, x: tail.rect.right, w: tail.rect.width });
+    atomLine.forEach(function (c) { bounds.push({ off: c.start, x: c.rect.left }, { off: c.end, x: c.rect.right }); });
     var pick = bounds[0], dx = Math.abs(x - bounds[0].x), d;
     for (i = 1; i < bounds.length; i++) {
       d = Math.abs(x - bounds[i].x);
@@ -1325,7 +1449,7 @@
     try { r.setStart(pa.node, pa.offset); r.setEnd(pb.node, pb.offset); }
     catch (e) { return false; }
     var sel = global.getSelection();
-    sel.removeAllRanges(); sel.addRange(r);
+    if (typeof selectionTurn !== 'undefined') selectionTurn++; sel.removeAllRanges(); sel.addRange(r);
     frameReads.invalidateSelection();
     return true;
   }
@@ -1356,6 +1480,16 @@
     if (revealTimer) global.clearTimeout(revealTimer);
     revealTimer = 0; revealPending = false; revealNotBefore = 0; focusScroll = null;
   }
+  // A finger that scrolls anything, anywhere (the article, the margins beside it, a panel, a bar), is
+  // the writer's own scroll, and so is a second finger (a pinch): the hold on the article's place and
+  // the one caret reveal give way to it at once, so a gesture begun right after a tap is never pulled back.
+  var anyTouchAt = null;
+  function anyTouch(e) {
+    var t = e.touches && e.touches[0];
+    if (e.type === 'touchstart' && e.touches && e.touches.length > 1) { anyTouchAt = null; fingerScrolled = true; cancelCaretReveal(); return; }
+    if (e.type === 'touchstart') { anyTouchAt = t ? { x: t.clientX, y: t.clientY } : null; return; }
+    if (anyTouchAt && t && (Math.abs(t.clientX - anyTouchAt.x) > 8 || Math.abs(t.clientY - anyTouchAt.y) > 8)) { anyTouchAt = null; fingerScrolled = true; cancelCaretReveal(); }
+  }
   function holdFocusScroll() {
     var scroll = page && page.closest && page.closest('.page-scroll');
     if (!scroll) return;
@@ -1377,6 +1511,8 @@
     var vv = global.visualViewport, box = scroll.getBoundingClientRect();
     var app = document.getElementById('app');
     var row = app && parseFloat(frameReads.style(app).getPropertyValue('--writing-row-bottom'));
+    // A top writing row (iPad) and the phone's floating bar never show together.
+    var bar = !row && app && parseFloat(frameReads.style(app).getPropertyValue('--writing-bar-top'));
     if (!row) {
       var topbar = document.querySelector('.topbar');
       row = topbar ? topbar.getBoundingClientRect().bottom : box.top;
@@ -1385,8 +1521,24 @@
     var keyboard = touch && vv && vv.height < global.innerHeight - 120;
     var top = Math.max(box.top, row) + (touch ? 16 : 0);
     var bottom = Math.min(box.bottom, vv ? vv.height + vv.offsetTop : global.innerHeight) - (keyboard ? 72 : touch ? 16 : 0);
+    if (bar) bottom = Math.min(bottom, bar - 16);
     var delta = g.lineTop < top ? g.lineTop - top : g.lineTop + g.lineHeight > bottom ? g.lineTop + g.lineHeight - bottom : 0;
     if (Math.abs(delta) > 0.5) scroll.scrollBy({ top: delta, behavior: 'smooth' });
+  }
+  // The keyboard finishing its rise after a tap's one reveal (a slow keyboard; the second tap after a
+  // launch, when iOS raises it late) is a reveal of its own: the line typed in comes up above it, unless
+  // a finger has scrolled the page since the tap. iOS reports the rise in steps: the visible viewport
+  // shrinks while the window is panned and its own height cut by the same amount, then the window is
+  // put back without a resize. So the keyboard is measured against the tallest view seen at this width,
+  // and the window's scroll, like a resize, renews the reveal still waiting, which then runs once all is still.
+  var keyboardWasUp = false, fingerScrolled = false, tallestView = {};
+  function keyboardMoved() {
+    var vv = global.visualViewport;
+    if (!vv) return;
+    var width = global.innerWidth || 0, full = tallestView[width] = Math.max(tallestView[width] || 0, global.innerHeight || 0, vv.height);
+    var up = coarsePointer() && vv.height < full - 120, opened = up && !keyboardWasUp;
+    keyboardWasUp = up;
+    if (revealPending || opened && !fingerScrolled && focusId && document.activeElement === editOf(focusId)) requestCaretReveal(false);
   }
   function requestCaretReveal(tap) {
     revealPending = true;
@@ -1397,6 +1549,40 @@
     // Keyboard geometry settles before the ONE visibility scroll. Resize events
     // renew this debounce only for the writer's outstanding tap/input intent.
     revealTimer = global.setTimeout(function () { revealTimer = 0; revealPending = false; undoFocusScroll(); focusScroll = null; revealCaret(); }, Math.max(80, revealNotBefore - Date.now()));
+  }
+
+  /* The paragraph the reader is looking at, and how far below the top of the window
+     it starts: the caret's when it is on screen, else the first one in view. */
+  function placeOnScreen(scroll, caret) {
+    var view = scroll === global ? { top: 0, bottom: global.innerHeight } : scroll.getBoundingClientRect();
+    var el = caret && elOf(caret.blockId), box = el && el.getBoundingClientRect();
+    if (!box || box.bottom <= view.top || box.top >= view.bottom) {
+      el = null;
+      var all = page.querySelectorAll('.cw-block');
+      for (var i = 0; i < all.length && !el; i++) {
+        box = all[i].getBoundingClientRect();
+        if (box.bottom > view.top) el = all[i];
+      }
+    }
+    return {
+      id: el && el.getAttribute('data-block-id'), y: el ? box.top - view.top : 0,
+      top: scroll === global ? global.scrollY || 0 : scroll.scrollTop,
+      left: scroll === global ? global.scrollX || 0 : scroll.scrollLeft
+    };
+  }
+  /* After the page is drawn again, that paragraph goes back to the same height on
+     screen. Drawing it again can also reset the scroll (WebKit does, with margin
+     notes in the page), so the move is computed from where it is now, and made at
+     once: the page's smooth scrolling would animate it, and WebKit drops that. */
+  function keepPlace(scroll, place) {
+    var el = place.id && elOf(place.id), top = place.top;
+    if (el) {
+      var viewTop = scroll === global ? 0 : scroll.getBoundingClientRect().top;
+      top = (scroll === global ? global.scrollY || 0 : scroll.scrollTop) + el.getBoundingClientRect().top - viewTop - place.y;
+    }
+    var host = scroll === global ? global : scroll;
+    if (host.scrollTo) host.scrollTo({ top: top, left: place.left, behavior: 'instant' });
+    else { host.scrollTop = top; host.scrollLeft = place.left; }
   }
 
   function scroller() {
@@ -1648,7 +1834,8 @@
     var top = scroll === global ? global.scrollY || 0 : scroll.scrollTop;
     blocks = s.blocks.map(function (b) { return { id: b.id, type: b.type, source: b.source, sep: b.sep, sepType: b.sepType, empty: b.empty }; });
     focusId = null;
-    blocks.forEach(function (b) { refreshRendered(b); });
+    var references = currentReferences();
+    blocks.forEach(function (b) { refreshRendered(b, references); });
     focusId = s.focusId && idx(s.focusId) >= 0 ? s.focusId : null;
     keyboardCaret = null;
     if (typeof literalRun !== 'undefined') literalRun = s.literalRun ? JSON.parse(JSON.stringify(s.literalRun)) : null;
@@ -1734,7 +1921,7 @@
     if (!selMenu || selMenu.hidden) return;
     var snapshot = frameReads.selection();
     if (!snapshot.range || snapshot.sel.isCollapsed) { hideSelMenu(); return; }
-    if (isArticle) showSelMenu(snapshot.range.getBoundingClientRect());   // a comment or a note has no Comment, Link or Ask menu
+    if (isArticle) offerSelMenu(snapshot.range);   // a comment or a note has no Comment, Link or Ask menu
   }
 
   function changed(skipReparse) {
@@ -2133,7 +2320,8 @@
       query: '',
       doc: doc,
       onPick: function (item) { applyPick(item); },
-      onCancel: function () { closePicker(true); }
+      onCancel: function () { closePicker(true); },
+      addresses: !!independent   // the Link tool also takes a web address; a typed [[ stays a link to a piece
     });
     if (!handle) return;
     var label = independent && end > start ? interactionRuns(editOf(id)).map(function (n) {
@@ -2144,8 +2332,8 @@
       var input = document.createElement('input');
       input.className = 'cw-link-query';
       input.type = 'text';
-      input.placeholder = 'Find a link';
-      input.setAttribute('aria-label', 'Find a link');
+      input.placeholder = 'Find a link or paste an address';
+      input.setAttribute('aria-label', 'Find a link or paste an address');
       input.autocomplete = 'off';
       input.value = label;
       handle.el.insertBefore(input, handle.el.firstChild);
@@ -2224,6 +2412,11 @@
     if (p.independent && p.label && /^\[\[[^]*\]\]$/.test(text)) {
       var target = text.slice(2, -2).split('|')[0];
       text = '[[' + target + (target === p.label ? '' : '|' + p.label) + ']]';
+    }
+    if (p.independent && item.url) {
+      replaceVisible(p.blockId, p.start, end, { kind: 'link', link: { wiki: false, target: item.url } }, 'pick');
+      if (p.handle) p.handle.close();
+      return;
     }
     if (p.independent) {
       var wiki = /^\[\[([^]*?)\]\]$/.exec(item.insert || '');
@@ -2311,6 +2504,18 @@
     m.style.top = Math.round(top) + 'px';
   }
   function hideSelMenu() { if (selMenu) { selMenu.hidden = true; selMenu.setAttribute('data-open', '0'); } }
+  // Words iOS selected in the paragraph being typed in (a double tap, its handles, its Select) get
+  // iOS's own Cut, Copy, Paste menu, and the page's would be a second menu beside it, so there
+  // iOS's is the one menu, as in Notes: typing is for editing, and Comment is a long press in reading
+  // mode. Reading mode, other paragraphs (the page's own selection) and a mouse keep the page's menu.
+  function systemMenuOver(range) {
+    var active = document.activeElement;
+    return !!(range && coarsePointer() && active && active.isContentEditable && page && page.contains(active) &&
+      active.contains(range.startContainer) && active.contains(range.endContainer));
+  }
+  function offerSelMenu(range) {
+    if (systemMenuOver(range)) hideSelMenu(); else showSelMenu(range.getBoundingClientRect());
+  }
   // A scroll or resize hides the menu where it stood; once the page is still it is back over the
   // words (N12): a long press iOS answers with a scroll still offers Comment.
   var menuReturn = 0;
@@ -2321,7 +2526,7 @@
     menuReturn = global.setTimeout(function () {
       menuReturn = 0;
       var snapshot = frameReads.selection();
-      if (isArticle && selAnchor && snapshot.range && !snapshot.sel.isCollapsed) showSelMenu(snapshot.range.getBoundingClientRect());
+      if (isArticle && selAnchor && snapshot.range && !snapshot.sel.isCollapsed) offerSelMenu(snapshot.range);
     }, 250);
   }
 
@@ -2353,6 +2558,13 @@
     var skip = at == null ? 0 : /^\s*/.exec(text.slice(at))[0].length;
     if (skip && text.slice(at, at + quote.length) !== quote && text.slice(at + skip, at + skip + quote.length) === quote) at += skip;
     if (at == null || text.slice(at, at + quote.length) !== quote) return null;
+    // His notes are drawn for him (withNotes) but are no words of the article: a passage is quoted
+    // as a reader reads it, so a reviewer's page finds it and no note is quoted to anyone.
+    var plain = readerText(textNode), words = plain.text.slice(plain.at[at], plain.at[at + quote.length]);
+    if (!words.trim()) return null;
+    var projected = plain.text !== text;
+    at = plain.at[at] + (projected ? /^\s*/.exec(words)[0].length : 0);
+    quote = projected ? words.trim() : words; text = plain.text;
     var md = MD();
     if (b && text === b.text && md.makeAnchor) {
       try { return withBlock(md.makeAnchor(doc, id, at, at + quote.length, version), id); } catch (e) { /* fall through */ }
@@ -2377,6 +2589,7 @@
       return;
     }
     frameReads.invalidateSelection();
+    if (typeof tapGuard !== 'undefined' && tapGuard) holdTapCaret();
     var sel = global.getSelection(), host = focusId && editOf(focusId);
     if (!composing && sel && sel.isCollapsed && host && host.contains(sel.anchorNode) && hiddenSource(sel.anchorNode)) {
       var off = domOffset(host, sel.anchorNode, sel.anchorOffset);
@@ -2398,9 +2611,12 @@
       return;
     }
     var a = anchorFromSelection(snapshot);
-    if (!a) { hideSelMenu(); return; }
+    if (!a) {
+      if (selAnchor) { selAnchor = null; if (opts.onSelect) opts.onSelect(null); }
+      hideSelMenu(); return;
+    }
     selAnchor = a;
-    if (isArticle) showSelMenu(snapshot.range.getBoundingClientRect());   // a comment or a note has no Comment, Link or Ask menu
+    if (isArticle) offerSelMenu(snapshot.range);   // a comment or a note has no Comment, Link or Ask menu
     if (opts.onSelect) opts.onSelect(a);
     if (bus && bus.emit) bus.emit('select', a);
   }
@@ -2431,11 +2647,72 @@
     if (id === focusId) return;               // native caret handling inside the raw host
     if (focusId) blurCurrent();               // so a drag can select across blocks
   }
+  // A hard break is drawn as a <br> with no character of its own, so in the reading view the end of
+  // one line and the start of the next read as the same offset, and with the marks hidden the
+  // browser puts or deletes around a break as if its source were not there. These find
+  // the break at a point and the source offset where the line after it starts.
+  // The <br> just before a point: right after it, or after only the collapsed new line that a
+  // backslash break leaves in front of the next line's words. Null when the point is elsewhere.
+  function lineBreakBefore(root, node, offset) {
+    var prev = null;
+    if (node.nodeType === 3) {
+      if (!/^\n*$/.test(node.nodeValue.slice(0, offset))) return null;
+      var n = node;
+      while (n !== root && n.parentNode && !n.previousSibling) n = n.parentNode;
+      prev = n === root ? null : n.previousSibling;
+    } else prev = node.childNodes[offset - 1] || null;
+    while (prev && prev.nodeType === 1 && prev.tagName !== 'BR' && prev.lastChild) prev = prev.lastChild;
+    return prev && prev.nodeType === 1 && prev.tagName === 'BR' ? prev : null;
+  }
+  function nextInOrder(n, root) {
+    if (n.firstChild) return n.firstChild;
+    for (; n && n !== root; n = n.parentNode) if (n.nextSibling) return n.nextSibling;
+    return null;
+  }
+  // The <br> of a hard break that follows visible run `node` with only hidden marks between them.
+  function breakAfter(root, node) {
+    for (var n = nextInOrder(node, root); n; n = nextInOrder(n, root)) {
+      if (n.nodeType === 1) {
+        if (n.tagName === 'BR') return n;
+        if (/(?:^| )cw-atom(?: |$)/.test(n.className)) return null;
+      } else if (n.nodeValue && !hiddenSource(n)) return null;
+    }
+    return null;
+  }
+  // Where the line after a hard break's <br> starts in the source: after the break's hidden marks,
+  // its new line and the next line's own marks (a quote's "> ", a list item's indent), which all
+  // come before the <br>, and after the collapsed new line of a backslash break, which follows it.
+  function lineStartAfterBreak(root, br) {
+    var parent = br.parentNode, at = domOffset(root, parent, Array.prototype.indexOf.call(parent.childNodes, br) + 1), next = br.nextSibling;
+    if (at != null && next && next.nodeType === 3 && !hiddenSource(next)) at += /^\n*/.exec(next.nodeValue)[0].length;
+    return at;
+  }
+  // Backspace at the start of the line after a hard break joins the two lines: the whole break goes
+  // (its marks, its new line, the next line's quote marker or indent) in one step. Read from the live
+  // caret: with the marks hidden the browser's own target there is the <br> alone, which changes no
+  // text, or the letter in front of the hidden marks, which would go instead. The source range,
+  // or null when the caret is not right after a hard break.
+  function hardBreakRange(id) {
+    var b = blockOf(id), c = caretSource(), host = editOf(id), sel = global.getSelection();
+    if (!b || !c || !host || c.end > c.start || !sel || !sel.focusNode || !host.contains(sel.focusNode)) return null;
+    var br = lineBreakBefore(host, sel.focusNode, sel.focusOffset), mark = br && br.previousSibling;
+    if (!mark || mark.nodeType !== 1 || !/(?:^| )cw-mk(?: |$)/.test(mark.className)) return null;
+    var parent = br.parentNode, index = Array.prototype.indexOf.call(parent.childNodes, br);
+    var end = domOffset(host, parent, index), lineStart = lineStartAfterBreak(host, br);
+    if (end == null || lineStart == null || c.start !== lineStart && c.start !== domOffset(host, parent, index + 1)) return null;
+    var from = end - mark.textContent.length;
+    // A list item's break is its spaces, then its new line and indent: two marks.
+    for (var m = mark.previousSibling; m && m.nodeType === 1 && /(?:^| )cw-mk(?: |$)/.test(m.className) && /^ +$/.test(m.textContent); m = m.previousSibling) from -= m.textContent.length;
+    return from >= 0 && b.source.slice(from, lineStart).indexOf('\n') >= 0 ? { start: from, end: lineStart } : null;
+  }
   function tappedSourceOffset(el, x, y) {
     var r = pointToCaret(x, y);
     if (!r || !el.contains(r.startContainer)) return null;
     var edit = el.querySelector('.cw-edit');
     if (edit) return offsetFromPoint(edit, x, y);
+    // A block drawn with its marks holds its whole source: the finger's place is the offset.
+    var marked = el.querySelector('.cw-mirror.cw-read');
+    if (marked && marked.contains(r.startContainer)) return domOffset(marked, r.startContainer, r.startOffset);
     // Count reading characters at the finger BEFORE installing an edit surface.
     var reading = document.createRange();
     reading.selectNodeContents(el); reading.setEnd(r.startContainer, r.startOffset);
@@ -2443,7 +2720,7 @@
     var b = blockOf(el.getAttribute('data-block-id')), temp = document.createElement('div');
     if (!b) return null;
     temp.innerHTML = liveHtml(b);
-    var nodes = sourceNodes(temp), seen = 0;
+    var nodes = sourceNodes(temp), seen = 0, lineStart = !!lineBreakBefore(el, r.startContainer, r.startOffset);
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i], atom = n.node.parentElement && n.node.parentElement.closest('.cw-atom');
       if (atom) {
@@ -2452,13 +2729,26 @@
         seen += label.length; continue;
       }
       if (hiddenSource(n.node)) continue;
-      if (seen + n.len >= count) return n.at + count - seen;
+      if (seen + n.len >= count) {
+        // A point right after a <br> starts the next line, after the break's source, not before it.
+        var br = lineStart && seen + n.len === count ? breakAfter(temp, n.node) : null, next = br && lineStartAfterBreak(temp, br);
+        return next != null ? next : n.at + count - seen;
+      }
       seen += n.len;
     }
     return b.source.length;
   }
   function passageTap(e, touch) {
-    if (e.target.closest && e.target.closest('.cw-subtitle,.footnote-ref,.cw-fnref')) return;
+    if (e.target.closest && e.target.closest('.cw-subtitle')) return;
+    var number = e.target.closest && e.target.closest('.footnote-ref,.cw-fnref');
+    if (number) {
+      // A footnote number opens its note, on its click. In the paragraph being typed in, the caret
+      // meanwhile stays beside the number, where the browser's own placement would not leave it.
+      var numbered = touch && focusId && number.closest('.cw-block');
+      var beside = numbered && numbered.getAttribute('data-block-id') === focusId ? tappedSourceOffset(numbered, e.clientX, e.clientY) : null;
+      if (beside != null && typeof guardTap === 'function') guardTap(focusId, beside);
+      return;
+    }
     if (opts && opts.readOnly) return;
     var el = e.target.closest ? e.target.closest('.cw-block') : null;
     if (!el) return;
@@ -2483,16 +2773,23 @@
     if (off == null) return;
     if (e.preventDefault) e.preventDefault();
     holdFocusScroll();
-    if (id !== focusId) focusBlock(id, off); else setCaret(id, off);
+    if (id !== focusId) {
+      focusBlock(id, off);
+      // Read in the reading view, the finger's place beside an atom is only its character count, the
+      // same on both sides of it: the side is where the finger is, measured once the words are typed in.
+      var side = typeof atomSide === 'function' ? atomSide(id, off, e.clientX, e.clientY) : off;
+      if (side !== off) { off = side; setCaret(id, off); }
+    } else setCaret(id, off);
     if (paddedIndex != null) {
       var paddedCell = editOf(id).querySelectorAll('td,th')[paddedIndex];
       var paddedRange = document.createRange(), paddedSelection = global.getSelection();
       paddedRange.setStart(paddedCell, 0); paddedRange.setEnd(paddedCell, 0);
-      paddedSelection.removeAllRanges(); paddedSelection.addRange(paddedRange);
+      if (typeof selectionTurn !== 'undefined') selectionTurn++; paddedSelection.removeAllRanges(); paddedSelection.addRange(paddedRange);
       frameReads.invalidateSelection();
     }
     undoFocusScroll();
     requestOverlay('navigate');
+    if (typeof fingerScrolled !== 'undefined') fingerScrolled = false;
     requestCaretReveal(true);
     // WebKit can replace the caret after touchend, including the first tap
     // before its keyboard opens. Leave an already correct native selection
@@ -2520,7 +2817,50 @@
         passageTap.selectionToken = null;
         if (!token.superseded && focusId === id && snap != null && snap !== off && caret && caret.start === snap && caret.end === snap) setCaret(id, off);
       });
+      // A finger on a footnote number or beside it is at a box the browser cannot put a caret in.
+      // Placing that tap itself, WebKit puts the caret at the start of the paragraph, where the next
+      // words would go unseen, and Chromium on the number's other side: the caret is the editor's
+      // for the rest of this tap.
+      if (typeof guardTap === 'function' && (inAtom(native && native.startContainer) || inAtom(e.target) || atomAt(host, off))) guardTap(id, off);
     }
+  }
+  // The atom (a footnote number, a label) that starts or ends at source offset `off`, with its extent.
+  function atomAt(host, off) {
+    var atoms = host && host.querySelectorAll ? host.querySelectorAll('.cw-atom') : [];
+    for (var i = 0; i < atoms.length; i++) {
+      var a = atoms[i], parent = a.parentNode, start = parent ? domOffset(host, parent, Array.prototype.indexOf.call(parent.childNodes, a)) : null;
+      if (start != null && (off === start || off === start + a.textContent.length)) return { el: a, start: start, end: start + a.textContent.length };
+    }
+    return null;
+  }
+  // The source offset on the finger's side of an atom that starts or ends at `off`, on the finger's line.
+  function atomSide(id, off, x, y) {
+    var atom = atomAt(editOf(id), off), box = atom && atom.el.getBoundingClientRect();
+    if (!box || !box.height || y < box.top - box.height || y > box.bottom + box.height) return off;
+    return x > (box.left + box.right) / 2 ? atom.end : atom.start;
+  }
+  function inAtom(node) {
+    var el = node && (node.nodeType === 1 ? node : node.parentElement);
+    return !!(el && el.closest && el.closest('.cw-atom,.footnote-ref'));
+  }
+  // The caret a tap asked for, held against the browser's own placement of the same tap: until the
+  // next touch, key or caret the editor sets, or 800 ms, a collapsed caret anywhere else in that
+  // paragraph, or none, goes back there. Focus that left for another field is left alone.
+  var tapGuard = null;
+  function guardTap(id, off) {
+    tapGuard = { id: id, off: off, touch: touchCount, until: Date.now() + 800 };
+  }
+  function holdTapCaret() {
+    var g = tapGuard;
+    if (!g) return;
+    if (g.touch !== touchCount || Date.now() > g.until || focusId !== g.id) { tapGuard = null; return; }
+    var host = editOf(g.id), el = elOf(g.id), active = document.activeElement, sel = global.getSelection();
+    if (!host || active && active !== host && active !== document.body && !(el && el.contains(active))) return;
+    if (sel && sel.rangeCount && !sel.isCollapsed) { tapGuard = null; return; }
+    var c = caretSource();
+    if (c && c.start === g.off && c.end === g.off) return;
+    setCaret(g.id, g.off);
+    tapGuard = g;
   }
   function onClick(e) {
     if (touchInput && Date.now() < suppressClickUntil) return;
@@ -2547,6 +2887,16 @@
     var t = e.touches[0];
     if (Math.abs(t.clientX - touchStart.x) > 8 || Math.abs(t.clientY - touchStart.y) > 8) { touchMoved = true; cancelCaretReveal(); }
   }
+  // The word around a source offset: letters and digits, with the apostrophes and hyphens inside
+  // a word, never Markdown's marks. Null on a space or a mark.
+  function wordAround(source, at) {
+    var part = /[\p{L}\p{N}\p{M}'’-]/u, start = at, end = at;
+    while (start > 0 && part.test(source.charAt(start - 1))) start--;
+    while (end < source.length && part.test(source.charAt(end))) end++;
+    while (start < end && /['’-]/.test(source.charAt(start))) start++;
+    while (end > start && /['’-]/.test(source.charAt(end - 1))) end--;
+    return end > start ? { start: start, end: end } : null;
+  }
   function onTouchEnd(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
     if (subtitle && subtitle.classList && subtitle.classList.contains('cw-subtitle')) return;
@@ -2561,8 +2911,24 @@
     if (touchMoved) return;
     // Read only: a tap never opens a block for typing, the same rule as a click.
     if (opts && opts.readOnly) return;
-    var t = e.changedTouches[0];
-    suppressClickUntil = Date.now() + 700;
+    var t = e.changedTouches[0], vv = global.visualViewport, now = Date.now(), last = onTouchEnd.lastTap;
+    // The touch's own time, not the moment the page gets to it: a busy page handles the second tap
+    // of a double tap late (well over a second late, though stamped 100 ms after the first).
+    var stamp = e.timeStamp > 0 ? e.timeStamp : now, gap = last ? stamp - last.at : -1;
+    suppressClickUntil = now + 700;
+    // With the keyboard up the page takes every tap itself (below). A second tap on the same word,
+    // soon, selects it, as a double tap does in any text field, instead of putting a caret over the
+    // word iOS selects for the same double tap (iOS does, with its own menu, whether or not the
+    // touches are prevented). That menu is then the only one: systemMenuOver.
+    onTouchEnd.lastTap = { at: stamp, x: t.clientX, y: t.clientY };
+    if (last && gap >= 0 && gap < 350 && Math.abs(t.clientX - last.x) < 24 && Math.abs(t.clientY - last.y) < 24 &&
+        vv && vv.height < global.innerHeight - 120) {
+      onTouchEnd.lastTap = null;
+      var tappedEl = e.target && e.target.closest ? e.target.closest('.cw-block') : null;
+      var at = tappedEl && focusId && tappedEl.getAttribute('data-block-id') === focusId ? tappedSourceOffset(tappedEl, t.clientX, t.clientY) : null;
+      var word = at == null ? null : wordAround(blockOf(focusId).source, at);
+      if (word) { if (e.cancelable) e.preventDefault(); setCaret(focusId, word.start, word.end); return; }
+    }
     passageTap({ target: e.target, clientX: t.clientX, clientY: t.clientY,
       preventDefault: function () {
         var vv = global.visualViewport;
@@ -2570,6 +2936,9 @@
       } }, true);
   }
 
+  // Each caret or selection the editor sets itself counts here, so a long press's pending hand-back of
+  // older words (ownSelection) gives way to it.
+  var selectionTurn = 0;
   // iOS draws its own handles and Copy menu over a selection it made, beside the page's own (N11),
   // and none over one the page set. In reading mode the page hands the same words back while they
   // cannot be selected for a moment; then they can be again, for the next long press. Typing keeps
@@ -2579,15 +2948,27 @@
     var active = document.activeElement;
     if (ownSelection.busy || active && active.isContentEditable && active.contains(range.startContainer)) return;
     ownSelection.busy = true;
-    var touch = touchCount;
+    var turnNow = function () { return typeof selectionTurn !== 'undefined' ? selectionTurn : 0; };
+    var touch = touchCount, turn = turnNow();
+    // The moment is his, and nothing is set, once a new touch began, the editor set a caret or words
+    // itself (selectionTurn), other words are selected (a menu, a key, an assistive action), or these
+    // words left the page (a remount). A selection merely dropped is not taken: see hold.
+    var taken = function (sel) {
+      return touch !== touchCount || turn !== turnNow() || !page.contains(range.startContainer) ||
+        !!(sel.rangeCount && !sel.isCollapsed && !sameRange(sel.getRangeAt(0), range));
+    };
     global.setTimeout(function () {
       var sel = global.getSelection();
-      if (!sel.rangeCount || sel.isCollapsed) { ownSelection.busy = false; return; }
+      if (!sel.rangeCount || sel.isCollapsed || taken(sel)) { ownSelection.busy = false; return; }
       // WebKit can drop the words as they become unselectable, once or more: the page sets them again,
-      // until the words can be selected again or a new touch begins.
-      var hold = function () { if (touch === touchCount && (!sel.rangeCount || sel.isCollapsed)) { sel.removeAllRanges(); sel.addRange(range); } };
+      // until the words can be selected again or the selection is taken.
+      var hold = function () { if (!taken(sel) && (!sel.rangeCount || sel.isCollapsed)) { sel.removeAllRanges(); sel.addRange(range); } };
       page.setAttribute('data-own-selection', '');
       global.requestAnimationFrame(function () {
+        if (taken(sel)) {
+          page.removeAttribute('data-own-selection'); ownSelection.busy = false;
+          return;
+        }
         sel.removeAllRanges(); sel.addRange(range);
         document.addEventListener('selectionchange', hold);
         global.setTimeout(function () {
@@ -2616,6 +2997,7 @@
         // the same Range ourselves; its raw Markdown anchor stays untouched.
         if (p && page.contains(p.node) && (pointerCrossed || !host.contains(p.node)) && (sel.setBaseAndExtent || sel.extend)) {
           if (e.preventDefault) e.preventDefault();
+          if (typeof selectionTurn !== 'undefined') selectionTurn++;
           if (sel.setBaseAndExtent) sel.setBaseAndExtent(pointerAnchor.node, pointerAnchor.offset, p.node, p.offset);
           else { sel.collapse(pointerAnchor.node, pointerAnchor.offset); sel.extend(p.node, p.offset); }
           pointerCrossed = true;
@@ -2669,6 +3051,11 @@
       var previousReferences = JSON.stringify(doc.references || {});
       currentReferences();
       if ((previousReferences !== JSON.stringify(doc.references || {}) || host.cwReferenceKey !== JSON.stringify(doc.references || {})) && !composing) updateMirror(elOf(id), b);
+    }
+    // Explicit formatting operates on reader characters, even while source marks are shown.
+    // A detached projection has no marks-shown ancestor, so its delimiters stay structural.
+    if (!surface && opts.showMarks) {
+      host = document.createElement('div'); host.innerHTML = liveHtml(b);
     }
     var source = b.source;
     // A terminal line break is trimmed by the block reader, so editingHtml
@@ -2737,6 +3124,28 @@
         pending = pending.filter(function (p) { return p.blockId !== id; }).concat(restored);
       }
       literalRun = action.kind === 'text' ? { blockId: id, source: next.source, caret: next.caret, escapes: (escapes || []).slice() } : null;
+      if (action.kind === 'text' && action.text === '%') closeTypedNote(next);
+    }
+    // A note he types is a note, as in the file: the % that closes %%words%% on a line makes
+    // the words a note, when only escapes this typing made (literalRun) keep its opening %% literal.
+    // The caret stays after the note, so what he types next is outside it. Never an escape he wrote.
+    function closeTypedNote(next) {
+      var b = blockOf(id), src = b && b.source, caret = next.caret;
+      if (!src || src !== next.source || src.slice(caret - 2, caret) !== '%%' || src.charAt(caret - 3) === '\\') return;
+      var line = src.lastIndexOf('\n', caret - 1) + 1, head = src.slice(line, caret - 2), re = /\\%(\\?)%/g, m, hit = null;
+      while ((m = re.exec(head))) hit = { at: line + m.index, end: line + m.index + m[0].length, two: !!m[1] };
+      if (!hit || !src.slice(hit.end, caret - 2).trim() || src.slice(hit.end, caret - 2).indexOf('%%') >= 0) return;
+      var drop = hit.two ? [hit.at, hit.at + 2] : [hit.at], made = literalRun.escapes;
+      if (!drop.every(function (at) { return made.indexOf(at) >= 0; })) return;
+      var note = src.split('').filter(function (_, i) { return drop.indexOf(i) < 0; }).join(''), at = caret - drop.length;
+      // A note is left out of what a reader sees; the literal spelling prints its words.
+      var read = function (text) { return MD().parse(text).blocks.map(function (x) { return x.html; }).join('').replace(/<[^>]*>/g, ''); };
+      if (read(note).length >= read(src).length) return;
+      applyEdit(id, 0, src.length, note, at);
+      var shift = function (pos) { return pos - drop.filter(function (d) { return d < pos; }).length; };
+      next.source = note; next.caret = at;
+      next.escapes = made.filter(function (pos) { return drop.indexOf(pos) < 0; }).map(shift);
+      literalRun = { blockId: id, source: note, caret: at, escapes: next.escapes.slice() };
     }
     function rawHTML(value) {
       return value.match(/(?<!\\)(?:\\\\)*(?:<!--(?:>|->|[^]*?-->)|<\?[^]*?\?>|<!\[CDATA\[[^]*?\]\]>|<![A-Za-z][^>]*>|<\/?[A-Za-z][A-Za-z0-9-]*(?:[ \t\r\n][^<>]*?)?\/?>)/g) || [];
@@ -4257,6 +4666,12 @@
   function deleteVisible(type, c, deferNative) {
     var host = editOf(focusId), b = blockOf(focusId);
     if (!host || !b) return false;
+    // (Suites that run deleteVisible on its own leave the hard-break helpers out.)
+    var hardBreak = /Backward$/.test(type) && typeof hardBreakRange === 'function' && hardBreakRange(focusId);
+    if (hardBreak) {
+      if (deferNative) return hardBreak;
+      pushUndo('delete'); applyEdit(focusId, hardBreak.start, hardBreak.end, '', hardBreak.start); return true;
+    }
     if (b.type === 'p' && b.source.includes('\n') && host.textContent === b.source && !host.querySelector('.cw-mk')) {
       var breakProjection = document.createElement('div');
       breakProjection.innerHTML = MD().renderInline(b.source, { editSource: true });
@@ -4323,6 +4738,95 @@
     replaceVisible(focusId, start, end, '');
     return true;
   }
+  /* With the marks shown, the writer edits the Markdown itself: what is typed or deleted is
+     exactly that text of the source, with no style carried, closed or escaped. A deletion at a
+     block's edge (joining blocks) and Enter keep their structural paths. An edit the browser
+     will not let the page cancel is read back from the host afterwards (sourceReconcile). */
+  // The source offset one user-perceived character before or after `at`: an emoji, a
+  // joined emoji or a letter with its accents is deleted whole, never split.
+  function graphemeStep(text, at, forward) {
+    if (global.Intl && Intl.Segmenter) {
+      var edges = [0], it = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)[Symbol.iterator](), s;
+      while (!(s = it.next()).done) edges.push(s.value.index + s.value.segment.length);
+      for (var i = 0; i < edges.length; i++) {
+        if (forward && edges[i] > at) return edges[i];
+        if (!forward && edges[i] >= at) return edges[Math.max(0, i - 1)];
+      }
+      return forward ? text.length : 0;
+    }
+    // Without it: whole code points, their accents and variation selectors, and emoji joined by U+200D.
+    var mark = /[\u0300-\u036f\u1ab0-\u1aff\u20d0-\u20ff\ufe00-\ufe0f]/, low = /[\udc00-\udfff]/, zwj = '\u200d';
+    if (forward) {
+      for (;;) {
+        at++; while (at < text.length && (low.test(text.charAt(at)) || mark.test(text.charAt(at)))) at++;
+        if (at < text.length - 1 && text.charAt(at) === zwj) { at++; continue; }
+        return Math.min(at, text.length);
+      }
+    }
+    for (;;) {
+      at--; while (at > 0 && (low.test(text.charAt(at)) || mark.test(text.charAt(at)))) at--;
+      if (at > 1 && text.charAt(at - 1) === zwj) { at--; continue; }
+      return Math.max(at, 0);
+    }
+  }
+  // Atoms remain indivisible, including a selection that touches only part of one.
+  function sourceRange(id, start, end) {
+    var b = blockOf(id), host = editOf(id), atoms = [];
+    if (!b || !host) return { start: start, end: end };
+    if (host.textContent !== b.source) { host = document.createElement('div'); host.innerHTML = liveHtml(b); }
+    sourceNodes(host).forEach(function (n) {
+      var atom = n.node.parentElement && n.node.parentElement.closest('.cw-atom');
+      if (!atom) return;
+      var part = atoms.find(function (a) { return a.node === atom; });
+      if (part) part.end = n.at + n.len;
+      else atoms.push({ node: atom, start: n.at, end: n.at + n.len });
+    });
+    atoms.forEach(function (a) { if (start < a.end && end > a.start) { start = Math.min(start, a.start); end = Math.max(end, a.end); } });
+    return { start: start, end: end };
+  }
+  function sourceEdit(id, start, end, text, history) {
+    var range = sourceRange(id, start, end);
+    if (text && typingStyles && typingStyles.blockId === id && typingStyles.at === start) return replaceVisible(id, range.start, range.end, text, history);
+    if (history !== false) pushUndo(history || (text ? range.end > range.start ? 'replace' : 'type' : 'delete'));
+    var caret = range.start + text.length;
+    applyEdit(id, range.start, range.end, text, caret);
+    return { caret: caret };
+  }
+  function sourceInput(e, t, range, live) {
+    var b = blockOf(focusId);
+    // From a caret, a deletion is of the source next to it. The browser's target skips
+    // what it does not paint (a mark's line break, trailing spaces), so it is not used.
+    if (/^delete/.test(t || '') && live && live.start === live.end) range = live;
+    if (!b || !range || !/^(insertText|insertReplacementText|deleteByCut|delete(?:Content|Word)(?:Backward|Forward))$/.test(t || '')) return false;
+    if (t === 'deleteByCut' && range.start === range.end) return false;
+    // A deletion at the block's edge joins blocks: the structural path owns it, with or without marks.
+    if (range.start === range.end && (/Backward$/.test(t) ? range.start === 0 : /Forward$/.test(t) && range.end >= b.source.length)) return false;
+    if (e.cancelable === false) { nativeIntent = { sourceMarks: true, started: global.performance && performance.now ? performance.now() : Date.now() }; pushUndo(/^delete/.test(t) ? 'delete' : 'type'); return true; }
+    var start = range.start, end = range.end, text = '';
+    if (/^insert/.test(t)) { if (e.data == null) return false; text = e.data; }
+    else if (start === end) {
+      var word = /Word/.test(t) && (/Backward$/.test(t)
+        ? /(?:[\w\u00C0-\u024F]+|[^\w\s]+)?\s*$/.exec(b.source.slice(0, start))[0].length
+        : /^\s*(?:[\w\u00C0-\u024F]+|[^\w\s]+)?/.exec(b.source.slice(end))[0].length);
+      if (/Backward$/.test(t)) start = word ? graphemeStep(b.source, start - word + 1, false) : graphemeStep(b.source, start, false);
+      else end = word ? graphemeStep(b.source, end + word - 1, true) : graphemeStep(b.source, end, true);
+    }
+    e.preventDefault();
+    sourceEdit(focusId, start, end, text);
+    finishInput(global.performance && performance.now ? performance.now() : Date.now());
+    return true;
+  }
+  function sourceReconcile(host, captureHistory, type) {
+    var b = blockOf(focusId);
+    if (!b || !host || host.textContent === b.source) return;
+    // Only what changed is read back; the browser's own no-break spaces in it become spaces,
+    // and a no-break space the writer kept elsewhere in the block stays one.
+    var raw = host.textContent, span = changedSpan(b.source, raw), before = { start: span.start, end: span.end };
+    if (/^delete/.test(type || '')) before.start = before.end = /Backward$/.test(type) ? span.end : span.start;
+    if (captureHistory) pushUndo(span.insertedLength ? span.end > span.start ? 'replace' : 'type' : 'delete', before);
+    sourceEdit(focusId, span.start, span.end, raw.slice(span.start, span.start + span.insertedLength).replace(/\u00a0/g, ' '), false);
+  }
+
   function onBeforeInput(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
     if (subtitle && subtitle.classList && subtitle.classList.contains('cw-subtitle')) return;
@@ -4354,6 +4858,7 @@
         visibleCaret = { start: Math.min(targetStart, targetEnd), end: Math.max(targetStart, targetEnd) };
       }
     }
+    if (opts.showMarks && sourceInput(e, t, visibleCaret, liveInputCaret)) return;
     if (e.cancelable !== false && visibleCaret && liveInputCaret &&
         (visibleCaret.start !== liveInputCaret.start || visibleCaret.end !== liveInputCaret.end) &&
         /^(insertText|insertReplacementText)$/.test(t || '') && e.data != null) {
@@ -4467,7 +4972,8 @@
     editor.flush();
     var c = caretSource();
     if (!c) return;
-    var pasted = replaceVisible(focusId, c.start, c.end, text.replace(/\r\n?/g, '\n'), 'paste');
+    var pasted = opts.showMarks ? sourceEdit(focusId, c.start, c.end, text.replace(/\r\n?/g, '\n'), 'paste')
+      : replaceVisible(focusId, c.start, c.end, text.replace(/\r\n?/g, '\n'), 'paste');
     var b = blockOf(focusId);
     // Pasted paragraphs become blocks, and so do pasted definitions, one line each as
     // when the file is opened: an edit to one of them is then judged on its own line.
@@ -4541,6 +5047,7 @@
     }
     if (!sel.setBaseAndExtent && !sel.extend) return false;
     e.preventDefault();
+    if (typeof selectionTurn !== 'undefined') selectionTurn++;
     if (sel.setBaseAndExtent) sel.setBaseAndExtent(sel.anchorNode, sel.anchorOffset, p.node, p.offset);
     else { var anchorNode = sel.anchorNode, anchorOffset = sel.anchorOffset; sel.collapse(anchorNode, anchorOffset); sel.extend(p.node, p.offset); }
     frameReads.invalidateSelection();
@@ -4550,6 +5057,7 @@
   function onKeyDown(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
     if (subtitle && subtitle.classList && subtitle.classList.contains('cw-subtitle')) return;
+    if (typeof tapGuard !== 'undefined') tapGuard = null;
     handledBackspace = false;
     var mod = e.metaKey || e.ctrlKey;
     if (e.key === 'Enter') lastEnter = { shift: !!e.shiftKey, at: Date.now() };
@@ -4640,6 +5148,7 @@
           e.preventDefault();
           if (e.shiftKey) {
             var selection = global.getSelection(), a = sourcePoint(arrowHost, arrowEnds.anchor, true), z = sourcePoint(arrowHost, want, !backward);
+            if (typeof selectionTurn !== 'undefined') selectionTurn++;
             if (selection.setBaseAndExtent) selection.setBaseAndExtent(a.node, a.offset, z.node, z.offset);
             else setCaret(focusId, Math.min(arrowEnds.anchor, want), Math.max(arrowEnds.anchor, want));
             frameReads.invalidateSelection();
@@ -4737,6 +5246,12 @@
       if (b && host.textContent === b.source && c && c.start === 0 && c.end === 0) {
         backspace(focusId); requestOverlay('snap'); finishInput(intent.started); return;
       }
+    }
+    // With the marks shown, what the browser changed is read back as source (after the
+    // boundary recovery above, which joins blocks the same way with the marks hidden).
+    if (opts.showMarks && (!nativeIntent || nativeIntent.sourceMarks)) {
+      sourceReconcile(host, !nativeIntent, e && e.inputType); nativeIntent = null;
+      requestOverlay('snap'); finishInput(intent.started); return;
     }
     var restored = restoreSingleTextNode(host);
     // Some mobile edits arrive without beforeinput. Capture the old model before
@@ -4855,7 +5370,10 @@
       var replacement = !saved.accepted && committed === saved.original && saved.data ? saved.data : count >= 0 ? committed.slice(saved.caret.start, saved.caret.start + count) : '';
       host.innerHTML = saved.html;
       blockOf(id).source = saved.original;
-      replaceVisible(id, saved.caret.start, saved.caret.end, replacement, false);
+      if (opts.showMarks) sourceEdit(id, saved.caret.start, saved.caret.end, replacement, false);
+      else replaceVisible(id, saved.caret.start, saved.caret.end, replacement, false);
+    } else if (opts.showMarks) {
+      sourceReconcile(host, false);
     } else {
       var restoredComposition = restoreSingleTextNode(editOf(focusId));
       syncNativeInput(nativeIntent, restoredComposition);
@@ -4878,6 +5396,11 @@
     }
   }
   function onFocusOut(e) {
+    // On a touch screen the keyboard goes down with the focus, and iOS drops the caret with
+    // it. Unless the focus stays in the article, keep the caret, as the writing bar's Done does.
+    if (touchInput && focusId && e.target === editOf(focusId) && !(e.relatedTarget && page.contains(e.relatedTarget))) {
+      keyboardCaret = editor.getCaret() || keyboardCaret;
+    }
     if (!composing || !focusId || e.target !== editOf(focusId)) return;
     var id = focusId, started = compositionState;
     setTimeout(function () { if (composing && compositionId === id && compositionState === started) finishComposition(); }, 0);
@@ -5241,22 +5764,28 @@
   var editor = {
     // Front matter changes (subtitle, title, tags) replace only the header block;
     // `transform` maps the whole source and must leave the body bytes alone.
-    updateFrontmatter: function (transform, label) {
+    updateFrontmatter: function (transform, label, continuing) {
       if (opts.readOnly) return false;
       var before = getSource(), next = transform(before);
       if (next === before) return true;
       var header = blocks.find(function (b) { return b.type === 'frontmatter'; });
       if (!header) return false;
-      var parsed = MD().parse(next).blocks[0];
-      if (!parsed || parsed.type !== 'frontmatter' || next.slice(parsed.source.length) !== before.slice(header.source.length)) return false;
-      pushUndo(label || 'frontmatter');
+      var opening = /^(---\r?\n[\s\S]*?\r?\n---)(?=\r?\n|$)/.exec(next);
+      if (!opening || next.slice(opening[0].length) !== before.slice(header.source.length)) return false;
+      var metadata = MD().parse(opening[0]), parsed = metadata.blocks[0];
+      if (!parsed || parsed.type !== 'frontmatter' || metadata.blocks.length !== 1) return false;
+      if (!continuing) pushUndo(label || 'frontmatter');
       header.source = parsed.source;
-      parseAll();
+      doc.frontmatter = metadata.frontmatter;
+      var prior = doc.blocks.find(function (b) { return b.id === header.id; });
+      if (prior) Object.assign(prior, parsed, { id: header.id });
+      rawHtml[header.id] = null;
+      rendered[header.id] = renderFor(prior || parsed, MD());
       changed(true);
       return true;
     },
-    updateSubtitle: function (value) {
-      return editor.updateFrontmatter(function (source) { return Castor.subtitle.withSource(source, value); }, 'subtitle');
+    updateSubtitle: function (value, continuing) {
+      return editor.updateFrontmatter(function (source) { return Castor.subtitle.withSource(source, value); }, 'subtitle', continuing);
     },
     canEditSubtitle: function () { return !opts.readOnly; },
     // Observe browser-owned input before a caller replaces the document or its writer.
@@ -5278,6 +5807,7 @@
     // opts: {onChange, onSelect, onComment, onLink, showFrontmatter=false,
     //        showWriterNotes=true, readOnly=false}
     isReadOnly: function () { return !!(opts && opts.readOnly); },
+    isComposing: function () { return composing; },
     setReadOnly: function (on) {
       opts = opts || {};
       opts.readOnly = !!on;
@@ -5307,6 +5837,7 @@
       page.classList.add('cw-editor-page');
       ensureOverlays();
       opts = options || {};
+      showMarksOn(page, !!opts.showMarks);
       var md = MD();
       var parsed;
       if (typeof docOrSource === 'string') parsed = md.parse(docOrSource);
@@ -5356,12 +5887,15 @@
         document.addEventListener('mouseup', onPointerUp, true);
         // A writer's own scroll wins: the typewriter line yields until the
         // caret moves again (setCaret clears the flag).
-        if (global.visualViewport) global.visualViewport.addEventListener('resize', function () {
-          if (revealPending) requestCaretReveal(false);
-        });
+        if (global.visualViewport) {
+          global.visualViewport.addEventListener('resize', keyboardMoved);
+          global.visualViewport.addEventListener('scroll', keyboardMoved);
+        }
         global.addEventListener('wheel', cancelCaretReveal, { passive: true, capture: true });
-        global.addEventListener('scroll', function () { undoFocusScroll(); menuAfterMove(); requestOverlay('layout'); }, true);
-        global.addEventListener('resize', function () { frameReads.invalidateStyles(); menuAfterMove(); requestOverlay('layout'); });
+        document.addEventListener('touchstart', anyTouch, { capture: true, passive: true });
+        document.addEventListener('touchmove', anyTouch, { capture: true, passive: true });
+        global.addEventListener('scroll', function (e) { undoFocusScroll(); menuAfterMove(); requestOverlay('layout'); if (e && (e.target === document || e.target === global)) keyboardMoved(); }, true);
+        global.addEventListener('resize', function () { frameReads.invalidateStyles(); menuAfterMove(); requestOverlay('layout'); keyboardMoved(); });
         if (Castor.bus && Castor.bus.on) {
           Castor.bus.on('layout', followLayout);
           Castor.bus.on('theme', function () { frameReads.invalidateStyles(); requestOverlay('layout'); });
@@ -5382,6 +5916,39 @@
       if (opts.notifyMount !== false) emit();
       return editor;
     },
+
+    // Show or hide the Markdown marks everywhere in the article, read or written.
+    setMarks: function (on, options) {
+      var next = !!on;
+      if (!page) { opts.showMarks = next; return next; }
+      if (!!opts.showMarks === next && (page.getAttribute('data-marks') === 'shown') === next) return next;
+      // A word still being composed is committed first: the page is drawn again from the source.
+      editor.flush();
+      var saved = editor.getCaret(), restoreFocus = !options || options.focus !== false;
+      var scroll = page.closest && page.closest('.page-scroll') || scroller(), place = placeOnScreen(scroll, saved);
+      opts.showMarks = next;
+      showMarksOn(page, next);
+      if (saved) {
+        var focused = blockOf(saved.blockId);
+        focusId = null;
+        if (focused) refreshRendered(focused);
+      }
+      renderAll();
+      // app.js replaces Castor.bus after this editor is made, so the live bus is named here.
+      if (Castor.bus && Castor.bus.emit) Castor.bus.emit('editor:marks', { shown: next });
+      if (saved) {
+        if (restoreFocus) editor.restoreCaret(saved, 'navigate');
+        else {
+          // Settings owns focus. Retain the writing position without a native selection
+          // in the new editable host, which would summon the phone's keyboard.
+          focusId = saved.blockId; keyboardCaret = saved; repaint(saved.blockId);
+        }
+      }
+      keepPlace(scroll, place);
+      requestOverlay(restoreFocus ? 'navigate' : 'snap');
+      return next;
+    },
+    marksShown: function () { return !!(opts && opts.showMarks); },
 
     setWriterNotes: function (on) {
       var saved = editor.getCaret();
@@ -5548,7 +6115,8 @@
     focusedBlockId: function () { return focusId; },
     getCaret: function () {
       var c = caretSource();
-      return c && focusId ? { blockId: focusId, start: c.start, end: c.end } : null;
+      if (c && focusId) return { blockId: focusId, start: c.start, end: c.end };
+      return keyboardCaret && keyboardCaret.blockId === focusId ? { blockId: focusId, start: keyboardCaret.start, end: keyboardCaret.end } : null;
     },
     getSourceRange: function () {
       var range = frameReads.selection().range, host = focusId && editOf(focusId);
@@ -5569,6 +6137,25 @@
         offset += block.source.length;
       }
       return null;
+    },
+    // The caret on a range of getSource(), say the words a save check refused, in typing mode, with
+    // the line brought into view as a tap brings it. A range in the front matter shows its block.
+    revealSource: function (start, end) {
+      var offset = 0;
+      for (var i = 0; i < blocks.length; i++) {
+        var b = blocks[i];
+        if (b.empty && !b.source) continue;
+        offset += (typeof b.sep === 'string' ? b.sep : (i === 0 ? '' : '\n\n')).length;
+        if (start > offset + b.source.length) { offset += b.source.length; continue; }
+        if (opts.readOnly || b.type === 'frontmatter' || !visible(b)) return editor.scrollToBlock(b.id);
+        var from = Math.max(0, Math.min(b.source.length, start - offset)), to = Math.max(from, Math.min(b.source.length, end - offset));
+        focusBlock(b.id, from);
+        setCaret(b.id, from, to);
+        requestOverlay('navigate');
+        requestCaretReveal(true);
+        return true;
+      }
+      return false;
     },
     restoreCaret: function (saved, mode) {
       if (!saved || !blockOf(saved.blockId)) return false;

@@ -718,6 +718,17 @@
     return out;
   }
 
+  // A web address typed or pasted into the Link field: an http(s) URL with a host, or www. + a dotted host.
+  function webAddress(q) {
+    q = String(q || '').trim();
+    if (!q || /\s/.test(q)) return null;
+    if (/^www\.[^.\/]+\./i.test(q)) q = 'https://' + q;
+    try {
+      var url = new global.URL(q);
+      return /^https?:$/.test(url.protocol) && url.hostname && /^https?:\/\//i.test(q) ? q : null;
+    } catch (e) { return null; }
+  }
+
   function picker(kind, o) {
     o = o || {};
     closePicker();
@@ -752,6 +763,8 @@
       state.shown = kind === 'search' ? searchItems(q || '')
         : rank(q || '', state.all, function (i) { return (i.label || '') + ' ' + (i.detail || ''); });
       if (!state.shown.length) state.shown = [];
+      var url = kind === 'wiki' && o.addresses && webAddress(q);
+      if (url) state.shown = [{ id: 'url', label: url, detail: 'web address', url: url, insert: url }].concat(state.shown);
       draw();
     }
     function place(rect) {
@@ -1315,6 +1328,7 @@
     return command.title + (command.keys ? ' (' + keyLabel(command.keys) + ')' : '');
   }
 
+  function safeMatches(node, selector) { try { return node.matches(selector); } catch (e) { return true; } }
   function wireControlTooltips() {
     var tip, active, oldTitle, oldDescription, timer;
     function hide() {
@@ -1332,6 +1346,8 @@
     function show(e) {
       var control = e.target.closest && e.target.closest('button,input,[data-command]');
       if (!control || control === active) return;
+      // A shortcut hint is for a keyboard or a pointer: a finger, or focus a tap moved, shows none.
+      if (e.pointerType === 'touch' || e.type === 'focusin' && control.matches && !safeMatches(control, ':focus-visible')) return;
       hide();
       var text = controlTooltip(control);
       if (!text) return;
@@ -1418,6 +1434,7 @@
     close: close,
     isOpen: function () { return isOpen; },
     picker: picker,
+    webAddress: webAddress,
     closePicker: closePicker,
     keyLabel: keyLabel,
     hint: hintCommand,

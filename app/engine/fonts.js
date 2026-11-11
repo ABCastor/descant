@@ -341,8 +341,8 @@
   function refreshReadingPicker() {
     if (!readingPicker) return;
     var current = chosen.reading, face = faceById(current) || matchFace(world && world.reading);
-    readingPicker.summary.textContent = face ? face.label : 'Default reading font';
-    readingPicker.summary.style.fontFamily = face ? face.stack : '';
+    readingPicker.value.textContent = face ? face.label : 'Default reading font';
+    readingPicker.value.style.fontFamily = face ? face.stack : '';
     readingPicker.options.forEach(function (entry) {
       var f = entry.face, selected = entry.id === (current || '');
       entry.button.setAttribute('aria-checked', selected ? 'true' : 'false');
@@ -356,11 +356,13 @@
     if (!host) return;
     host.textContent = '';
     var details = document.createElement('details'); details.className = 'cw-reading-picker';
-    var summary = document.createElement('summary');
-    summary.setAttribute('aria-label', 'Reading font'); details.appendChild(summary);
+    // One row: what it is and the font in use, in that font. The list opens below it.
+    var summary = document.createElement('summary'), label = document.createElement('span'), value = document.createElement('span');
+    label.className = 'set-lbl'; label.textContent = 'Reading font'; value.className = 'set-value';
+    summary.appendChild(label); summary.appendChild(value); details.appendChild(summary);
     var list = document.createElement('div'); list.className = 'cw-reading-options';
     list.setAttribute('role', 'radiogroup'); list.setAttribute('aria-label', 'Reading font');
-    readingPicker = { summary: summary, options: [] };
+    readingPicker = { summary: summary, value: value, options: [] };
     [null].concat(FACES).forEach(function (face) {
       var button = document.createElement('button'); button.type = 'button';
       var id = face ? face.id : '';

@@ -56,7 +56,7 @@
     actions: null, desktopActions: null, keyboardCaret: null,
     keyboardOverride: null, viewportHigh: 0, viewportWidth: 0, viewportOrientation: null,
     resizeObserver: null, headingBlockId: null,
-    touchEnabled: true
+    touchEnabled: true, tuck: null, touch: null, saveWatched: null
   };
   var touchMedia = global.matchMedia && global.matchMedia('(any-pointer: coarse)');
   function touchScreen() {
@@ -207,6 +207,7 @@
     if (touchScreen() && S.app) S.app.insertBefore(root, DOC.getElementById('footline'));
     else (S.frame || DOC.body).appendChild(root);
     S.root = root;
+    if (writing && S.app) ensureTuck();
     S.row = row;
     S.actions = actionButtons;
     refreshHeading(true);
@@ -231,8 +232,68 @@
     footer.insertBefore(group, footer.firstChild);
   }
 
+  // Phone, keyboard up: the writing bar floats above the keyboard. A finger scroll
+  // tucks it into one round button that keeps the save mark; a press on that
+  // button, a tap in the text or typing brings the whole bar back at once.
+  function floating() {
+    return !!(S.root && S.root.dataset.arrangement === 'writing' && mode() === 'phone');
+  }
+  function tucked() { return !!(S.app && S.app.dataset.barTucked != null); }
+  function tuck(on) {
+    on = !!on && floating() && S.root.dataset.open === '1';
+    if (!S.app || tucked() === on) return;
+    if (on) S.app.dataset.barTucked = ''; else delete S.app.dataset.barTucked;
+    if (S.root) S.root.inert = on;
+    if (S.tuck) S.tuck.inert = !on;
+  }
+  function ensureTuck() {
+    if (S.tuck) return;
+    var button = DOC.createElement('button');
+    button.type = 'button';
+    button.className = 'command-island-tuck';
+    button.inert = true;
+    // The caret stays in the text: no focus moves, and iOS gets no mouse events to blur on.
+    button.addEventListener('pointerdown', function (event) { event.preventDefault(); });
+    button.addEventListener('touchend', function (event) { event.preventDefault(); tuck(false); });
+    button.addEventListener('click', function () { tuck(false); });
+    S.app.appendChild(button);
+    S.tuck = button;
+    paintTuck();
+  }
+  function paintTuck() {
+    if (!S.tuck) return;
+    var save = DOC.getElementById('castor-save');
+    var icon = save && save.querySelector('.save-signal');
+    if (save && save !== S.saveWatched && global.MutationObserver) {
+      S.saveWatched = save;
+      new global.MutationObserver(paintTuck).observe(save, { attributes: true, attributeFilter: ['data-signal', 'aria-label'] });
+    }
+    var signal = save && save.getAttribute('data-signal') || 'saving';
+    if (S.tuck.getAttribute('data-signal') !== signal) S.tuck.setAttribute('data-signal', signal);
+    var label = (save && save.getAttribute('aria-label') || 'Save state').replace(/[.\s]*$/, '') + '. Show the writing tools';
+    if (S.tuck.getAttribute('aria-label') !== label) S.tuck.setAttribute('aria-label', label);
+    if (S.tuck._mark !== signal && icon) { S.tuck._mark = signal; S.tuck.innerHTML = icon.outerHTML; }
+  }
+  function inPage(event) {
+    return !!(event.target && event.target.closest && event.target.closest('#page .page-scroll'));
+  }
+  function onTouchStart(event) {
+    S.touch = floating() && inPage(event) && event.touches.length === 1 ? { y: event.touches[0].clientY, moved: false } : null;
+  }
+  function onTouchMove(event) {
+    if (!S.touch || S.touch.moved || !event.touches.length) return;
+    if (Math.abs(event.touches[0].clientY - S.touch.y) > 10) { S.touch.moved = true; tuck(true); }
+  }
+  function onTouchEnd() {
+    if (S.touch && !S.touch.moved) tuck(false);
+    S.touch = null;
+  }
+
   function remove() {
+    tuck(false);
     if (S.root) S.root.remove();
+    if (S.tuck) S.tuck.remove();
+    S.tuck = null;
     S.root = null; S.row = null; S.heading = null; S.headingBlockId = null; S.actions = null;
     if (S.app) S.app.dataset.touchFormat = '0';
   }
@@ -240,9 +301,15 @@
   function place() {
     if (!S.root || !S.app) return;
     if (Castor.capsule && touchScreen()) {
-      var bottom = S.root.dataset.open === '1' ? S.root.getBoundingClientRect().bottom : 0;
-      var value = Math.round(bottom * 100) / 100 + 'px';
-      if (S.app.style.getPropertyValue('--writing-row-bottom') !== value) S.app.style.setProperty('--writing-row-bottom', value);
+      var open = S.root.dataset.open === '1', floats = open && floating();
+      // The top writing row bounds the caret zone from above; the phone's floating bar
+      // bounds it from below (its resting top, whether or not it is tucked).
+      var bottom = open && !floats ? S.root.getBoundingClientRect().bottom : 0;
+      var top = floats ? S.app.getBoundingClientRect().top + S.root.offsetTop : 0;
+      [['--writing-row-bottom', bottom], ['--writing-bar-top', top]].forEach(function (pair) {
+        var value = Math.round(pair[1] * 100) / 100 + 'px';
+        if (S.app.style.getPropertyValue(pair[0]) !== value) S.app.style.setProperty(pair[0], value);
+      });
     }
   }
 
@@ -272,7 +339,7 @@
     if (!e || !e.replaceBlock || !e.restoreCaret || source === block.source) return false;
     if (!e.replaceBlock(block.id, source)) return false;
     e.restoreCaret({ blockId: block.id, start: start, end: end == null ? start : end }, 'snap');
-    refreshHeading();
+    refreshHeading('typed');
     global.requestAnimationFrame(place);
     return true;
   }
@@ -325,7 +392,11 @@
       refresh(); return !!toggled;
     }
     if (e.can && !e.can(id)) return false;
-    if (e && typeof e.command === 'function') return e.command(id);
+    if (e && typeof e.command === 'function') {
+      var result = e.command(id);
+      refreshHeading('typed');   // the level may have changed under the caret; repaints only if it did
+      return result;
+    }
     var saved = e && e.getCaret && e.getCaret();
     var block = currentBlock(saved);
     if (!e || !saved || !block) return false;
@@ -373,6 +444,9 @@
     if (!force && id === S.headingBlockId) return;
     S.headingBlockId = id;
     var label = headingLabel();
+    // Typing re-asks on every keystroke; the button changes only when the level does.
+    if (force !== true && label === S.headingLabel) return;
+    S.headingLabel = label;
     if (S.root.dataset.toolbar === 'symbols') {
       if (/^H[1-6]$/.test(label)) S.heading.innerHTML = 'H<sub>' + label.slice(1) + '</sub>';
       else S.heading.textContent = 'P';
@@ -392,6 +466,7 @@
     var state = keyboardUp() ? 'up' : 'down';
     if (S.app.dataset.keyboard === state) return;
     S.app.dataset.keyboard = state;
+    if (state === 'down') tuck(false);
     var bus = S.ctx && S.ctx.bus || Castor.bus;
     if (bus && bus.emit) bus.emit('keyboard:change', { up: state === 'up' });
   }
@@ -435,10 +510,20 @@
     if (S.app) S.app.dataset.touchFormat = docked ? '1' : '0';
     var value = policy();
     S.root.dataset.layout = mode() === 'phone' ? 'phone' : 'computer';
-    var show = Castor.capsule && docked ? keyboardUp() : docked || (!S.dismissed && !focusActive() &&
+    // The phone's floating bar is for the article: another field (a comment or search,
+    // an editor field too) has the keyboard to itself. The bar's own buttons and a passing
+    // BODY focus between two blocks are not another field.
+    var active = DOC.activeElement;
+    var elsewhere = mode() === 'phone' && !!active && !(active.closest && active.closest('#page')) &&
+      !!(active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || ''));
+    // While it steps aside, its round mark still shows a save problem (the top row is away too).
+    if (S.app && mode() === 'phone') { if (elsewhere) S.app.dataset.barAside = ''; else delete S.app.dataset.barAside; }
+    var show = Castor.capsule && docked ? keyboardUp() && !elsewhere : docked || (!S.dismissed && !focusActive() &&
       (value === 'always' || (S.focused && keyboardUp())));
     S.root.dataset.open = show ? '1' : '0';
     S.root.setAttribute('aria-hidden', show ? 'false' : 'true');
+    if (!show || !floating()) tuck(false);
+    paintTuck();
     refreshHeading();
     refreshControls();
     if (Castor.touchLayout) Castor.touchLayout.placeSave();
@@ -469,6 +554,14 @@
       DOC.addEventListener('focusin', onFocusIn, true);
       DOC.addEventListener('focusout', onFocusOut, true);
       DOC.addEventListener('selectionchange', function () { refreshHeading(false); refreshControls(); });
+      DOC.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
+      DOC.addEventListener('touchmove', onTouchMove, { passive: true, capture: true });
+      DOC.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
+      ['beforeinput', 'input'].forEach(function (type) {
+        DOC.addEventListener(type, function (event) {
+          if (event.target && event.target.closest && event.target.closest('.cw-edit')) tuck(false);
+        }, true);
+      });
       global.addEventListener('resize', refresh);
       global.addEventListener('orientationchange', refresh);
       if (global.screen && global.screen.orientation && global.screen.orientation.addEventListener) {
@@ -487,7 +580,7 @@
       var bus = S.ctx.bus || Castor.bus;
       if (bus && bus.on) bus.on('size', refresh);
       if (bus && bus.on) {
-        bus.on('doc:change', function () { refreshHeading(true); refreshControls(); });
+        bus.on('doc:change', function () { refreshHeading('typed'); refreshControls(); });
         bus.on('editor:history', refreshControls);
         bus.on('piece:open', function () { S.keyboardCaret = null; S.headingBlockId = null; refreshHeading(true); refreshControls(); });
       }
@@ -503,6 +596,7 @@
     refresh: refresh,
     setTouchEnabled: function (on) { S.touchEnabled = !!on; refresh(); },
     hide: function () { S.dismissed = true; refresh(); },
+    tuck: function (on) { tuck(on); return tucked(); },
     state: function () { return { mounted: S.mounted, present: !!S.root, open: !!(S.root && S.root.dataset.open === '1'), mode: mode(), policy: policy() }; },
     _setKeyboardForTest: function (on) { S.keyboardOverride = on == null ? null : !!on; refresh(); }
   };

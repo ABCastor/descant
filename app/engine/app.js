@@ -257,6 +257,7 @@
       field.addEventListener('blur', function () { setTimeout(function () { reopen(true); }, 0); }, { once: true });
       return;
     }
+    flushSave(true);
     try { global.location.reload(); } catch (e) { /* the next check reopens it */ }
   }
   var signinAt = '';
@@ -269,12 +270,15 @@
   // pending comments stay in view, read-only, and nothing is sent as him until he signs in again.
   Castor.signedOut = function () {
     if (!PUBLIC_WRITER) return;
-    Castor.role = Castor.role.confirmed ? Object.assign({}, Castor.role, { confirmed: false, ended: true }) : Castor.roleFrom(null);
+    keptOperation = (keptOperation || 0) + 1;
+    if (!saver.writer || !saver.writer.length) saver.writer = whoList();
+    Castor.role = Castor.role.confirmed || Castor.role.ended ? Object.assign({}, Castor.role, { confirmed: false, ended: true }) : Castor.roleFrom(null);
+    journal();
     reconfirm();
   };
   // Reopening is the way back in: the server sends a page without a session to its sign-in,
   // and a page whose session is fine simply opens again.
-  Castor.signin = function () { try { if (signinAt) global.location.assign(signinAt); else global.location.reload(); } catch (e) { /* nothing to reopen */ } };
+  Castor.signin = function () { flushSave(true); try { if (signinAt) global.location.assign(signinAt); else global.location.reload(); } catch (e) { /* nothing to reopen */ } };
   if (global.addEventListener) {
     global.addEventListener('online', function () { reconfirm(); });
     global.addEventListener('pageshow', function () { reconfirm(); });
@@ -543,7 +547,7 @@
      knowing about any of them. */
   function canLeaveArticle() {
     if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
-    if (!Castor.editor || (!saver.typed && saver.text === null) || !writableHere() || editorSource() === saver.text) return Promise.resolve(true);
+    if (!Castor.editor || (!saver.typed && saver.text === null) || !(writableHere() || keepOn()) || editorSource() === saver.text) return Promise.resolve(true);
     journal();
     var timeout = function () { return new Promise(function (resolve) { setTimeout(resolve, 1000); }); };
     var kept = keepOn() ? Castor.keep.now() : Promise.resolve(false);
@@ -608,7 +612,7 @@
     liveState.path = path;
     var wanted = pieceRequest + 1;
     return reloadLive().then(function (result) {
-      if (result && result.superseded) return false;
+      if (result && (result.superseded || result.blocked)) return false;
       if (!result) { liveState.path = previous; return false; }
       rememberPieceUrl(path);
       nextSheet(previous, path);
@@ -1707,6 +1711,9 @@
       });
       return false;
     }
+    // Identity may return to the same value after a real keyboard-session
+    // change; an older recovery continuation must still remain canceled.
+    if (JSON.stringify(people) !== JSON.stringify(sessionNow())) keptOperation = (keptOperation || 0) + 1;
     sessionMemory = people;
     var attributeKept = saver && saver.writerUnknown;
     if (attributeKept) { saver.writer = whoList(); saver.writerUnknown = false; }
@@ -1742,7 +1749,7 @@
   }
   /* Run `fn` once the card is out of the way (now, if it is not up). */
   function whenWhoClosed(fn) {
-    if (document.getElementById('castor-who')) afterWho.push(fn); else fn();
+    if (document.getElementById('castor-who')) afterWho.push(fn); else return fn();
   }
 
   /* The card's few rules that engine.css does not carry yet. */
@@ -1967,26 +1974,33 @@
     renderSaveState();
   });
   bus.on('save:activity', renderSaveState);
+  var pendingCommentKeys = {};
   function pendingCommentPath(storageKey) {
-    var match = /^castor\.typewell\.comments\.(articles\/[^/]+\/article\.md)\.unsaved$/.exec(storageKey || '');
-    return match ? match[1] : '';
+    if (!/\.unsaved$/.test(storageKey || '') || !Castor.commentScope) return '';
+    var scope = Castor.commentScope(storageKey.slice(0, -8));
+    if (!scope || scope.world !== 'typewell' || scope.kind === 'unconfirmed') return '';
+    if (scope.kind && (scope.kind !== (reviewing() ? 'reader' : 'writer') || scope.account !== Castor.role.id)) return '';
+    return scope.path;
   }
   try {
     for (var keptComment = 0; keptComment < global.localStorage.length; keptComment++) {
-      var pendingPath = pendingCommentPath(global.localStorage.key(keptComment));
-      if (pendingPath) pendingComments[pendingPath] = 'A comment is kept on this device and is waiting to save.';
+      var pendingKey = global.localStorage.key(keptComment);
+      if (/\.unsaved$/.test(pendingKey || '')) pendingCommentKeys[pendingKey] = true;
     }
   } catch (e) { /* the current article also reports its own pending copy */ }
   if (global.addEventListener) global.addEventListener('storage', function (event) {
+    if (!/\.unsaved$/.test(event.key || '')) return;
+    if (event.newValue) pendingCommentKeys[event.key] = true;
+    else delete pendingCommentKeys[event.key];
     var path = pendingCommentPath(event.key);
     if (!path) return;
-    if (event.newValue) pendingComments[path] = 'A comment is kept on this device and is waiting to save.';
-    else delete pendingComments[path];
+    if (!event.newValue) delete pendingComments[path];
     renderSaveState();
   });
   function commentWarning() {
     var paths = Object.keys(pendingComments);
-    return paths.length ? pendingComments[paths[0]] : '';
+    return paths.length ? pendingComments[paths[0]] : Object.keys(pendingCommentKeys).some(function (key) { return !!pendingCommentPath(key); })
+      ? 'A comment is kept on this device and is waiting to save.' : '';
   }
   function saveWord() {
     if (!reviewing() && commentWarning()) return 'Not saved: comment';
@@ -1994,7 +2008,8 @@
       return saveDescription().word;
     }
     var kept = journalKeeps();
-    if (saver.state === 'unsaved') return kept ? SAVE_WORDS.unsaved : 'Not saved yet';
+    // An ordinary pause before the save is saving; kept on this device is for a save that waits.
+    if (saver.state === 'unsaved') return !kept ? 'Not saved yet' : saver.detail ? SAVE_WORDS.unsaved : 'Saving…';
     if (saver.state === 'offline') return kept ? SAVE_WORDS.offline : 'Not saved: can’t reach the server';
     if (saver.state === 'refused' && saver.short) return 'Not saved: ' + saver.short;
     if (saver.state === 'locked' && saver.short) return saver.short;
@@ -2052,12 +2067,19 @@
     if (commentWarning()) panel.appendChild(line('p', 'save-explanation', commentWarning()));
     if (fileWarning()) panel.appendChild(line('p', 'save-explanation', fileWarning()));
     if (saver.detail && (editorSource() !== saver.text || ['dirty', 'refused', 'conflict', 'stale', 'locked', 'offline'].indexOf(saver.state) >= 0)) panel.appendChild(line('p', 'save-explanation', saver.detail));
+    if (saver.state === 'refused' && saver.refusal && saver.refusal.line && Castor.editor && Castor.editor.revealSource) {
+      panel.appendChild(pick('Show line ' + saver.refusal.line, function () { if (panel.hidePopover) panel.hidePopover(); showRefusal(); }));
+    }
     if (['unsaved', 'offline', 'dirty', 'refused'].indexOf(saver.state) >= 0) {
       panel.appendChild(pick('Try saving now', function () { retryNow(true); }));
     }
     if (saver.state === 'conflict') panel.appendChild(pick('Compare versions', showConflict));
     if (saver.state === 'stale') panel.appendChild(pick('Open current article', function () { reloadLive(); }));
     if (signedOut) panel.appendChild(pick('Sign in again', Castor.signin));
+    if (Castor.keep && saver.path) {
+      var path = saver.path;
+      panel.appendChild(pick('Other kept copies', function () { if (saver.path === path) return showKeptCopies(path); }));
+    }
   }
   function renderSaveState() {
     if (reviewing() && Castor.readerShell) { Castor.readerShell.render(); return; }
@@ -2104,7 +2126,12 @@
     }
     if (Castor.saveStatus) Castor.saveStatus.render(el, saveDescription());
     else { el.textContent = word; el.title = commentWarning() || saver.detail || ''; }
-    renderSavePopover();
+    // The panel is built as it opens (popovers.bind) and kept current while open, never rebuilt
+    // on a key while it is closed, so a keystroke does no DOM work for it. A browser without
+    // native popovers shows it by other means, so there it is built every time.
+    var details = document.getElementById('castor-save-details'), shut = false;
+    try { shut = !!(details && details.matches && !details.matches(':popover-open')); } catch (e) { shut = false; }
+    if (!shut) renderSavePopover();
     renderSession();
     if (Castor.touchLayout) Castor.touchLayout.placeSave();
   }
@@ -2229,10 +2256,16 @@
   });
   bus.on('comments:saved', function (info) {
     delete pendingComments[(info && info.path) || saver.path];
+    Object.keys(pendingCommentKeys).forEach(function (key) {
+      try { if (!global.localStorage.getItem(key)) delete pendingCommentKeys[key]; } catch (e) { /* keep the warning until confirmed */ }
+    });
     renderSaveState();
     if (saver.state === 'refused' && saver.short === 'comment') setSave(reviewing() ? 'reviewing' : 'saved');
   });
-  function setSave(state, detail, short) {
+  // `refusal`: the check's line, for Show line; it belongs to this state only, so any other state
+  // or refusal shown after it clears it.
+  function setSave(state, detail, short, refusal) {
+    saver.refusal = state === 'refused' && refusal || null;
     saver.state = state;
     saver.detail = detail || '';
     saver.short = short || '';
@@ -2241,13 +2274,28 @@
   }
 
   var KEPT_WAIT = 1500;              // opening never waits longer than this on the journal
-  var opened = null;
-  var saveAttachment = 0;
+  var opened = null, lastTypedCopy = null;
+  var saveAttachment = 0, keptOperation = 0, recoveryRevision = 0, recoveryComposing = false, recoveryCompositionTarget = null;
+  function compositionActive() {
+    var nativeField = recoveryComposing && recoveryCompositionTarget && els.article && els.article.contains(recoveryCompositionTarget) && /^(INPUT|TEXTAREA)$/.test(recoveryCompositionTarget.tagName);
+    return !!nativeField || (Castor.editor && Castor.editor.isComposing ? Castor.editor.isComposing() : recoveryComposing);
+  }
+  ['beforeinput', 'input', 'compositionstart', 'compositionupdate', 'compositionend'].forEach(function (type) {
+    document.addEventListener(type, function (event) {
+      if (!els.article || !event.target || !els.article.contains(event.target)) return;
+      if (type === 'compositionstart') { recoveryComposing = true; recoveryCompositionTarget = event.target; }
+      if (type === 'compositionend') { recoveryComposing = false; recoveryCompositionTarget = null; }
+      recoveryRevision++;
+      var notice = document.getElementById('castor-kept');
+      if (notice && notice.hasAttribute('data-kept-choice')) closeKeptNotice();
+      else keptOperation++;
+    }, true);
+  });
 
   function keptFor(path) {
     if (!Castor.keep || !WRITABLE.test(String(path || '')) || !servedOverHttp()) return Promise.resolve(null);
     var cap = new Promise(function (resolve) { setTimeout(function () { resolve(null); }, KEPT_WAIT); });
-    return Promise.race([Castor.keep.list(path).then(keptForWriter).catch(function () { return null; }), cap]);
+    return Promise.race([Castor.keep.list(path, { includeEvidence: true }).then(keptForWriter).catch(function () { return null; }), cap]);
   }
 
   function keptForWriter(entries) {
@@ -2262,22 +2310,36 @@
   /* Choose what the editor opens with. Kept text typed over the version the
      server holds now replaces the server's text in `source`; anything else
      kept is left for recover() to offer. */
-  function opening(path, payload, entries) {
+  function opening(path, payload, entries, prepared) {
     var vs = data.versions || [];
     var latest = vs.length ? vs[vs.length - 1] : null;
     opened = { path: path, sha: (latest && latest.sha) || '', serverText: source, shown: source, restored: null };
     if (!entries || !latest || !latest.sha || reviewing() || !payload || payload.locked) return;
     if (payload.markdown !== latest.markdown || latest.markdown !== source) return;
-    var top = entries.filter(function (e) { return !e.live && e.text !== source; })[0];
-    if (top && top.base === latest.sha) {
+    var top = prepared;
+    if (top && eligibleKept(top, entries) && top.base === latest.sha && recoveryCandidate(top, path, source, matchingKeptAt(entries, source))) {
       source = top.text;
       opened.shown = top.text;
       opened.restored = top;
     }
   }
 
-  function bindKept(entry, adopt) {
-    if (Castor.keep && adopt !== false) Castor.keep.adopt(entry);
+  async function prepareOpening(path, payload, entries) {
+    var versions = payload && payload.versions || [], latest = versions[versions.length - 1];
+    var result = { ready: true, entry: null, entries: entries || [] };
+    if (!Castor.keep) return result;
+    if (!await Castor.keep.preserveCurrent(path, result.entries.some(function (entry) { return entry.mine; }))) return { ready: false, entry: null };
+    if (!latest || !latest.sha || reviewing() || payload.locked || payload.markdown !== latest.markdown) return result;
+    var top = result.entries.filter(function (entry) { return !entry.confirmed && !entry.unverified && !entry.live && entry.text !== payload.markdown; })[0];
+    if (top && top.base === latest.sha && recoveryCandidate(top, path, payload.markdown, matchingKeptAt(result.entries, payload.markdown)) && await Castor.keep.adopt(top)) {
+      try { result.entries = keptForWriter(await Castor.keep.list(path, { strict: true, includeEvidence: true })); }
+      catch (e) { return { ready: false, entry: null }; }
+      if (eligibleKept(top, result.entries) && recoveryCandidate(top, path, payload.markdown, matchingKeptAt(result.entries, payload.markdown))) result.entry = top;
+    }
+    return result;
+  }
+
+  function bindKept(entry) {
     saver.writer = entry.who && entry.who.length ? entry.who.slice() : [];
     saver.writerUnknown = !saver.writer.length;
     saver.writerHold = saver.writerUnknown || JSON.stringify(saver.writer) !== JSON.stringify(whoList());
@@ -2472,7 +2534,10 @@
   function writableHere() {
     return !!(saver.path && WRITABLE.test(saver.path) && servedOverHttp() && !reviewing() && (!PUBLIC_WRITER || Castor.role.confirmed));
   }
-  function keepOn() { return !!Castor.keep && writableHere(); }
+  function keepOn() {
+    return !!Castor.keep && (writableHere() || !!(PUBLIC_WRITER && Castor.role.ended && Castor.role.id && Castor.role.who &&
+      saver.path && WRITABLE.test(saver.path) && servedOverHttp() && !reviewing()));
+  }
   /* Within keep.js's SOON of this call, the editor's text is on this device. */
   function journal() {
     if (!keepOn()) return;
@@ -2513,34 +2578,42 @@
      newer version is shown and the kept one is offered. Entries another open
      page is still writing are left to that page. */
   function recover(path, serverText, sha, liveConfirmed) {
-    if (!Castor.keep) return Promise.resolve();
-    return Castor.keep.list(path).then(keptForWriter).then(function (entries) {
-      if (saver.path !== path || saver.base !== sha) return;
+    if (!Castor.keep || compositionActive()) return Promise.resolve();
+    var revision = recoveryRevision, operation = keptOperation;
+    function current() { return saver.path === path && saver.base === sha && !compositionActive() && revision === recoveryRevision && operation === keptOperation; }
+    return Castor.keep.list(path, { includeEvidence: true }).then(keptForWriter).then(function (entries) {
+      if (!current()) return;
       if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
+      if (!current()) return;
+      var shown = editorSource(), currentAt = entries.reduce(function (at, e) { return e.text === shown ? Math.max(at, e.at || 0) : at; }, 0);
       var waiting = [];
       entries.forEach(function (e) {
         // This page is already writing the current article. Its delayed journal
         // is a backup, never a recovery choice over the newer editor buffer.
-        if (e.live || e.mine && saver.typed) return;
+        if (e.live || e.confirmed || e.unverified) return;
         if (liveConfirmed !== false && !saver.needsLive && e.text === serverText) { Castor.keep.confirm(path, serverText, Castor.role.publicWriter ? Castor.role.who : undefined); return; }
-        waiting.push(e);
+        if (e.mine && saver.typed) return;
+        if (recoveryCandidate(e, path, shown, currentAt)) waiting.push(e);
       });
       var top = waiting[0];
-      if (!top) return;
+      if (!top) {
+        var notice = document.getElementById('castor-kept');
+        if (notice && notice.hasAttribute('data-kept-choice') && !notice.hasAttribute('data-kept-list') && !notice.hasAttribute('aria-busy')) closeKeptNotice();
+        return;
+      }
       if (liveConfirmed === false || saver.needsLive) {
-        if (editorSource() !== top.text) whenWhoClosed(function () { offerOfflineKept(top, path); });
+        if (editorSource() !== top.text) return whenWhoClosed(function () { return current() && offerOfflineKept(top, path, currentAt); });
         return;
       }
       if (top.base && top.base === sha && editorSource() === serverText) {
-        putText(top.text);
-        restoreKept(top);
-        return;
+        return openKeptCopy(top, path, serverText, saveAttachment, false, { currentAt: currentAt });
       }
-      whenWhoClosed(function () { offerKept(top, path); });
+      return whenWhoClosed(function () { return current() && offerKept(top, path, currentAt); });
     }).catch(function (e) { console.error('[castor] journal', e); });
   }
 
   function closeKeptNotice() {
+    keptOperation++;
     var old = document.getElementById('castor-kept');
     if (old) old.remove();
   }
@@ -2557,57 +2630,205 @@
     card.appendChild(line('p', 'castor-who-q', head));
     if (text) card.appendChild(line('p', 'castor-notice-text', text));
     var row = line('div', 'castor-who-row');
-    actions.forEach(function (a) { row.appendChild(pick(a[0], a[1])); });
+    actions.forEach(function (a) { row.appendChild(pick(a[0], function () { if (document.getElementById('castor-kept') === card) return a[1](); })); });
     card.appendChild(row);
     document.body.appendChild(card);
     return card;
   }
 
-  function offerOfflineKept(entry, path) {
-    if (saver.path !== path) return;
-    var shown = editorSource(), attachment = saveAttachment;
-    keptNotice('Your unsent writing is also on this device.',
-      'The prepared article may be older. Open your unsent copy to continue; its original version is preserved for reconnecting.', [
-        ['Open my unsent copy', function () {
-          if (saver.path !== path) return;
-          if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
-          closeKeptNotice();
-          if (attachment !== saveAttachment || editorSource() !== shown) return;
-          putText(entry.text); bindKept(entry);
-          saver.base = entry.base || saver.base; saver.needsLive = true;
-          retryLater('offline', 'Your unsent copy is open. Its original writer and version are preserved.');
-          journal();
-        }]
-      ]);
+  function matchingKeptAt(entries, shown) {
+    return entries.reduce(function (at, entry) { return entry.text === shown ? Math.max(at, entry.at || 0) : at; }, 0);
   }
-  function offerKept(entry, path) {
-    if (saver.path !== path) return;
-    var shown = editorSource(), attachment = saveAttachment;
-    keptNotice('Your unsaved version from ' + when(entry.at) + ' is kept on this device.',
-      'The article was saved after it, and that newer version is what you see now. ' +
-      'Put it back replaces the text with yours and saves it on top; the newer one stays in the history.', [
-        ['Put it back', function () {
-          closeKeptNotice();
-          if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
-          if (saver.path !== path || !saver.base || attachment !== saveAttachment || editorSource() !== shown) return;
-          putText(entry.text);
-          restoreKept(entry);
-        }],
-        ['Discard', function () {
-          closeKeptNotice();
-          if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
-          if (saver.path !== path || attachment !== saveAttachment || editorSource() !== shown) return;
-          Castor.keep.discard(entry).then(function () {
-            if (saver.path === path && saver.base && saver.text !== null) recover(path, saver.text, saver.base);
+
+  function eligibleKept(entry, entries) {
+    var signature = function (e) { return JSON.stringify([e.path, e.text, e.base || '', e.who || [], e.at || 0]); };
+    return keptForWriter(entries).some(function (e) { return !e.confirmed && !e.unverified && !e.live && e.key === entry.key && signature(e) === signature(entry); });
+  }
+
+  function recoveryCandidate(entry, path, shown, at) {
+    if (!entry || entry.unverified || typeof entry.text !== 'string' || shown.indexOf(entry.text) >= 0) return false;
+    var receipt = Castor.keep && Castor.keep.receipt ? Castor.keep.receipt(path, shown, { activity: true }) : 0;
+    if (lastTypedCopy && lastTypedCopy.path === path && lastTypedCopy.text === shown) at = Math.max(at || 0, lastTypedCopy.at);
+    return !(entry.at && entry.at < Math.max(at || 0, receipt || 0));
+  }
+
+  function keptDescription(entry, shown) {
+    var a = Array.from(shown), b = Array.from(entry.text), first = 0, end = 0;
+    while (first < a.length && first < b.length && a[first] === b[first]) first++;
+    while (end < a.length - first && end < b.length - first && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+    function words(chars) { var text = chars.join('').replace(/\s+/g, ' ').trim(); return Array.from(text).slice(0, 80).join('') + (Array.from(text).length > 80 ? '…' : ''); }
+    var now = words(a.slice(first, a.length - end)), kept = words(b.slice(first, b.length - end));
+    var difference = kept && now ? 'This copy has “' + kept + '” where the page has “' + now + '”. '
+      : kept ? 'This copy adds “' + kept + '”. ' : now ? 'This copy leaves out “' + now + '”. ' : 'This copy has different spacing. ';
+    return (entry.at > 1 ? 'Kept ' + when(entry.at) + '. ' : 'Kept from an earlier session. ') + difference + 'Opening it keeps the text on this page as another copy first.';
+  }
+
+  function showKeptCopies(path) {
+    if (!Castor.keep || saver.path !== path || compositionActive()) return Promise.resolve(false);
+    closeKeptNotice();
+    var request = keptOperation, attachment = saveAttachment, authority = writingAuthority(), revision = recoveryRevision;
+    var shown = editorSource(), offline = !!saver.needsLive;
+    function current() { return request === keptOperation && saver.path === path && attachment === saveAttachment && authority === writingAuthority() && revision === recoveryRevision && editorSource() === shown && !compositionActive(); }
+    return Castor.keep.list(path, { strict: true, includeKept: true }).then(keptForWriter).then(function (entries) {
+      if (!current()) return false;
+      var seen = Object.create(null);
+      entries = entries.filter(function (entry) {
+        if (entry.text === shown) return false;
+        var key = JSON.stringify([entry.text, entry.base, entry.who, entry.at]);
+        if (seen[key]) return false;
+        seen[key] = true; return true;
+      });
+      var card = keptNotice('Other kept copies', entries.length ? 'Choose a copy to reopen. The text on this page is kept first.' : 'No other kept copies of this article were found on this device.', [
+        ['Close', function () { if (document.getElementById('castor-kept') === card) closeKeptNotice(); }]
+      ]);
+      card.setAttribute('data-kept-choice', '');
+      card.setAttribute('data-kept-list', '');
+      card.style.maxHeight = '70vh'; card.style.overflowY = 'auto';
+      var closing = card.children[card.children.length - 1];
+      entries.forEach(function (entry) {
+        var row = line('div', 'castor-notice-text');
+        var writer = (entry.who || []).map(function (p) { return typeof p === 'string' ? WHO_NAMES[p] || p : personName(p) || p.id || ''; }).filter(Boolean).join(', ');
+        row.appendChild(line('p', 'castor-notice-text', (writer ? writer + '. ' : 'Writer not recorded. ') + keptDescription(entry, shown)));
+        var open = pick('Open this copy', function () { return openKeptCopy(entry, path, shown, attachment, offline, { explicit: true, notice: card }); });
+        open.setAttribute('data-kept-key', entry.key); row.appendChild(open);
+        card.insertBefore(row, closing);
+      });
+      return true;
+    }).catch(function () {
+      if (current()) keptNotice('The kept copies could not be read.', 'Nothing was replaced. Keep this page open and try again.', [
+        ['Close', closeKeptNotice]
+      ]);
+      return false;
+    });
+  }
+
+  function openKeptCopy(entry, path, shown, attachment, offline, options) {
+    options = options || {};
+    if (saver.path !== path || attachment !== saveAttachment || options.notice && document.getElementById('castor-kept') !== options.notice) return Promise.resolve(false);
+    if (compositionActive()) return Promise.resolve(false);
+    if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
+    var authority = writingAuthority(), session = JSON.stringify(whoList()), notice = document.getElementById('castor-kept'), applied = false;
+    if (options.notice && options.notice !== notice || notice && notice.hasAttribute('aria-busy')) return Promise.resolve(false);
+    var operation = ++keptOperation, revision = recoveryRevision, appliedRevision;
+    function context() { return operation === keptOperation && saver.path === path && attachment === saveAttachment && writingAuthority() === authority && JSON.stringify(whoList()) === session && (!notice || document.getElementById('castor-kept') === notice); }
+    function unchanged() { return context() && !compositionActive() && recoveryRevision === revision && editorSource() === shown; }
+    function stale() { if (notice && document.getElementById('castor-kept') === notice) notice.remove(); return false; }
+    if (!unchanged() || !options.explicit && !recoveryCandidate(entry, path, shown, options.currentAt) || !keptForWriter([entry]).length) return Promise.resolve(false);
+    if (notice) notice.setAttribute('aria-busy', 'true');
+    // A prepared page with no typing time must not become newer than real unsent writing.
+    var before = { path: path, text: shown, base: saver.base || '', who: saver.writerUnknown ? [] : saver.writer || whoList(),
+      at: Castor.keep.receipt(path, shown, { activity: true }) || (lastTypedCopy && lastTypedCopy.path === path && lastTypedCopy.text === shown ? lastTypedCopy.at : 1) };
+    var id = 'before-' + Castor.keep.page + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    // Flushes can reuse the fallback key on an IndexedDB abort. Protect its
+    // divergent physical values BEFORE the first preflight flush, not after it.
+    return Castor.keep.preserveCurrent(path, true).then(function (ok) {
+      if (!ok) throw Error('The current journal variants were not completely kept.');
+      if (!unchanged()) return false;
+      return Castor.keep.now().then(function () { return Castor.keep.list(path, { strict: true, includeEvidence: true }); });
+    }).then(function (entries) {
+      if (!Array.isArray(entries)) return false;
+      if (!unchanged()) return false;
+      var currentAt = options.currentAt || 0;
+      entries.forEach(function (e) {
+        if (e.text === shown) currentAt = Math.max(currentAt, e.at || 0);
+        if (e.text === shown && JSON.stringify(e.who) === JSON.stringify(before.who)) before.at = Math.max(before.at, e.at || 0);
+      });
+      if (!options.explicit && (!eligibleKept(entry, entries) || !recoveryCandidate(entry, path, shown, currentAt))) return false;
+      return Castor.keep.importCopies([before], id).then(function (count) {
+        if (count !== 1) throw Error('The previous copy was not completely kept.');
+        if (!unchanged()) return false;
+        return Castor.keep.importCopies([entry], id + '-chosen').then(function (chosen) {
+          if (chosen !== 1) throw Error('The chosen copy was not completely kept.');
+          if (!unchanged()) return false;
+          // Protect every physical current-key variant, not only the displayed
+          // text: a later synchronous journal may reuse its fallback key.
+          return Castor.keep.adopt(entry).then(function (ok) {
+            if (!ok) throw Error('The current journal variants were not completely kept.');
+            return Castor.keep.list(path, { strict: true, includeEvidence: true });
           });
-        }]
-      ]);
+        });
+      });
+    }).then(function (entries) {
+      if (!Array.isArray(entries) || !unchanged()) return stale();
+      var currentAt = entries.reduce(function (at, e) { return e.text === shown ? Math.max(at, e.at || 0) : at; }, options.currentAt || 0);
+      if (!options.explicit && (!eligibleKept(entry, entries) || !recoveryCandidate(entry, path, shown, currentAt))) return stale();
+      if (compositionActive()) return stale();
+      if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
+      if (!unchanged()) return stale();
+      clearTimeout(saver.timer); saver.timer = 0;
+      if (notice) Array.prototype.forEach.call(notice.querySelectorAll('button'), function (button) { button.disabled = true; });
+      putText(entry.text); bindKept(entry, false); applied = true; appliedRevision = recoveryRevision;
+      if (offline) { saver.base = entry.base || saver.base; saver.needsLive = true; }
+      journal();
+      return Castor.keep.now().then(function (ok) {
+        if (!ok) throw new Error('The new journal copy could not be written.');
+        if (!context() || compositionActive() || recoveryRevision !== appliedRevision || editorSource() !== entry.text) return stale();
+        closeKeptNotice();
+        if (offline) retryLater('offline', 'Your unsent copy is open. The previous text is kept as another copy.');
+        else restoreKept(entry, true);
+        return true;
+      });
+    }).catch(function () {
+      if (saver.path !== path || attachment !== saveAttachment || writingAuthority() !== authority || JSON.stringify(whoList()) !== session || !notice || document.getElementById('castor-kept') !== notice) return false;
+      notice.removeAttribute('aria-busy');
+      var error = document.getElementById('castor-kept-error');
+      if (!error) { error = line('p', 'castor-notice-text'); error.id = 'castor-kept-error'; notice.appendChild(error); }
+      error.textContent = applied ? 'Your copy is open. Both earlier copies are kept, but this page could not write a new journal copy. Keep it open and copy your words.'
+        : 'Nothing was replaced. This page’s words could not be kept as another copy. Keep this page open and copy your words.';
+      if (applied) notice.appendChild(pick('Close', function () { if (document.getElementById('castor-kept') === notice) closeKeptNotice(); }));
+      return false;
+    });
   }
+
+  function offerKeptChoice(entry, path, currentAt, offline) {
+    if (saver.path !== path || compositionActive() || !keptForWriter([entry]).length) return Promise.resolve(false);
+    var existing = document.getElementById('castor-kept');
+    if (existing && (existing.hasAttribute('aria-busy') || existing.hasAttribute('data-kept-list'))) return Promise.resolve(false);
+    var shown = editorSource(), attachment = saveAttachment, revision = recoveryRevision;
+    var authority = writingAuthority(), session = JSON.stringify(whoList()), request = keptOperation;
+    function context() { return saver.path === path && attachment === saveAttachment && revision === recoveryRevision && authority === writingAuthority() && session === JSON.stringify(whoList()) && editorSource() === shown && !compositionActive(); }
+    return Castor.keep.list(path, { strict: true, includeEvidence: true }).then(keptForWriter).then(function (entries) {
+      if (request !== keptOperation || !context()) return false;
+      currentAt = entries.reduce(function (at, e) { return e.text === shown ? Math.max(at, e.at || 0) : at; }, currentAt || 0);
+      if (!eligibleKept(entry, entries) || !recoveryCandidate(entry, path, shown, currentAt)) return false;
+      var card;
+      function open() {
+        if (!context() || document.getElementById('castor-kept') !== card || !offline && !saver.base) return false;
+        return openKeptCopy(entry, path, shown, attachment, offline, { notice: card, currentAt: currentAt });
+      }
+      function discard() {
+        if (!context() || document.getElementById('castor-kept') !== card) return false;
+        closeKeptNotice(); // Cancels an earlier Put it back on this same card.
+        if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
+        if (!context()) return false;
+        var cancelled = keptOperation;
+        return Castor.keep.discard(entry).then(function (ok) {
+          if (!ok) throw Error('The copy could not be set aside.');
+          if (cancelled === keptOperation && context() && saver.base && saver.text !== null) return recover(path, saver.text, saver.base);
+          return false;
+        }).catch(function () {
+          if (cancelled === keptOperation && context()) keptNotice('The copy could not be set aside.', 'Nothing was removed. Keep this page open and try again.', [['Close', closeKeptNotice]]);
+          return false;
+        });
+      }
+      var head = offline ? entry.at > 1 ? 'Your unsent copy from ' + when(entry.at) + ' is on this device.' : 'An earlier unsent copy is on this device.'
+        : entry.at > 1 ? 'Your unsaved version from ' + when(entry.at) + ' is kept on this device.' : 'An earlier unsaved copy is kept on this device.';
+      card = keptNotice(head, keptDescription(entry, shown), offline ? [['Open my unsent copy', open]] : [['Put it back', open], ['Discard', discard]]);
+      card.setAttribute('data-kept-choice', '');
+      return true;
+    }).catch(function () { return false; });
+  }
+  function offerOfflineKept(entry, path, currentAt) { return offerKeptChoice(entry, path, currentAt, true); }
+  function offerKept(entry, path, currentAt) { return offerKeptChoice(entry, path, currentAt, false); }
 
   /* --- asking the server ----------------------------------------------------- */
 
   function noteChange() {
-    if (writableHere()) {
+    recoveryRevision++;
+    if (keepOn() || writableHere()) {
+      lastTypedCopy = { path: saver.path, text: editorSource(), at: Date.now() };
+      var notice = document.getElementById('castor-kept');
+      if (notice && notice.hasAttribute('data-kept-choice')) closeKeptNotice();
       if (!sessionMemory && hasFounder(sessionNow())) sessionMemory = sessionNow();
       if (!saver.writer || !saver.writer.length) saver.writer = whoList();
       saver.typed = true; journal();
@@ -2665,6 +2886,7 @@
   }
 
   function saveNow(keepalive) {
+    if (PUBLIC_WRITER && !Castor.role.confirmed) return Promise.resolve();
     clearTimeout(saver.timer);
     saver.timer = 0;
     if (saver.writerUnknown) return Promise.resolve();
@@ -2694,6 +2916,9 @@
 
   function landed(path, text, res) {
     var done = settled(res, text);
+    // An attempt with no answer (or a server error) may have landed: remembered, so a later "moved"
+    // to exactly these words is known as his own save, not a change made elsewhere.
+    if (!done && (!res.status || res.status >= 500) && saver.path === path) saver.unanswered = (saver.unanswered || []).concat([text]).slice(-8);
     if (done && Castor.bus && Castor.bus.emit) Castor.bus.emit('piece:saved', { path: path, text: text, res: res, done: done });
     if (done && Castor.keep) Castor.keep.confirm(path, text, Castor.role.publicWriter ? Castor.role.who : undefined);
     if (saver.path !== path) {
@@ -2707,6 +2932,7 @@
       if (done.sha) saver.base = done.sha;
       saver.text = text;
       saver.retries = 0;
+      saver.unanswered = [];
       var b = res.body || {};
       // The save receipt carries real commit metadata. Keep Changes current
       // without reloading the article, which would replace the writer's caret.
@@ -2743,6 +2969,14 @@
         setSave('locked', 'This article is being written somewhere else, so it cannot be changed here.' + kept);
         return;
       case 'moved-under-you':
+        // His own attempt that got no answer landed after all: the server holds those words, so it is
+        // his version, not one from elsewhere. The newer words go on top of it at once.
+        var mine = res.body || {};
+        if (mine.sha && typeof mine.markdown === 'string' && (saver.unanswered || []).indexOf(mine.markdown) >= 0) {
+          saver.base = mine.sha; saver.text = mine.markdown; saver.unanswered = [];
+          saveNow(false);
+          return;
+        }
         conflictWith(res.body || {});
         return;
       case 'changed-on-disk':
@@ -2755,6 +2989,11 @@
         setSave('refused', 'Owner, phase and status are changed outside the app. Put them back and the next pause saves.' + kept, 'owner or phase changed');
         return;
       case 'gate-failed':
+        var refusal = gateRefusal((res.body || {}).stdout);
+        if (refusal) {
+          setSave('refused', refusalMessage(refusal, editorSource()) + kept, refusal.rule, refusal);
+          return;
+        }
         setSave('refused', 'The project’s format check refused this version. Keep writing and the next pause tries again.' + kept, 'format check');
         return;
       case 'invalid-who':
@@ -2771,6 +3010,71 @@
       return;
     }
     setSave('refused', ((res.body || {}).error || 'The server refused this save.') + kept);
+  }
+
+  /* The check's first refusal, from its own line ("FAIL <rule> in <file> (<why>) -> <line>:<words>"):
+     the rule, why, the line of the article it names and the words there, and for an em dash the
+     character itself, so Show line can select it. Its notes are not refusals. */
+  function gateRefusal(stdout) {
+    var fail = String(stdout || '').split('\n').filter(function (l) { return /^FAIL /.test(l); })[0];
+    if (!fail) return null;
+    // The check's whys hold no ")"; what follows the arrow is his line, whatever it holds.
+    var m = /^FAIL (.+?) in \S+(?: \(([^)]*)\))? -> (\d+):(.*)$/.exec(fail);
+    if (!m) return { rule: fail.replace(/^FAIL /, '').replace(/\.$/, ''), why: '', line: 0, words: '', at: '' };
+    // The check cuts the line at 120 characters: a character the cut broke is not his. The em dash
+    // it names is on the line even when it lies past the cut.
+    return { rule: m[1], why: m[2] || '', line: +m[3], words: m[4].replace(/\uFFFD+$/, '').trim(), at: m[1] === 'em dash' ? '—' : '' };
+  }
+
+  /* The refusal in plain words: the rule as advice, the line, and the words around the character
+     the check named (an em dash can sit a thousand characters into the line it quotes the start of). */
+  function refusalMessage(r, text) {
+    var none = /^owner: \S+ writes none; (.+)$/.exec(r.why || '');
+    var rule = none ? 'this article takes no ' + r.rule + ' (write a ' + none[1] + ')' : r.rule + (r.why ? ' (' + r.why + ')' : '');
+    var words = r.line ? refusalQuote(text, r) : '';
+    // Words that end a sentence end it inside the quote: no second full stop after it.
+    return 'The project’s check refused this version: ' + rule + (r.line ? ', line ' + r.line + (words ? ': “' + words + '”' : '') : '') +
+      (/[.!?…]$/.test(words) ? ' ' : '. ') + 'Change it and the next pause saves.';
+  }
+  /* About six words on each side of the character the check named, cut at spaces, on the line where Show
+     line finds it; without it, the check's own words, their first dozen or so. */
+  function refusalQuote(text, r) {
+    var at = refusalAt(text, r), words = String(r.words || '').trim(), REACH = 48;
+    if (at && at.end > at.start) {
+      var lineStart = String(text).lastIndexOf('\n', at.start - 1) + 1, lineEnd = String(text).indexOf('\n', at.end);
+      var line = String(text).slice(lineStart, lineEnd < 0 ? undefined : lineEnd), from = at.start - lineStart, to = at.end - lineStart;
+      var a = from > REACH ? line.indexOf(' ', from - REACH) + 1 : 0, z = line.length - to > REACH ? line.lastIndexOf(' ', to + REACH) : line.length;
+      if (a <= 0 || a > from) a = 0;
+      if (z < to) z = line.length;
+      words = (a > 0 ? '…' : '') + line.slice(a, z).trim() + (z < line.length ? '…' : '');
+    } else if (words.length > 2 * REACH) {
+      words = words.slice(0, words.lastIndexOf(' ', 2 * REACH) > 0 ? words.lastIndexOf(' ', 2 * REACH) : 2 * REACH) + '…';
+    }
+    return words;
+  }
+
+  /* Where Show line goes, in the article's text: the line that starts with the words the check
+     quoted (all of them it gave), nearest the line it named, wherever typing since has moved it;
+     on that line its em dash, when the rule names one. When no line holds those words any more:
+     the start of the line named, nothing selected. Null when there is no such line. */
+  function refusalAt(text, r) {
+    if (!r || !r.line) return null;
+    var lines = String(text).split('\n'), words = String(r.words || '').trim(), named = r.line - 1, found = -1;
+    if (words) for (var i = 0; i < lines.length; i++) {
+      if (lines[i].trim().indexOf(words) === 0 && (found < 0 || Math.abs(i - named) < Math.abs(found - named))) found = i;
+    }
+    var n = found >= 0 ? found : named;
+    if (n < 0 || n >= lines.length) return null;
+    var at = 0;
+    for (var k = 0; k < n; k++) at += lines[k].length + 1;
+    var hit = found >= 0 && r.at ? lines[n].indexOf(r.at) : -1;
+    return hit >= 0 ? { start: at + hit, end: at + hit + r.at.length } : { start: at, end: at };
+  }
+
+  /* Show line: the caret there in typing mode, the line brought into view as a tap brings it. */
+  function showRefusal() {
+    var at = refusalAt(editorSource(), saver.refusal);
+    return !!at && Castor.editor.revealSource(at.start, at.end);
   }
 
   /* Never gives up: the wait doubles from RETRY_FIRST to RETRY_MAX and stays there. */
@@ -2924,6 +3228,7 @@
 
   Castor.saver = {
     state: function () { return saver.state; },
+    refusal: function () { var r = saver.refusal; return r ? { rule: r.rule, line: r.line, words: r.words, at: r.at } : null; },
     flush: function () { return flushSave(false); },
     snapshot: function () { return { path: saver.path, base: saver.base, clean: !saver.inflight && editorSource() === saver.text }; },
     reattach: attachSaver
@@ -2957,11 +3262,23 @@
         }
         if (request !== pieceRequest || liveState.path !== path) return { superseded: true };
       }
-      var payload = got[0];
+      var payload = got[0], revision = recoveryRevision, authority = writingAuthority(), outgoing = editorSource();
+      var prepared = await prepareOpening(path, payload, got[1]);
+      if (!prepared.ready) {
+        if (request === pieceRequest && liveState.path === path) {
+          liveState.path = displayedPath;
+          keptNotice('The article’s kept copies could not be safely opened.', 'Nothing was replaced. Keep this page open and try again.', [['Close', closeKeptNotice]]);
+        }
+        return { blocked: true };
+      }
+      if (request !== pieceRequest || liveState.path !== path || revision !== recoveryRevision || authority !== writingAuthority() || editorSource() !== outgoing || compositionActive()) {
+        if (request === pieceRequest && liveState.path === path && displayedPath !== path) liveState.path = displayedPath;
+        return { superseded: true };
+      }
       applyLive(data, payload);
       displayedPath = path;
       source = sourceOf(data);
-      opening(path, payload, got[1]);
+      opening(path, payload, prepared.entries || [], prepared.entry);
       render(false);
       if (data.piece && data.piece.title) document.title = data.piece.title;
       if (Castor.editor && Castor.editor.mount) {
@@ -3179,6 +3496,7 @@
       onSelect: null,
       spellcheck: recall('spellcheck') !== '0',
       showWriterNotes: writerNotes,
+      showMarks: marksOn(),
       onComment: function (anchor) {
         if (Castor.comments && Castor.comments.compose) Castor.comments.compose(anchor);
         else bus.emit('comment:new', anchor);
@@ -3634,6 +3952,16 @@
   }
 
   function dimOn() { return recall('dim') !== '0'; }
+  /* Show Markdown marks: off unless this device turned it on. */
+  function marksOn() { return recall('marks') === '1'; }
+  function setMarks(on) {
+    store('marks', on ? '1' : '0');
+    var settings = document.getElementById('castor-settings');
+    var inSettings = settings && settings.matches && settings.matches(':popover-open');
+    if (Castor.editor && Castor.editor.setMarks) Castor.editor.setMarks(!!on, { focus: !inSettings });
+    var sw = document.getElementById('set-marks'); if (sw) sw.checked = marksOn();
+    return marksOn();
+  }
   function applyDim() {
     var on = dimOn();
     if (Castor.editor && Castor.editor.setWritingMode) Castor.editor.setWritingMode('--focus-paragraph', on);
@@ -3691,6 +4019,7 @@
     var focus = document.getElementById('set-focus'); if (focus) focus.checked = Castor.panels.isFocus();
     applyDim();
     var spell = document.getElementById('set-spell'); if (spell) spell.checked = recall('spellcheck') !== '0';
+    var marks = document.getElementById('set-marks'); if (marks) marks.checked = marksOn();
     var width = document.getElementById('set-width'); if (width) width.value = writingPreference('textWidth', ['60', '68', '74'], '60');
     var size = document.getElementById('set-size'); if (size) size.value = writingPreference('textSize', ['18', '20', '22'], '20');
     var ids = defaultPanels();
@@ -3773,7 +4102,7 @@
      gets data-preset, each panel word its data-tier (the stylesheet decides what
      that hides). Nothing is removed: every hidden word is still a palette command
      and a Settings row. Readers never get a preset. */
-  var PRESETS = ['minimal', 'writing', 'advanced'];
+  var PRESETS = ['minimal', 'writing', 'advanced'], PRESET_NAMES = { minimal: 'Few', writing: 'Some', advanced: 'All' };
   var WORD_TIER = { outline: 'writing', comments: 'writing', files: 'advanced', changes: 'advanced',
     drafts: 'advanced', workspace: 'advanced', links: 'writing', 'for-you': 'advanced', live: 'advanced', beside: 'advanced' };
   function presetNow() { return writingPreference('preset', PRESETS, 'minimal'); }
@@ -3799,10 +4128,12 @@
     var C = Castor.commands;
     if (!C || !C.register) return;
     PRESETS.forEach(function (name) {
-      C.register({ id: 'view.preset.' + name, title: 'Interface: ' + name.charAt(0).toUpperCase() + name.slice(1),
-        hint: name === 'minimal' ? 'a quiet bar' : name === 'writing' ? 'Outline and Comments' : 'every control',
+      C.register({ id: 'view.preset.' + name, title: 'Tools in More: ' + PRESET_NAMES[name],
+        hint: name === 'minimal' ? 'Shortcuts only' : name === 'writing' ? 'adds Links' : 'every tool',
         section: 'View', when: function () { return !reviewing(); }, run: function () { setPreset(name); paintSettings(); } });
     });
+    C.register({ id: 'view.marks', title: 'Show Markdown marks', hint: 'on or off, everywhere in the article', section: 'View',
+      when: function () { return !reviewing(); }, run: function () { setMarks(!marksOn()); paintSettings(); } });
     C.register({ id: 'view.agenttray', title: 'Agent tray', hint: 'send notes to the agent; off until you turn it on', section: 'View',
       when: function () { return !reviewing() && !!(Castor.agentTray && Castor.agentTray.setEnabled); },
       run: function () { Castor.agentTray.setEnabled(!Castor.agentTray.enabled()); paintSettings(); } });
@@ -3823,6 +4154,7 @@
     textSize: { values: ['18', '20', '22'], read: function () { return writingPreference('textSize', ['18', '20', '22'], '20'); },
       write: function (v) { store('textSize', v); } },
     dim: { values: [true, false], read: dimOn, write: function (v) { store('dim', v ? '1' : '0'); } },
+    marks: { values: [true, false], read: marksOn, write: setMarks },
     spellcheck: { values: [true, false], read: function () { return recall('spellcheck') !== '0'; },
       write: function (v) { store('spellcheck', v ? '1' : '0'); } },
     touchFormat: { values: [true, false], read: function () { return yesNo('touchFormat', true); },
@@ -3867,7 +4199,10 @@
     applyWritingPreferences(); applyDim(); applyPreset(); paintSettings();
     return { ok: true, applied: applied };
   }
-  Castor.prefs = { preset: presetNow, setPreset: setPreset, exportProfile: exportProfile, importProfile: importProfile };
+  Castor.prefs = { preset: presetNow, setPreset: setPreset, exportProfile: exportProfile, importProfile: importProfile,
+    marks: marksOn, setMarks: setMarks,
+    theme: function () { return themeMode; }, setTheme: function (mode) { setTheme(mode); return themeMode; },
+    themes: THEME_ORDER.map(function (mode) { return { value: mode, label: THEME_WORD[mode] }; }) };
 
   /* Export saves the profile through the browser's own download; Import reads a
      chosen file here, in the page, and sends it nowhere. */
@@ -3882,7 +4217,7 @@
         link.download = PROFILE_NAME + '.json';
         link.click();
         setTimeout(function () { global.URL.revokeObjectURL(url); }, 1000);
-        say('Preferences saved to a file. It holds settings only.');
+        say('Settings saved to a file. It holds settings only.');
       } catch (e) { say('The file could not be made here.'); }
     });
     var into = document.getElementById('set-import-prefs');
@@ -3900,7 +4235,7 @@
         reader.onerror = function () { say('That file could not be read.'); };
         reader.onload = function () {
           var result = importProfile(String(reader.result || ''));
-          say(result.ok ? 'Preferences applied.' : result.error);
+          say(result.ok ? 'Settings applied.' : result.error);
         };
         reader.readAsText(file);
       });
@@ -3971,7 +4306,7 @@
     wireSettingsTabs(panel);
     var gear = document.getElementById('castor-settings-gear');
     if (Castor.popovers) Castor.popovers.bind(gear, panel, paintSettings);
-    [['set-focus', setFocus], ['set-dim', setDim]].forEach(function (pair) {
+    [['set-focus', setFocus], ['set-dim', setDim], ['set-marks', setMarks]].forEach(function (pair) {
       var control = document.getElementById(pair[0]);
       if (control) control.addEventListener('change', function () { pair[1](control.checked); });
     });
@@ -4001,12 +4336,8 @@
       if (!reviewing() && Castor.agentTray && Castor.agentTray.setEnabled) Castor.agentTray.setEnabled(trayControl.checked);
       paintSettings();
     });
+    // The picker's first choice is the world's own reading font, so it is also the reset.
     if (Castor.fonts && Castor.fonts.mountReadingPicker) Castor.fonts.mountReadingPicker(document.getElementById('set-reading-font'));
-    /* Only the reading font goes back to the world's own; the other type choices stay. */
-    var readingFont = document.getElementById('set-reset-reading');
-    if (readingFont) readingFont.addEventListener('click', function () {
-      if (Castor.fonts && Castor.fonts.set) Castor.fonts.set('reading', '');
-    });
     wireProfile(document.getElementById('set-prefs-note'));
   }
 
@@ -4116,10 +4447,35 @@
   // Its height is already the usable height; subtracting offsetTop adds a gap.
   function wireViewport() {
     if (!els.frame) return;
-    var vv = global.visualViewport, raf = 0;
+    var vv = global.visualViewport, raf = 0, full = {}, deepest = {}, opened = 0, taller = null;
     function fit() {
       raf = 0;
-      els.frame.style.setProperty('--viewport-height', (vv ? vv.height : global.innerHeight) + 'px');
+      var height = vv ? vv.height : global.innerHeight;
+      // Phone: after focus moves, iOS can stop counting the browser's own row above
+      // the keys (Chrome's key, card and pin; Safari's arrows) while it is still drawn.
+      // That row is there on every keyboard, so the deepest keyboard seen at this
+      // width is the one in front of the page. Measured from the viewport alone:
+      // innerHeight changes for a frame on Return. Mid-writing, a taller keyboard
+      // counts only once it has stayed 200 ms, so a one-frame flicker moves nothing.
+      var width = global.innerWidth, zoomed = vv && (vv.scale || 1) > 1.01;
+      // Before the viewport tag applies, the first frame can be laid out zoomed out and far taller than the screen.
+      var scr = global.screen, tallest = scr && scr.height ? Math.max(scr.height, scr.width || 0) : Infinity;
+      if (!zoomed && height <= tallest) full[width] = Math.max(full[width] || 0, height);   // from the first fit, before the app knows it is a phone
+      if (vv && !zoomed && els.app && els.app.dataset.mode === 'phone') {
+        var now = Date.now(), keys = full[width] - height;
+        // No phone keyboard covers more than 70 % of the screen; such a sample is a glitch.
+        if (keys <= 120 || keys > full[width] * .7) { opened = 0; taller = null; }
+        else {
+          if (!opened) opened = now;
+          if (!deepest[width] || keys > deepest[width] && now - opened < 600) deepest[width] = Math.max(deepest[width] || 0, keys);
+          else if (keys > deepest[width]) {
+            if (!taller || Math.abs(taller.keys - keys) > 2) { taller = { keys: keys, at: now }; global.setTimeout(schedule, 210); }
+            else if (now - taller.at >= 200) { deepest[width] = keys; taller = null; }
+          } else taller = null;
+          height = full[width] - deepest[width];
+        }
+      }
+      els.frame.style.setProperty('--viewport-height', height + 'px');
       els.frame.style.setProperty('--viewport-top', '0px');
       resetWindow();
       bus.emit('layout');
@@ -4145,7 +4501,18 @@
     fit();
   }
 
-  function bootWith(live) {
+  async function bootWith(live) {
+    var authority = writingAuthority();
+    var revision = recoveryRevision, attachment = saveAttachment, request = pieceRequest, outgoing = editorSource(), operation = keptOperation;
+    var prepared = live && live.payload ? await prepareOpening(live.path, live.payload, live.kept) : { ready: true, entry: null };
+    // A refusal belongs to its captured context too: never replace a newer
+    // notice with an obsolete error, or revive an interrupted equal identity.
+    if (revision !== recoveryRevision || attachment !== saveAttachment || request !== pieceRequest || operation !== keptOperation ||
+        authority !== writingAuthority() || editorSource() !== outgoing || compositionActive()) return;
+    if (!prepared.ready) {
+      keptNotice('The article’s kept copies could not be safely opened.', 'Nothing was replaced. Keep this page open and try again.', [['Close', closeKeptNotice]]);
+      return;
+    }
     liveState = live;
     displayedPath = live && live.payload ? live.path : null;
     data = readData();
@@ -4153,7 +4520,7 @@
     else if (reviewing()) notShared(data);
     world = data.world || document.documentElement.dataset.world || 'dev';
     source = sourceOf(data);
-    if (live && live.payload) opening(live.path, live.payload, live.kept);
+    if (live && live.payload) opening(live.path, live.payload, prepared.entries || [], prepared.entry);
     /* The article now open is the one to come back to, and it has its tab. */
     if (live && live.payload) rememberPiece(live.path);
     loadClosed();

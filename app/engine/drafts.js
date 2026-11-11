@@ -55,6 +55,16 @@
     var d = new Date(when);
     return isFinite(d.getTime()) ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
   }
+  // A save is named by when it was made, short: today its time ("14:32"), another day its date
+  // and time ("9 Nov 14:32"), another year with the year. Saves in one minute add seconds.
+  function moment(when, seconds) {
+    var d = new Date(when), now = new Date();
+    if (!isFinite(d.getTime())) return '';
+    var time = d.toLocaleTimeString('en-GB', seconds ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
+    if (d.toDateString() === now.toDateString()) return time;
+    return d.toLocaleDateString('en-GB', d.getFullYear() === now.getFullYear() ? { day: 'numeric', month: 'short' }
+      : { day: 'numeric', month: 'short', year: 'numeric' }) + ' ' + time;
+  }
   function blocksOf(markdown) {
     // Compared as plain LF text: a CRLF version's front matter and paragraphs read as anyone's.
     return Castor.md.parse(String(markdown || '').replace(/\r\n?/g, '\n')).blocks.filter(function (b) { return b.type !== 'frontmatter'; });
@@ -63,9 +73,10 @@
 
   /* --- what can be compared ------------------------------------------------- */
   function saves() {
-    var list = (data().versions || []).slice(0, -1).reverse().slice(0, 6);
-    return list.map(function (save) {
-      return { key: 'save:' + save.sha, title: 'Saved ' + day(save.when), by: save.who || 'Unknown', when: save.when,
+    var list = (data().versions || []).slice(0, -1).reverse().slice(0, 6), minutes = list.map(function (save) { return moment(save.when); });
+    return list.map(function (save, i) {
+      var twice = minutes[i] && minutes.indexOf(minutes[i]) !== minutes.lastIndexOf(minutes[i]);
+      return { key: 'save:' + save.sha, title: ('Saved ' + moment(save.when, twice)).trim(), by: save.who || 'Unknown', when: save.when,
         markdown: save.markdown, origin: articlePath() + '@' + save.sha, agent: save.authorRole === 'agent', history: true };
     });
   }
@@ -151,14 +162,24 @@
     renderBanner();
     var body = P.body;
     if (!body) return;
-    body.textContent = '';
-    body.appendChild(node('p', 'Read versions side by side and take paragraphs into the article. A is the article: the text that publishes.', 'versions-note'));
-    if (P.message) { var notice = node('p', P.message, 'versions-note'); notice.setAttribute('role', 'status'); body.appendChild(notice); }
-    if (!names[who()]) { body.appendChild(node('p', 'Choose who is writing to open versions.', 'versions-note')); return; }
+    var scope = JSON.stringify([path(), who()]), form = body.querySelector('.versions-create');
+    if (form && form.versionScope === scope) {
+      Array.prototype.slice.call(body.children).forEach(function (child) { if (child !== form) child.remove(); });
+      form.children[0].disabled = P.busy;
+      form.children[1].disabled = P.busy || P.unlisted;
+    } else { body.textContent = ''; form = null; }
+    var beforeForm = true;
+    function append(child) {
+      if (form && form.parentNode === body && beforeForm) body.insertBefore(child, form);
+      else body.appendChild(child);
+    }
+    append(node('p', 'Read versions side by side and take paragraphs into the article. A is the article: the text that publishes.', 'versions-note'));
+    if (P.message) { var notice = node('p', P.message, 'versions-note'); notice.setAttribute('role', 'status'); append(notice); }
+    if (!names[who()]) { append(node('p', 'Choose who is writing to open versions.', 'versions-note')); return; }
     if (P.unlisted) return;  // the listing failed: say why, and claim nothing about what versions exist
     var list = chosen(), letter = function (key) { var i = list.indexOf(key); return i < 0 ? '' : LETTERS[i + 1]; };
-    body.appendChild(node('h3', 'Open versions', 'versions-group'));
-    body.appendChild(versionRow(null, 'A', true));
+    append(node('h3', 'Open versions', 'versions-group'));
+    append(versionRow(null, 'A', true));
     P.entries.forEach(function (entry) {
       var c = fileVersion(entry), row = versionRow(c, letter(c.key), list.indexOf(c.key) >= 0), tools = node('div', null, 'versions-tools');
       tools.appendChild(button('Edit', function () { return act(function () { return saved().then(function () { return open(entry.path); }); }); }, 'versions-link'));
@@ -167,25 +188,29 @@
         tools.appendChild(node('span', 'Open since ' + day(entry.date) + '.', 'versions-note'));
         tools.appendChild(button('Put away?', function () { return act(function () { return putAway(entry); }); }, 'versions-link'));
       }
-      row.appendChild(tools); body.appendChild(row);
+      row.appendChild(tools); append(row);
     });
-    if (!P.entries.length) body.appendChild(node('p', 'No other versions yet. An agent’s rewrite, or a copy you make to try another way, appears here.', 'versions-note'));
-    var form = node('form', null, 'versions-create'), title = node('input');
-    title.type = 'text'; title.placeholder = 'Name of a new version'; title.maxLength = 100; title.required = true;
-    title.setAttribute('aria-label', 'Name of a new version'); title.disabled = P.busy;
-    title.addEventListener('focus', function () { aboveKeyboard(title); });
-    var create = button('Copy the article', function () {}); create.type = 'submit'; create.disabled = P.busy;
-    form.appendChild(title); form.appendChild(create);
-    form.addEventListener('submit', function (e) {
-      e.preventDefault(); var name = title.value.trim(); if (!name) return;
-      return act(function () {
-        return saved().then(function () { return call('/api/drafts', { action: 'create', piece: piece(), who: who(), title: name, copy: true }); })
-          .then(function (entry) { return open(entry.path); });
+    if (!P.entries.length) append(node('p', 'No other versions yet. An agent’s rewrite, or a copy you make to try another way, appears here.', 'versions-note'));
+    if (!form) {
+      form = node('form', null, 'versions-create'); form.versionScope = scope;
+      var title = node('input');
+      title.type = 'text'; title.placeholder = 'Name of a new version'; title.maxLength = 100; title.required = true;
+      title.setAttribute('aria-label', 'Name of a new version'); title.disabled = P.busy;
+      title.addEventListener('focus', function () { aboveKeyboard(title); });
+      var create = button('Copy the article', function () {}); create.type = 'submit'; create.disabled = P.busy;
+      form.appendChild(title); form.appendChild(create);
+      form.addEventListener('submit', function (e) {
+        e.preventDefault(); var name = title.value.trim(); if (!name) return;
+        return act(function () {
+          return saved().then(function () { return call('/api/drafts', { action: 'create', piece: piece(), who: who(), title: name, copy: true }); })
+            .then(function (entry) { return open(entry.path); });
+        });
       });
-    });
-    body.appendChild(form);
+      append(form);
+    }
+    beforeForm = false;
     var history = saves().concat(P.away.map(awayVersion));
-    if (history.length) body.appendChild(node('h3', 'From history', 'versions-group'));
+    if (history.length) append(node('h3', 'From history', 'versions-group'));
     history.forEach(function (c) {
       var row = versionRow(c, letter(c.key), list.indexOf(c.key) >= 0);
       if (c.away && mine(c.away)) {
@@ -196,11 +221,11 @@
         }); }, 'versions-link'));
         row.appendChild(tools);
       }
-      body.appendChild(row);
+      append(row);
     });
     var go = button(list.length ? 'Compare ' + (list.length + 1) + ' versions' : 'Choose a version to compare', function () { compare(); }, 'versions-go');
     go.disabled = P.busy || !list.length || path() !== articlePath();
-    body.appendChild(go);
+    append(go);
   }
   function open(target) {
     return Castor.pieces.open(target).then(function (opened) {

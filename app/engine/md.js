@@ -193,12 +193,23 @@
     return referenceText(value).trim().replace(/\s+/g, ' ').toUpperCase();
   }
 
-  function referenceMatch(line) {
-    const match = /^ {0,3}\[((?:\\.|[^\]\\\r\n])+)\]:[ \t]*(?:<([^<>\r\n]*)>|(\S+?))(?:[ \t]+(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|\(((?:\\.|[^()\\])*)\)))?[ \t\r]*$/.exec(line);
-    if (!match || match[1][0] === '^' || !referenceLabel(match[1])) return null;
-    if (match[3] && (/[<>]/.test(match[3]) || findParenClose('(' + match[3] + ')', 1) !== match[3].length + 1)) return null;
-    const title = match[4] ?? match[5] ?? match[6];
-    return { referenceKey: referenceLabel(match[1]), destination: destinationText(match[2] ?? match[3]), ...(title === undefined ? {} : { title: destinationText(title) }) };
+  // A link reference definition may spread over lines, as on the site (CommonMark): its
+  // destination on the line after the label, its title on the line after the destination or
+  // over several lines, never across a blank line. The longest such run is the definition.
+  const REFERENCE_SPAN = /^ {0,3}\[((?:\\.|[^\]\\\r\n])+)\]:[ \t]*(?:\n[ \t]*)?(?:<([^<>\r\n]*)>|(\S+?))(?:(?:[ \t]+|[ \t]*\n[ \t]*)(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|\(((?:\\.|[^()\\])*)\)))?[ \t\r]*$/;
+  function referenceSpan(lines, index) {
+    const line = lines[index];
+    if (line == null || !/^ {0,3}\[(?:\\.|[^\]\\\r\n])+\]:/.test(line)) return null;
+    let last = index;
+    while (last + 1 < lines.length && lines[last + 1].trim() !== '' && last - index < 20) last++;
+    for (let end = last; end >= index; end--) {
+      const match = REFERENCE_SPAN.exec(lines.slice(index, end + 1).join('\n'));
+      if (!match || match[1][0] === '^' || !referenceLabel(match[1])) continue;
+      if (match[3] && (/[<>]/.test(match[3]) || findParenClose('(' + match[3] + ')', 1) !== match[3].length + 1)) continue;
+      const title = match[4] ?? match[5] ?? match[6];
+      return { end: end + 1, reference: { referenceKey: referenceLabel(match[1]), destination: destinationText(match[2] ?? match[3]), ...(title === undefined ? {} : { title: destinationText(title) }) } };
+    }
+    return null;
   }
 
   function referenceInsideCode(lines, start, index) {
@@ -225,7 +236,7 @@
       headingMatch(line) || fenceMatch(line) || (listMatch(line) && (paragraphStart == null || listMatch(line).indent < 4)) || (isHr(line) && !/^(?: {4}| {0,3}\t)/.test(line)) ||
       /^\s{0,3}>/.test(line) || /^\[\^[^\]]+\]:/.test(line) ||
       // A link reference definition cannot interrupt a paragraph (CommonMark, and the site).
-      (paragraphStart == null && referenceMatch(line) && !referenceInsideCode(lines, paragraphStart, index)) ||
+      (paragraphStart == null && referenceSpan(lines, index) && !referenceInsideCode(lines, paragraphStart, index)) ||
       isTableStart(lines, index) || htmlBlockEnd(line, true) || /^\s*!\[\[[\s\S]+\]\]\s*$/.test(line)
     );
   }
@@ -317,10 +328,10 @@
       // the line is that table's row or that note's text on the site: not a definition.
       const continues = start > 0 && lines[start - 1].trim() !== '' && blocks.length > 0 &&
         (blocks[blocks.length - 1].type === 'table' || blocks[blocks.length - 1].type === 'footnote-def');
-      const reference = !continues && referenceMatch(lines[index]);
+      const reference = !continues && referenceSpan(lines, index);
       if (reference) {
-        index += 1;
-        blocks.push({ type: 'reference-def', source: lines[start], text: '', meta: reference });
+        index = reference.end;
+        blocks.push({ type: 'reference-def', source: lines.slice(start, index).join('\n'), text: '', meta: reference.reference });
         continue;
       }
 
@@ -660,8 +671,13 @@
 
   // Editing uses the reader's renderer. Source-only characters stay in the DOM,
   // but never take a glyph cell; textContent remains a lossless Markdown string.
+  // With the marks shown (Settings, Show Markdown marks), a line break inside a
+  // mark keeps its own run, so it stays hidden while the characters around it are painted.
   function sourceMark(value, opts) {
-    return opts && opts.editSource && value ? `<span class="cw-mk">${escapeHtml(value)}</span>` : '';
+    if (!(opts && opts.editSource && value)) return '';
+    if (!opts.showMarks || value.indexOf('\n') < 0) return `<span class="cw-mk">${escapeHtml(value)}</span>`;
+    return value.split(/(\n)/).filter(Boolean).map(part =>
+      `<span class="cw-mk${part === '\n' ? ' cw-mk-nl' : ''}">${escapeHtml(part)}</span>`).join('');
   }
   function sourceAtom(source, html, opts) {
     return opts && opts.editSource ? `<span class="cw-atom" contenteditable="false">${sourceMark(source, opts)}${html}</span>` : html;
@@ -1609,7 +1625,7 @@
       if (block.type === 'footnote-def') footnoteBodies[block.meta.footnoteKey] = block.meta.body;
     }
     // usedReferences: the definitions some link or image of the page resolves to.
-    const context = { editSource: Boolean(opts.editSource), references, footnotes: footnoteBodies, showWriterNotes: Boolean(opts.showWriterNotes), figures: opts.figures || null, usedReferences: new Set() };
+    const context = { editSource: Boolean(opts.editSource), showMarks: Boolean(opts.showMarks), references, footnotes: footnoteBodies, showWriterNotes: Boolean(opts.showWriterNotes), figures: opts.figures || null, usedReferences: new Set() };
     /* A caller re-parsing ONE block of a page it already parsed passes the page's
        numbers back in, so a block that loses focus keeps the number it had. */
     if (opts.footnoteNumbers) {

@@ -49,6 +49,11 @@
     if (Castor.bus && typeof Castor.bus.on === 'function') { Castor.bus.on(name, fn); return; }
     DOC.addEventListener(name, fn);
   }
+  // On a phone there is no Esc, and its keyboard's key reads return: say what it does.
+  function keysHint(does) {
+    var phone = !!(global.matchMedia && global.matchMedia('(hover: none) and (pointer: coarse)').matches);
+    return phone ? 'Return ' + does : 'Enter saves · Esc closes';
+  }
   function el(tag, cls, text) {
     var n = DOC.createElement(tag);
     if (cls) n.className = cls;
@@ -215,6 +220,12 @@
     var identity = reviewerIdentity(Castor.role);
     return legacyKey() + (identity ? '.reader.' + encodeURIComponent(identity.id) : '.unconfirmed');
   }
+  Castor.commentScope = function (storageKey) {
+    var match = /^castor\.([^.]+)\.comments\.(articles\/[^/]+\/article\.md)(?:\.(writer|reader)\.(.+)|\.(unconfirmed))?$/.exec(storageKey || '');
+    if (!match) return null;
+    try { return { world: match[1], path: match[2], kind: match[3] || match[5] || '', account: match[4] ? decodeURIComponent(match[4]) : '' }; }
+    catch (e) { return null; }
+  };
   function enterScope() {
     var current = key(), previous = S.storageKey;
     S.storageKey = current;
@@ -248,7 +259,22 @@
      are on the server even when nothing there matches them by text and time --
      for a reviewer the server stamps its own time on a new thread -- so they are
      never sent again (a second send would be a second thread). */
-  function mergeServer(serverThreads, settled, local, storageKey, submitted) {
+  /* A comment the server holds (its file does not read there, or two files share its number) is
+     not in its list but is not gone: `held` names its number. The copy last confirmed stays, so
+     words of his on it that the server never took still count as not sent. */
+  function heldIds(payload) {
+    var ids = {};
+    (!Array.isArray(payload) && payload && Array.isArray(payload.held) ? payload.held : []).forEach(function (h) {
+      if (h && /^\d+$/.test(String(h.id))) ids[String(h.id)] = true;
+    });
+    return ids;
+  }
+  function keepHeld(threads, held, lastKnown) {
+    return threads.concat((lastKnown || []).filter(function (t) {
+      return held[t.id] && !threads.some(function (s) { return s.id === t.id; });
+    }));
+  }
+  function mergeServer(serverThreads, settled, local, storageKey, submitted, held) {
     local = local || S.threads || [];
     preserveCanonicalInput(serverThreads, local, storageKey || key());
     var sameAs = sameThread;
@@ -256,8 +282,12 @@
       return t.pending && !serverThreads.some(function (s) { return s.id === t.id || sameAs(s, t); }) &&
         !(settled && settled[t.id]);
     });
+    // Held, with no copy confirmed in this page: this device's copy stays, and is not sent yet.
+    var kept = local.filter(function (t) {
+      return !t.pending && held && held[t.id] && !serverThreads.some(function (s) { return s.id === t.id; });
+    });
     var stale = local.filter(function (t) {
-      return !t.pending && !serverThreads.some(function (s) { return s.id === t.id; });
+      return !t.pending && !serverThreads.some(function (s) { return s.id === t.id; }) && kept.indexOf(t) < 0;
     });
     if (stale.length) {
       try {
@@ -266,7 +296,7 @@
         global.localStorage.setItem(aside, JSON.stringify(had.concat(stale).slice(-200)));
       } catch (e) {  }
     }
-    var waiting = unsent.length;
+    var waiting = unsent.length + kept.length;
     var merged = serverThreads.map(function (server) {
       var here = local.filter(function (t) {
         return t.id === server.id || sameAs(t, server) || (settled && settled[t.id] === server.id);
@@ -293,7 +323,7 @@
       });
       return updated;
     });
-    return { threads: merged.concat(unsent), unsent: waiting };
+    return { threads: merged.concat(kept, unsent), unsent: waiting };
   }
   function sameThread(a, b) {
     if (a.id === b.id && !a.pending && !b.pending) return true;
@@ -389,17 +419,26 @@
     return anchor;
   }
   // A passage's later parts, each in one of the next three paragraphs after the part before it.
-  // A part no longer there ends the passage at the part before it.
+  // A part no longer there ends the passage at the part before it. Where its words occur more than
+  // once, the paragraph it was made in (its text unchanged) wins, then the words that go on as they
+  // did (its suffix), then the nearest, so the same words in a paragraph put in between never take it.
   function resolveParts(more, blocks, firstId) {
     var out = [], at = -1;
     for (var i = 0; i < blocks.length; i++) if (blocks[i].id === firstId) { at = i; break; }
     if (at < 0) return out;
     anchorParts(more).every(function (part) {
+      var best = null;
       for (var j = at + 1; j < blocks.length && j <= at + 3; j++) {
-        var start = blocks[j].text.indexOf(part.quote);
-        if (start >= 0) { out.push({ blockId: blocks[j].id, start: start, end: start + part.quote.length }); at = j; return true; }
+        var text = blocks[j].text;
+        for (var start = text.indexOf(part.quote); start >= 0; start = text.indexOf(part.quote, start + 1)) {
+          var score = (part.blockText && text === part.blockText ? 2 : 0) +
+            (part.suffix && text.slice(start + part.quote.length).indexOf(part.suffix) === 0 ? 1 : 0);
+          if (!best || score > best.score) best = { score: score, j: j, start: start };
+        }
       }
-      return false;
+      if (!best) return false;
+      out.push({ blockId: blocks[best.j].id, start: best.start, end: best.start + part.quote.length }); at = best.j;
+      return true;
     });
     return out;
   }
@@ -671,17 +710,19 @@
         var threads = Array.isArray(payload) ? payload : payload && payload.threads;
         if (!Array.isArray(threads)) throw new Error('comments had the wrong shape');
         var actionWasPending=actionPending();acceptCapabilities(payload,storageKey);threads=threads.map(function(t){var fresh=preserveActionProjection(t,storageKey);if(fresh.actions||fresh.statusActions)rememberActionProjection(normalise(fresh),storageKey);return fresh;});
-        if (poll && !S.retryReads[storageKey] && JSON.stringify(canonicalThreads(threads,storageKey)) === JSON.stringify(S.lastServer) && actionWasPending===actionPending()) return;
+        var held = heldIds(payload), lastKnown = S.serverCopies[storageKey];
+        var confirmed = function () { return keepHeld(canonicalThreads(threads,storageKey), held, lastKnown); };
+        if (poll && !S.retryReads[storageKey] && JSON.stringify(confirmed()) === JSON.stringify(S.lastServer) && actionWasPending===actionPending()) return;
         var authenticated = !payload.offline && roleConfirmed() && (!reviewing() || !!reviewerIdentity(Castor.role));
         try {
           var current = global.localStorage && global.localStorage.getItem(storageKey);
           if (current !== (raw || null)) return;
         } catch (e) { /* no local copy can have changed */ }
-        S.lastServer = canonicalThreads(threads,storageKey);
+        S.lastServer = confirmed();
         S.serverCopies[storageKey] = S.lastServer;
         settleSubmitted(S.lastServer, storageKey);
-        var legacy = accountLocal(storageKey, canonicalThreads(threads,storageKey));
-        var fresh = mergeServer(canonicalThreads(threads,storageKey), null, mergeLocal(S.threads, legacy), storageKey);
+        var legacy = accountLocal(storageKey, confirmed());
+        var fresh = mergeServer(confirmed(), null, mergeLocal(S.threads, legacy), storageKey, undefined, held);
         S.threads = fresh.threads;
         if (Castor.comments) Castor.comments.durable = authenticated && !fresh.unsent && !actionPending();
         try {
@@ -760,6 +801,37 @@
     });
   }
 
+  var COMMENT_TIMEOUT = 15000;
+  // Bound both the connection and its body. A timeout can still have committed:
+  // pending operation ids stay intact for reconciliation, never a fresh send.
+  function commentRequest(url, init) {
+    return new Promise(function (resolve, reject) {
+      var controller = null, done = false;
+      try { controller = new global.AbortController(); } catch (e) { /* timeout still releases the queue */ }
+      var timer = setTimeout(function () {
+        finish(new Error('The server is taking longer than usual. Your words stay on this device.'));
+        if (controller) controller.abort();
+      }, COMMENT_TIMEOUT);
+      function finish(error, response) {
+        if (done) return;
+        done = true; clearTimeout(timer);
+        if (error) reject(error); else resolve(response);
+      }
+      Promise.resolve().then(function () {
+        return global.fetch(url, Object.assign({}, init || {}, controller ? { signal: controller.signal } : {}));
+      }).then(function (response) {
+        function complete(body) {
+          var copy = { ok: response.ok, status: response.status, json: function () { return Promise.resolve(body); } };
+          copy.clone = function () { return copy; };
+          finish(null, copy);
+        }
+        // Identity refusals are status-only; an optional error page must not delay sign-out.
+        if (url === '/api/whoami' && !response.ok) { complete({}); return; }
+        return response.json().then(complete);
+      }).catch(function (error) { finish(error); });
+    });
+  }
+
   function save() {
     if (!available()) return false;
     switchScope();
@@ -778,6 +850,7 @@
     if (!path) return true;
     var reviewer = reviewing();
     var readerAccount = reviewer && roleConfirmed() ? reviewerIdentity(Castor.role) : null;
+    var writerAccount = !reviewer && Castor.role.publicWriter ? Castor.role.id : '';
     function headForWire(t) { var copy = Object.assign({}, t); delete copy.legacyHead; return copy; }
     var canonical = S.serverCopies[storageKey];
     if (roleConfirmed() && (!reviewer || readerAccount) && canonical &&
@@ -833,7 +906,7 @@
       if (!reviewer) return Promise.resolve();
       if (!roleConfirmed() || !sameReviewer(readerAccount, reviewerIdentity(Castor.role))) return Promise.reject(new Error('Sign in as the original reader to send these comments.'));
       // Other tabs and lost responses can leave the saved prefix ahead of this tab.
-      return global.fetch(commentReadUrl(path), { cache: 'no-store' })
+      return commentRequest(commentReadUrl(path), { cache: 'no-store' })
         .then(function (response) {
           if (!response.ok) throw new Error('comments did not reload before retry');
           return response.json();
@@ -854,7 +927,7 @@
       (S.serverCopies[storageKey] || []).concat(sending.filter(function (t) { return !t.pending; }))
         .forEach(function (t) { knownIds[t.id] = true; });
       function post(retried) {
-        var authenticate = global.fetch('/api/whoami', { cache: 'no-store' }).then(function (response) {
+        var authenticate = commentRequest('/api/whoami', { cache: 'no-store' }).then(function (response) {
           if (!response.ok) {
             // Cards repaint without Reply and actions once the session has ended (S.ended in their signatures).
             if (!reviewer && (response.status === 401 || response.status === 403) && Castor.signedOut) { Castor.signedOut(); S.ended = ended(); }
@@ -864,7 +937,9 @@
           return response.json();
         }).then(function (role) {
           if (!reviewer) {
-            if (!role || role.role !== 'founder' || !pendingIdentityKnown(pendingMessages(sending, storageKey), false, null)) {
+            if (!role || role.role !== 'founder' || !roleConfirmed() ||
+                (writerAccount && (role.id !== writerAccount || Castor.role.id !== writerAccount || role.who !== who)) ||
+                !pendingIdentityKnown(pendingMessages(sending, storageKey), false, null)) {
               throw new Error('Your sign-in or the original writer could not be confirmed. Your words remain on this device.');
             }
             return null;
@@ -878,7 +953,7 @@
         return authenticate.then(function (identity) {
           var wire = sending.map(headForWire);
           var body = reviewer ? { path: path, threads: wire, reviewer_id: identity.id } : { path: path, threads: wire, who: who, agent_delivery: 'manual' };
-          return global.fetch('/api/comments', {
+          return commentRequest('/api/comments', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
           }).then(function (response) {
             if (!reviewer || retried || [403, 409].indexOf(response.status) < 0) return response;
@@ -906,7 +981,8 @@
         var current = null;
         try { current = global.localStorage && global.localStorage.getItem(storageKey); }
         catch (e) { current = snapshot; }
-        var confirmed = canonicalThreads(threads,storageKey);
+        var held = heldIds(payload);
+        var confirmed = keepHeld(canonicalThreads(threads,storageKey), held, S.serverCopies[storageKey]);
         var active = available() && key() === storageKey;
         var local = active ? mergeLocal(S.threads, localThreads(storageKey)) : null;
         if (!local) {
@@ -929,7 +1005,7 @@
           }
         });
         settleSubmitted(confirmed, storageKey);
-        var merged = mergeServer(confirmed, sent, local, storageKey, outgoing);
+        var merged = mergeServer(confirmed, sent, local, storageKey, outgoing, held);
         var updated = merged.threads;
         try {
           global.localStorage && global.localStorage.setItem(storageKey, JSON.stringify(updated));
@@ -937,7 +1013,9 @@
         S.serverCopies[storageKey] = confirmed;
         delete S.retryReads[storageKey];
         if (merged.unsent && revision === saveVersions[storageKey] && Castor.bus && Castor.bus.emit) {
-          Castor.bus.emit('comments:unsaved', { path: path, reason: 'The server did not confirm this exact comment. Your original words remain on this device.' });
+          // A comment the server held is named, with why; any other refusal reads as it always does.
+          var named = (Array.isArray(payload.refused) ? payload.refused : []).map(function (r) { return r && r.error; }).filter(Boolean);
+          Castor.bus.emit('comments:unsaved', { path: path, reason: named.length ? String(named.join(' ')).slice(0, 300) : 'The server did not confirm this exact comment. Your original words remain on this device.' });
         }
         if (revision === saveVersions[storageKey] && !merged.unsent) {
           var own = false;
@@ -955,10 +1033,11 @@
 
       });
     }).catch(function (error) {
-      if (!error.status || error.status >= 500 || error.status === 429) deferCommentRetry(storageKey);
+      var transient = !error.status || error.status >= 500 || error.status === 429 || error.reason === 'busy' || error.reason === 'concurrent-save';
+      if (transient) deferCommentRetry(storageKey);
       else delete S.retryReads[storageKey];
       if (available() && key() === storageKey && Castor.comments) Castor.comments.durable = false;
-      if (reviewer && error && error.status >= 400 && error.status < 500 && (error.status !== 429 || error.reason === 'too-many-threads') && error.reason !== 'reviewer-identity-mismatch' && error.reason !== 'legacy-reconciliation-required') {
+      if (reviewer && error && error.status >= 400 && error.status < 500 && (!transient || error.reason === 'too-many-threads') && error.reason !== 'reviewer-identity-mismatch' && error.reason !== 'legacy-reconciliation-required') {
         return refusedForReviewer(path, error, storageKey, readerAccount);
       }
       /* A comment that did not reach the repository is kept in this browser and
@@ -1155,7 +1234,49 @@
     return score;
   }
 
+  // His notes are drawn for him (editor.js withNotes) and quoted by no one: a passage quoted
+  // where they were hidden (a reviewer's page, notes off) is found in the words a reader reads,
+  // and its place counted back in the drawn text. Only when the drawn text has no exact place.
   function resolveBlock(anchor, quick, blocks, restricted) {
+    var r = resolveDrawn(anchor, quick, blocks, restricted);
+    if (!anchor || !anchor.quote || (r && (r.ambiguous || Number.isInteger(r.start)))) return r;
+    var hit = r && (blocks || pageBlocks()).filter(function (block) { return block.id === r.blockId; })[0];
+    if (hit && hit.text.toLowerCase().indexOf(String(anchor.quote).toLowerCase()) >= 0) return r;
+    return resolveWithoutNotes(anchor, blocks || pageBlocks()) || r;
+  }
+  function resolveWithoutNotes(anchor, blocks) {
+    var quote = String(anchor.quote), hits = [];
+    blocks.forEach(function (block) {
+      var root = block.el && passageTextNode(block.el);
+      if (!root || !root.querySelector || !root.querySelector('.writer-note')) return;
+      var plain = readerText(root);
+      for (var at = plain.text.indexOf(quote); at >= 0; at = plain.text.indexOf(quote, at + 1)) {
+        hits.push({ blockId: block.id, start: plain.drawn[at], end: plain.drawn[at + quote.length - 1] + 1,
+          score: quickContextScore(plain.text, at, quote.length, anchor) });
+      }
+    });
+    hits.sort(function (a, b) { return b.score - a.score; });
+    hits = hits.filter(function (hit) { return hit.score === hits[0].score; });
+    return hits.length > 1 ? { ambiguous: true, candidates: hits } : hits[0] || null;
+  }
+  // The words a reader reads in a drawn block (editor.js readerText reads it the same way): his
+  // notes and shown marks left out; drawn[j] is the drawn offset of reader character j.
+  function readerText(root) {
+    var text = '', at = [0], drawn = [], seen = 0;
+    (function walk(node, hidden) {
+      if (node.nodeType === 3) {
+        var value = node.nodeValue || '';
+        for (var i = 0; i < value.length; i++, seen++) { if (!hidden) { text += value.charAt(i); drawn.push(seen); } at.push(text.length); }
+        return;
+      }
+      var kids = node.childNodes || [], name = typeof node.className === 'string' ? node.className : '';
+      var skip = hidden || /(?:^| )(?:writer-note|cw-mk)(?: |$)/.test(name);
+      for (var k = 0; k < kids.length; k++) walk(kids[k], skip);
+    })(root, false);
+    drawn.push(seen);
+    return { text: text, at: at, drawn: drawn };
+  }
+  function resolveDrawn(anchor, quick, blocks, restricted) {
     if (!anchor || !anchor.quote) return null;
     var candidates = blocks || pageBlocks();
     if (!candidates.length) return null;
@@ -1975,9 +2096,9 @@
   function preserveActionProjection(raw,scope){var known=(S.actionProjection[scope]||{})[raw.id]||(scope===key()?S.threads.filter(function(t){return t.id===raw.id&&!t.pending;})[0]:null);if(!known)return raw;var actor=actionProjectionActor(),sameReactor=!!actor&&(S.actionProjectionActors[scope]||{})[raw.id]===actor;var incoming=JSON.parse(JSON.stringify(raw));function message(now,old){if(!now||!old||!now.actions||!old.actions||now.actions.messageRef!==old.actions.messageRef)return;if(now.actions.rev<old.actions.rev){now.text=old.text;var permissions=now.actions.permissions,reactions=now.actions.reactions;now.actions=JSON.parse(JSON.stringify(old.actions));now.actions.permissions=permissions;now.actions.reactions=reactions;}if(sameReactor)Object.keys(old.actions.reactions||{}).forEach(function(k){var prior=old.actions.reactions[k],next=now.actions.reactions&&now.actions.reactions[k];if(next&&next.rev<prior.rev)now.actions.reactions[k]=JSON.parse(JSON.stringify(prior));});}message(incoming,known);(incoming.replies||[]).forEach(function(r){message(r,(known.replies||[]).filter(function(k){return k.actions&&r.actions&&k.actions.messageRef===r.actions.messageRef;})[0]);});if(incoming.statusActions&&known.statusActions&&incoming.statusActions.rev<known.statusActions.rev){incoming.done=known.done;incoming.status=known.status;incoming.statusActions.rev=known.statusActions.rev;}return incoming;}
   function canonicalThreads(threads,scope){return threads.map(function(raw){var fresh=normalise(preserveActionProjection(raw,scope));if(fresh.actions||fresh.statusActions)rememberActionProjection(fresh,scope);return fresh;});}
   function applyActionThread(raw,scope){var thread=normalise(preserveActionProjection(raw,scope));rememberActionProjection(thread,scope);var server=(S.serverCopies[scope]||[]).slice(),index=server.findIndex(function(t){return t.id===thread.id;});if(index<0)server.push(thread);else server[index]=thread;S.serverCopies[scope]=server;if(scope===key()&&available())S.threads=mergeServer(server,null,S.threads,scope).threads;}
-  function sendAction(record, afterAppend){if(!record||S.actionSending[record.opId])return;if(!sameActionActor(record.actor)||record.scope!==key()||record.path!==piecePath()){actionNotice(record,'unsaved','This action belongs to another or unknown writer. Its exact words are kept here.');return;}record.submitted=true;if(!journalAction(record))return;var scope=record.scope;S.actionSending[record.opId]=true;actionNotice(record,'pending','Saving this comment action.');closeActionEditor();layout();
-    var identify=function(){return global.fetch('/api/whoami',{cache:'no-store'});};
-    (afterAppend ? afterAppend.then(identify) : identify()).then(function(response){if(!response.ok)throw new Error('Your identity could not be confirmed.');return response.json();}).then(function(role){var correct=record.actor.kind==='reader'?sameReviewer({id:record.actor.id},reviewerIdentity(role)):role&&role.role==='founder';if(!correct||!sameActionActor(record.actor)||key()!==scope||piecePath()!==record.path)throw new Error('The original writer could not be confirmed.');return global.fetch('/api/comments/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(record.request)});}).then(function(response){return response.json().then(function(payload){if(!sameActionActor(record.actor)||key()!==scope)return;if(!response.ok){if(payload.thread)applyActionThread(payload.thread,scope);var reason=payload.reason==='stale-action'?'The comment changed. Compare your exact pending words with the current comment.':payload.error||payload.reason||'The server refused this action.';var failed=new Error(reason);failed.status=response.status;throw failed;}var receipt=payload.receipt;if(!exactActionReceipt(receipt,record.request))throw new Error('The server did not confirm this exact action.');storeActionReceipt({request:record.request,receipt:receipt});if(payload.thread)applyActionThread(payload.thread,scope);if(record.request.action==='resolve'&&payload.thread&&payload.thread.done)showDoneUndo(payload.thread);delete S.actionErrors[record.opId];actionNotice(record,receipt.gitDurable?'saved':'pending',receipt.gitDurable?'Comment action saved.':'Saved to the review service. Waiting for its Git copy.');});}).catch(function(error){S.actionErrors[record.opId]=String(error.message||error);try{global.localStorage.setItem(scope+'.action-errors.'+record.opId,S.actionErrors[record.opId]);}catch(e){}if(key()===scope&&sameActionActor(record.actor))actionNotice(record,'unsaved',S.actionErrors[record.opId]+' Your exact input remains on this device.');}).then(function(){delete S.actionSending[record.opId];if(key()===scope)layout();});
+  function sendAction(record, afterAppend){if(!record||S.actionSending[record.opId])return;if(!sameActionActor(record.actor)||record.scope!==key()||record.path!==piecePath()){actionNotice(record,'unsaved','This action belongs to another or unknown writer. Its exact words are kept here.');return;}record.submitted=true;if(!journalAction(record))return;var scope=record.scope,writerAccount=Castor.role.publicWriter?Castor.role.id:'';S.actionSending[record.opId]=true;actionNotice(record,'pending','Saving this comment action.');closeActionEditor();layout();
+    var identify=function(){return commentRequest('/api/whoami',{cache:'no-store'});};
+    (afterAppend ? afterAppend.then(identify) : identify()).then(function(response){if(!response.ok){if(record.actor.kind!=='reader'&&(response.status===401||response.status===403)&&Castor.signedOut){Castor.signedOut();S.ended=ended();}throw new Error('Your identity could not be confirmed.');}return response.json();}).then(function(role){var correct=record.actor.kind==='reader'?sameReviewer({id:record.actor.id},reviewerIdentity(role)):role&&role.role==='founder'&&(!writerAccount||(role.id===writerAccount&&role.who===record.actor.id&&Castor.role.id===writerAccount));if(!correct||!sameActionActor(record.actor)||key()!==scope||piecePath()!==record.path)throw new Error('The original writer could not be confirmed.');return commentRequest('/api/comments/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(record.request)});}).then(function(response){return response.json().then(function(payload){if(!sameActionActor(record.actor)||key()!==scope)return;if(!response.ok){if(payload.thread)applyActionThread(payload.thread,scope);var reason=payload.reason==='stale-action'?'The comment changed. Compare your exact pending words with the current comment.':payload.error||payload.reason||'The server refused this action.';var failed=new Error(reason);failed.status=response.status;throw failed;}var receipt=payload.receipt;if(!exactActionReceipt(receipt,record.request))throw new Error('The server did not confirm this exact action.');storeActionReceipt({request:record.request,receipt:receipt});if(payload.thread)applyActionThread(payload.thread,scope);if(record.request.action==='resolve'&&payload.thread&&payload.thread.done)showDoneUndo(payload.thread);delete S.actionErrors[record.opId];actionNotice(record,receipt.gitDurable?'saved':'pending',receipt.gitDurable?'Comment action saved.':'Saved to the review service. Waiting for its Git copy.');});}).catch(function(error){S.actionErrors[record.opId]=String(error.message||error);try{global.localStorage.setItem(scope+'.action-errors.'+record.opId,S.actionErrors[record.opId]);}catch(e){}if(key()===scope&&sameActionActor(record.actor))actionNotice(record,'unsaved',S.actionErrors[record.opId]+' Your exact input remains on this device.');}).then(function(){delete S.actionSending[record.opId];if(key()===scope)layout();});
   }
   function captureActionEditor(editor){
     editor=editor||S.actionEditor;if(!editor)return true;
@@ -2027,7 +2148,7 @@
     var canResolve=c&&root&&thread.statusActions&&thread.statusActions.canResolve&&c.actor.kind==='founder-capability';
     if(c&&((a&&a.permissions.react)||canResolve)){
       var reactions=el('div','castor-comment-reactions');
-      if(a&&a.permissions.react)(c.reactionKeys||[]).filter(function(k){return k==='agree';}).forEach(function(k){var state=a.reactions[k];if(!state)return;var b=withIcon(button(reactions,(state.active?'Agreed':'Agree')+(state.count?' '+state.count:''),function(){try{global.localStorage.setItem('castor.comments.agree-hint','seen');}catch(e){}sendAction(newAction(thread,msg,'reaction',{reaction:k,active:!state.active}));}),k);b.setAttribute('aria-pressed',String(state.active));b.title=(state.active?'Remove':'Record')+' your Agree reaction. This does not change the article or mark the comment done.';b.setAttribute('aria-label',b.title);pendingControl(b,actionBusy(thread,msg,'reaction'),'Saving...');});
+      if(a&&a.permissions.react)(c.reactionKeys||[]).filter(function(k){return k==='agree';}).forEach(function(k){var state=a.reactions[k];if(!state)return;var b=withIcon(button(reactions,(state.active?'Agreed':'Agree')+(state.count?' '+state.count:''),function(){try{global.localStorage.setItem('castor.comments.agree-hint','seen');}catch(e){}S.agreeHintFor=false;sendAction(newAction(thread,msg,'reaction',{reaction:k,active:!state.active}));}),k);b.setAttribute('aria-pressed',String(state.active));b.title=(state.active?'Remove':'Record')+' your Agree reaction. This does not change the article or mark the comment done.';b.setAttribute('aria-label',b.title);pendingControl(b,actionBusy(thread,msg,'reaction'),'Saving...');});
       if(canResolve){
         var done=withIcon(button(reactions,'Done',function(){sendAction(newAction(thread,null,thread.done?'reopen':'resolve'));}),'done');
         done.setAttribute('aria-pressed',String(thread.done));
@@ -2041,7 +2162,11 @@
     if(own){for(var ownIndex=0;ownIndex<own.children.length;ownIndex++){var control=own.children[ownIndex];control.title=control.textContent;control.setAttribute('aria-label',control.textContent);}actionRow.appendChild(own);}
     if(actionRow.children.length)box.appendChild(actionRow);
     var hintThread=byId(S.active)||visibleThreads().filter(function(t){return S.resolved[t.id]||S.expanded['lost-'+t.id];})[0];
-    if(root&&c&&a&&a.permissions.react&&hintThread&&hintThread.id===thread.id){var seen=false;try{seen=global.localStorage.getItem('castor.comments.agree-hint')==='seen';}catch(e){}if(!seen)box.appendChild(el('p','castor-action-hint','Agree adds a reaction. Words and status stay unchanged.'));}
+    // The Agree hint is shown once: on the first card he opens, which keeps it for the rest of this
+    // visit, and on no card after that. A tap on Agree retires it for good.
+    if(root&&c&&a&&a.permissions.react&&hintThread&&hintThread.id===thread.id){var seen=false;try{seen=global.localStorage.getItem('castor.comments.agree-hint')==='seen';}catch(e){}
+      if(!seen&&S.agreeHintFor==null){S.agreeHintFor=thread.id;try{global.localStorage.setItem('castor.comments.agree-hint','seen');}catch(e){}}
+      if(S.agreeHintFor===thread.id)box.appendChild(el('p','castor-action-hint','Agree adds a reaction. Words and status stay unchanged.'));}
     var drafts=c&&a?consolidateEditDrafts(thread,msg):[],older=drafts.slice(1);
     actionRecords().filter(function(r){return r.threadId===thread.id&&r.messageRef===(a&&a.messageRef||'')&&!acknowledgedAction(r,true)&&older.indexOf(r)<0;}).forEach(function(r){if(S.actionEditor&&S.actionEditor.record.opId===r.opId)return;var pending=el('div','castor-comment-pending');pending.appendChild(el('p',null,r.submitted?'Pending '+r.request.action:'Unfinished edit'));if(r.text)pending.appendChild(el('p','castor-comment-pending-text',r.text));var error=S.actionErrors[r.opId];if(!error)try{error=global.localStorage.getItem(r.scope+'.action-errors.'+r.opId);}catch(e){}if(error)pending.appendChild(el('p','castor-action-status',error));if(r.submitted&&acknowledgedAction(r,false)){pending.appendChild(el('p','castor-action-status','Saved to the review service. Waiting for its Git copy.'));var check=button(pending,'Check Git copy',function(){sendAction(r);});pendingControl(check,S.actionSending[r.opId],'Saving...');}else if(r.submitted){var retry=button(pending,'Retry action',function(){sendAction(r);});pendingControl(retry,S.actionSending[r.opId],r.request.action==='edit'?'Saving...':'Sending...');}if(!S.actionSending[r.opId])button(pending,'Discard',function(){if(typeof global.confirm==='function'&&!global.confirm('Discard this pending action and its saved input?'))return;removeActionRecord(r);layout();});if(r.request.action==='edit'&&c&&a&&a.permissions.edit&&!a.withdrawn)button(pending,r.submitted?'Compare and edit':'Resume edit',function(){openActionEditor(thread,msg,r);});box.appendChild(pending);});
     if(older.length){
@@ -2177,7 +2302,7 @@
     box.style.marginTop = '8px';
     var ta = writingField('Reply', 'Reply.');
     box.appendChild(ta);
-    var hint = el('div', 'castor-hint', 'Enter saves · Esc closes');
+    var hint = el('div', 'castor-hint', keysHint('sends'));
     box.appendChild(hint);
     var send=el('button',null,'Send reply');send.type='button';send.setAttribute('data-word','Send');send.addEventListener('click',function(e){e.stopPropagation();if(send.getAttribute('data-claim'))record.claimed=true;submit();});var row=sendRow(box);row.appendChild(send);
     var cancel=el('button',null,'Cancel');cancel.type='button';cancel.addEventListener('click',function(e){e.stopPropagation();cancelComposer();});row.appendChild(cancel);
@@ -2423,7 +2548,6 @@
     S.panelEl = bodyEl;
     mountHeadShows(bodyEl);
     bodyEl.addEventListener('pointerdown', holdCommentFocus);
-    bodyEl.addEventListener('mousedown', holdCommentFocus);
     bodyEl.addEventListener('focusin', scheduleCommentFocus);
     bodyEl.addEventListener('focusout', scheduleCommentFocus);
     bodyEl.addEventListener('input', scheduleCommentFocus);
@@ -3009,52 +3133,20 @@
     return field.getBoundingClientRect();
   }
 
+  // With a keyboard up (a comment's or the article's), a button in the comments (Post, Save edit, Reply,
+  // Edit, Send to agent, Cancel...) keeps the field's focus until its own click: nothing blurs, rerenders
+  // or moves under the finger, so the native click lands on the button, which then decides where focus
+  // goes. Only the focus-changing mouse default is cancelled: a cancelled touch loses WebKit's click, and
+  // on iOS it leaves the next long press opening typing mode instead of selecting.
   function holdCommentFocus(event) {
-    // Cancel only the focus-changing mouse default. Canceling pointerdown can
-    // suppress the subsequent touch click in WebKit.
     if (event.type === 'pointerdown') return;
-    if (!event.target.closest || !event.target.closest('.castor-comment-editor button, .castor-composer > button, .castor-composer > .castor-sendrow > button, .castor-comment-undo button')) return;
-    if (S.actionEditor && holdsFocus(S.actionEditor.textarea) || S.composer && holdsFocus(S.composer.textarea)) event.preventDefault();
-  }
-
-  // WebKit can retarget the click after a focused field blurs and the sheet
-  // rerenders. Carry a short, stationary touch through pointerup, then consume
-  // its compatibility click. Mouse and keyboard clicks keep their native path.
-  function commentTouchStart(event) {
-    S.commentTouch = null; S.commentTouchClick = null;
-    if (event.pointerType !== 'touch' && event.pointerType !== 'pen' || event.isPrimary === false || event.button > 0) return;
-    var button = event.target.closest && event.target.closest('button');
-    if (!button || button.disabled ||
-        !(S.panelEl && S.panelEl.contains(button) || S.composer && S.composer.node.contains(button))) return;
-    var field = DOC.activeElement;
-    if (!(S.actionEditor && holdsFocus(S.actionEditor.textarea) || S.composer && holdsFocus(S.composer.textarea) ||
-          field && field.closest && field.closest('.cw-edit, textarea, [contenteditable="true"]'))) return;
-    S.commentTouch = { button: button, id: event.pointerId, x: event.clientX, y: event.clientY, rect: button.getBoundingClientRect() };
-    event.preventDefault();
-  }
-  function commentTouchMove(event) {
-    var touch = S.commentTouch;
-    if (touch && touch.id === event.pointerId && Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 8) S.commentTouch = null;
-  }
-  function commentTouchEnd(event) {
-    var touch = S.commentTouch;
-    if (!touch || touch.id !== event.pointerId) return;
-    S.commentTouch = null;
-    if (event.type === 'pointercancel' || touch.button.disabled ||
-        Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 8 ||
-        event.clientX < touch.rect.left || event.clientX > touch.rect.right ||
-        event.clientY < touch.rect.top || event.clientY > touch.rect.bottom) return;
-    event.preventDefault();
-    S.commentTouchClick = { id: touch.id, x: event.clientX, y: event.clientY, time: event.timeStamp };
-    touch.button.click();
-  }
-  function commentTouchClick(event) {
-    var touch = S.commentTouchClick;
-    if (!touch || event.isTrusted === false || !event.detail) return;
-    if (event.timeStamp - touch.time > 800) { S.commentTouchClick = null; return; }
-    if (event.pointerId !== touch.id && Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 8) return;
-    S.commentTouchClick = null;
-    event.preventDefault(); event.stopImmediatePropagation();
+    var target = event.target;
+    if (!target.closest) return;
+    var button = target.closest('button');
+    var comments = target.closest('.castor-comment-editor button, .castor-composer > button, .castor-composer > .castor-sendrow > button, .castor-comment-undo button') ||
+      button && (S.panelEl && S.panelEl.contains && S.panelEl.contains(button) || S.composer && S.composer.node && S.composer.node.contains(button));
+    if (comments && (S.actionEditor && holdsFocus(S.actionEditor.textarea) || S.composer && holdsFocus(S.composer.textarea) ||
+        DOC.activeElement && DOC.activeElement.closest && DOC.activeElement.closest('.cw-edit, textarea, [contenteditable="true"]'))) event.preventDefault();
   }
 
   function scheduleCommentFocus() {
@@ -3444,7 +3536,7 @@
     try {
       global.localStorage.setItem(c.record.key, JSON.stringify(c.record));
       S.journalStored[c.record.key] = true;
-      c.hint.textContent = 'Enter saves · Esc closes';
+      c.hint.textContent = keysHint('posts');
       return true;
     } catch (e) {
       c.hint.textContent = "Can't keep this comment on this device. Keep this page open.";
@@ -3548,8 +3640,7 @@
     }, SETTLE_MS);
     return true;
   }
-  // The closed reply drafts for a thread, newest first (ids start with their time). One per thread is
-  // kept: resuming the newest drops any older ones.
+  // Closed reply drafts for a thread, newest first (ids start with their time).
   function draftThread(record) { var thread = journalThread(record); return thread ? thread.id : record.thread; }
   function closedReplyDrafts(threadId) {
     var made = function (r) { return parseInt(String(r.id).slice(1), 36) || 0; };
@@ -3557,7 +3648,11 @@
       .sort(function (a, b) { return made(b) - made(a); });
   }
   function resumeDraft(record) {
-    if (record.thread) closedReplyDrafts(draftThread(record)).forEach(function (r) { if (r !== record) removeJournal(r); });
+    if (record.thread) closedReplyDrafts(draftThread(record)).forEach(function (r) {
+      if (r.key !== record.key && (r.origin || r.id) === (record.origin || record.id) && r.text === record.text &&
+          r.author === record.author && r.principal === record.principal && r.reviewer === record.reviewer &&
+          JSON.stringify(r.reviewerIdentity) === JSON.stringify(record.reviewerIdentity) && JSON.stringify(r.anchor) === JSON.stringify(record.anchor)) removeJournal(r);
+    });
     restoreComposer(record);
   }
   function restoreComposer(wanted, sending) {
@@ -3596,7 +3691,7 @@
     box.appendChild(el('div', 'castor-quote', '“' + passageOf(anchor) + '”'));
     var ta = writingField('Your comment', 'What is wrong with this, or what you would want.');
     box.appendChild(ta);
-    var hint = el('div', 'castor-hint', 'Enter saves · Esc closes');
+    var hint = el('div', 'castor-hint', keysHint('posts'));
     box.appendChild(hint);
     slot.appendChild(box);
 
@@ -3680,7 +3775,7 @@
       !host.hasAttribute('data-block-id') && !host.hasAttribute('data-block')) {
       host = host.parentElement;
     }
-    if (!host || host === S.page) return passageFromRange(range);
+    if (!host || host === S.page || !host.hasAttribute('data-block-id') && !host.hasAttribute('data-block')) return passageFromRange(range);
     var selectedHost = element.closest('.cw-edit,.cw-mirror');
     var textNode = selectedHost && host.contains(selectedHost) ? selectedHost : passageTextNode(host);
     var text = textNode.textContent, at;
@@ -3694,6 +3789,9 @@
       at = before.toString().length + range.toString().indexOf(quote);
     } catch (error) { return null; }
     if (at < 0 || text.slice(at, at + quote.length) !== quote) return null;
+    var plain = readerText(textNode), words = plain.text.slice(plain.at[at], plain.at[at + quote.length]);
+    if (!words.trim()) return null;
+    at = plain.at[at] + /^\s*/.exec(words)[0].length; quote = words.trim(); text = plain.text;
     return {
       quote: quote,
       prefix: text.slice(Math.max(0, at - 32), at),
@@ -3727,7 +3825,11 @@
     }
     var from = offset(roots[0], range.startContainer, range.startOffset), to = offset(roots[roots.length - 1], range.endContainer, range.endOffset);
     if (from == null || to == null) return null;
-    var texts = roots.map(function (n) { return n.textContent; });
+    // His notes are no words of the passage (editor.js anchorFromSelection reads one paragraph so).
+    var plains = roots.map(function (n) { return readerText(n); });
+    if (plains[0]) from = plains[0].at[from];
+    if (plains[plains.length - 1]) to = plains[plains.length - 1].at[to];
+    var texts = roots.map(function (n, k) { return plains[k] ? plains[k].text : n.textContent; });
     var anchor = spanAnchor(texts, from, to, version || (Castor.app && Castor.app.data && Castor.app.data.current) || 'v1');
     if (!anchor) return null;
     for (var k = 0; k < texts.length; k++) if (texts[k].indexOf(anchor.quote) >= 0) { anchor.blockId = span[k].id; break; }
@@ -4015,32 +4117,52 @@
     positionTouchPeek();
   }
 
-  // A tap outside the composer keeps the words in it as a draft; only Post sends.
-  // An empty composer still closes. true makes a tap outside send the words.
-  var TAP_OUTSIDE_SENDS = false;
-  // Submitting a reply rebuilds its card. An edit button must receive its click
-  // before that can remove the pointerdown target and cancel native activation.
-  // With a comment's keyboard up, a tap on the article only closes that keyboard (tapPassage), so what
-  // the writer types next, meant for the comment, never lands in the article; the next tap edits it.
-  // Noted as the touch begins, before an empty box closes; the keyboard closes only if the touch is a tap.
+  // A tap outside the composer posts the words in it (a posted comment can still be edited);
+  // an empty composer just closes. false keeps the words in the box as a draft, sent only by Post.
+  // Only a tap: a touch that becomes a scroll, or a press held as long as a long press (or moved),
+  // in the article or in the comments, leaves the box as it is, even when the browser still clicks
+  // for it. A mouse click and a key on a button are clicks. The post happens on that click, in the
+  // document's capture phase, so before the button's own handler: the box posts and its card
+  // rebuilds first, then the button (Reply, Edit...) acts, finding its comment by id, not by node.
+  var TAP_OUTSIDE_SENDS = true;
+  var LONG_PRESS_MS = 500;   // iOS's long press
+  // With a comment's keyboard up, a tap on the article places no caret there and closes that keyboard
+  // (tapPassage, which also posts the box: the editor keeps that tap's click), so what the writer types
+  // next, meant for the comment, never lands in the article; the next tap edits it. Noted as the touch
+  // begins; the keyboard closes only if the touch is a tap.
   function commentHasFocus() {
     return !!(S.composer && holdsFocus(S.composer.textarea) || S.actionEditor && holdsFocus(S.actionEditor.textarea));
   }
   function saveOutsideComposer(event) {
-    if (event.type === 'pointerdown') S.keyboardTap = event.pointerType === 'touch' && commentHasFocus() && !!S.page &&
-      S.page.contains(event.target) && !(event.target.closest && event.target.closest('[data-castor-ui]')) ? Date.now() : 0;
-    var editButton = event.target.closest && event.target.closest('.castor-comment-editor button');
-    if ((event.type === 'click') !== !!editButton) return;
+    if (event.type === 'pointerdown') {
+      S.outsidePress = { type: event.pointerType, at: typeof event.timeStamp === 'number' ? event.timeStamp : Date.now(), x: event.clientX, y: event.clientY };
+      S.keyboardTap = (event.pointerType === 'touch' || event.pointerType === 'pen') && commentHasFocus() && !!S.page &&
+        S.page.contains(event.target) && !(event.target.closest && event.target.closest('[data-castor-ui]')) ? { at: Date.now(), field: DOC.activeElement } : null;
+      return;
+    }
+    if (event.type === 'click') {
+      var press = S.outsidePress, now = typeof event.timeStamp === 'number' ? event.timeStamp : Date.now();
+      S.outsidePress = null;
+      if (press && (press.type === 'touch' || press.type === 'pen') && event.detail !== 0 &&
+          (now - press.at >= (typeof LONG_PRESS_MS === 'number' ? LONG_PRESS_MS : 500) ||
+           Math.abs(event.clientX - press.x) > 10 || Math.abs(event.clientY - press.y) > 10)) return;
+    }
+    var target = event.target;
     if (S.composer && !(S.composer.record && S.composer.record.closed) &&
-        !S.composer.node.contains(event.target) &&
-        !(event.target.closest && event.target.closest('.castor-comment-undo')) &&
+        !S.composer.node.contains(target) &&
+        !(target.closest && target.closest('.castor-comment-undo')) &&
         (TAP_OUTSIDE_SENDS || !S.composer.textarea.value.trim())) S.composer.submit();
   }
 
   function tapPassage(e) {
-    if (S.keyboardTap && Date.now() - S.keyboardTap < 1500) {
-      S.keyboardTap = 0;
-      if (commentHasFocus() && DOC.activeElement.blur) DOC.activeElement.blur();
+    var keyboardTap = S.keyboardTap;
+    if (keyboardTap && Date.now() - keyboardTap.at < 1500) {
+      S.keyboardTap = null;
+      // A long press is not a tap: the box and its keyboard stay as they are, and no caret is placed.
+      if (Date.now() - keyboardTap.at >= (typeof LONG_PRESS_MS === 'number' ? LONG_PRESS_MS : 500)) { if (e.preventDefault) e.preventDefault(); return true; }
+      saveOutsideComposer({ type: 'tap', target: e.target });
+      // The field that had the keyboard lets it go, whether or not its box is still there.
+      if (DOC.activeElement === keyboardTap.field && keyboardTap.field.blur) keyboardTap.field.blur();
       if (e.preventDefault) e.preventDefault();
       return true;
     }
@@ -4112,11 +4234,8 @@
   function mount(ctx, data) {
     if (Castor.bus && Castor.bus.on && !S.whoListening) {
       S.whoListening = true;
-      DOC.addEventListener('pointerdown', commentTouchStart, true);
-      DOC.addEventListener('pointermove', commentTouchMove, true);
-      DOC.addEventListener('pointerup', commentTouchEnd, true);
-      DOC.addEventListener('pointercancel', commentTouchEnd, true);
-      DOC.addEventListener('click', commentTouchClick, true);
+      // Every comment box, in the panel, in the page or floating.
+      DOC.addEventListener('mousedown', holdCommentFocus, true);
       DOC.addEventListener('pointerdown', saveOutsideComposer, true);
       DOC.addEventListener('click', saveOutsideComposer, true);
       Castor.bus.on('who:set', function () { closeActionEditor();save();load(true); });
@@ -4171,6 +4290,8 @@
     });
     on('doc:change', schedule);
     on('layout', schedule);
+    // Marks shown or hidden: every block's text changed shape, so its passages are found again.
+    on('editor:marks', function () { S.resolutionCache = {}; S.resolved = {}; S.candidates = {}; S.blockTexts = {}; schedule(); });
     /* Another article opened in the same page: its threads, not the last one's. */
     on('piece:open', function () {
       closeComposer();

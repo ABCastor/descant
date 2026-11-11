@@ -241,6 +241,16 @@
    disappear; they retain textContent and source offsets without an advance. */
 .cw-mk { display: none !important; }
 .cw-atom[data-label]::after { content: attr(data-label); }
+/* Show Markdown marks (Settings): every block, read or written, draws its marks in
+   place, so focus and the caret change nothing. Line breaks inside marks stay hidden;
+   a footnote shows its source instead of its number; a list shows its own dashes. */
+.cw-editor-page[data-marks="shown"] .cw-mk:not(.cw-mk-nl) { display: inline !important; }
+.cw-editor-page[data-marks="shown"] .cw-atom[data-label]:not(:empty)::after { content: none; }
+.cw-editor-page[data-marks="shown"] .cw-editor-stack li { list-style: none; }
+.cw-editor-page[data-marks="shown"] .cw-editor-stack :is(ul, ol) > li::before { content: none; }
+/* A quote's first mark leads its paragraph's first line instead of taking a line of its own. */
+.cw-editor-page[data-marks="shown"] .cw-editor-stack blockquote > .cw-mk:first-child { float: left; white-space: pre; }
+.cw-editor-page .cw-mirror.cw-read { pointer-events: auto; -webkit-user-select: auto; user-select: auto; }
 .page-column .cw-block .cw-editor-stack > .cw-edit,
 .page-column .cw-block .cw-editor-stack > .cw-mirror {
   font: inherit;

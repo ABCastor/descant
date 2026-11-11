@@ -342,30 +342,163 @@
 #app[data-mode="phone"] #topbar.mast .topwords { display: flex; align-items: center; position: static; gap: 8px; height: 52px; }
 #app[data-mode="phone"] #topbar.mast .topwords .word { min-height: 44px; height: 44px; padding: 0 8px; }
 #app[data-mode="phone"] #topbar.mast .topwords [data-panel="comments"] { display: inline-flex; }
-#app[data-mode="phone"] #topbar.mast #more-sheet {
-  top: 60px; bottom: 0; left: 0; right: 0; width: 100%; max-height: none;
+/* Phone: the Menu and Settings are one kind of sheet. Full height under the top row,
+   on the paper, with named groups of 48 px rows on cards, as in Settings on the device. */
+#app[data-mode="phone"] #topbar.mast #more-sheet,
+#app[data-mode="phone"] .castor-settings[data-sheet] {
+  inset: 60px 0 0 0; top: 60px; bottom: 0; left: 0; right: 0; width: 100%; height: auto; max-height: none; box-sizing: border-box;
   border: 0; border-top: 1px solid var(--rule); border-radius: 16px 16px 0 0;
-  padding: 12px 16px max(16px, env(safe-area-inset-bottom));
+  padding: 4px max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: var(--paper); box-shadow: var(--shadow-overlay); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+  font: 400 16px/1.35 var(--font-ui);
 }
-#app[data-mode="phone"] #more-sheet :is(#menu-publish, #menu-articles) { display: block; }
-#app[data-mode="phone"] #more-sheet .menu-tool { display: inline-flex; }
-#app[data-mode="phone"] #more-sheet [data-tier] { display: inline-flex; }
-#app[data-mode="phone"] #more-sheet #menu-publish { order: -1; display: grid; grid-template-columns: 1fr auto; align-items: center; }
-#app[data-mode="phone"] #more-sheet #menu-publish > :is(h2, .menu-tool) { grid-column: 1 / -1; }
-#app[data-mode="phone"] #more-sheet #menu-publish > .menu-tool { order: 9; }
-#app[data-mode="phone"] #more-sheet #menu-publish .descant-live-marker { display: flex; width: 100%; justify-content: flex-start; padding: 0 12px; min-height: 44px; box-sizing: border-box; }
-#app[data-mode="phone"] #more-sheet #menu-publish .capsule-publish { width: auto; margin: 4px 12px; justify-content: center; }
-#app[data-mode="phone"] #more-sheet :is(#menu-articles, .menu-group:has(> .word:not([hidden]))) { display: block; margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--rule); }
-/* Settings opens as the same sheet as the Menu, with the same heading (S2). */
-#app[data-mode="phone"] .castor-settings {
-  inset: 60px 0 0 0; width: 100%; height: auto; max-height: none; box-sizing: border-box;
-  border: 0; border-top: 1px solid var(--rule); border-radius: 16px 16px 0 0;
-  padding: 12px 16px max(16px, env(safe-area-inset-bottom)); background: var(--surface); box-shadow: var(--shadow-overlay);
+#app[data-mode="phone"] #more-sheet > .word,
+#app[data-mode="phone"] #more-sheet > .bar-tools { display: none; }
+#app[data-mode="phone"] #more-sheet :is(#menu-article, #menu-publish, #menu-library, #menu-app, #menu-articles).menu-group { display: block; margin: 0; }
+#app[data-mode="phone"] #more-sheet :is(#menu-article, #menu-publish, #menu-library, #menu-app, #menu-articles).menu-group:not(:has(.menu-rows > .word:not([hidden]), #menu-article-list > .word)) { display: none; }
+#app[data-mode="phone"] #more-sheet .menu-group h2,
+.castor-settings[data-sheet] .settings-group {
+  display: block; margin: 20px 16px 6px; padding: 0; font: 500 13px/1.2 var(--font-ui); letter-spacing: 0; text-transform: none; color: var(--ink-2);
 }
-#app[data-mode="phone"] .castor-settings .settings-title { font: 600 17px/1.2 var(--font-ui-heading); margin: 8px 12px; color: var(--ink); letter-spacing: 0; text-transform: none; }
-#app[data-mode="phone"] #more-sheet #menu-articles .word { overflow: hidden; }
-#app[data-mode="phone"] #more-sheet #menu-articles .word-label { overflow: hidden; text-overflow: ellipsis; }
-#app[data-mode="phone"] #more-sheet #castor-shortcuts { display: inline-flex; }
+#app[data-mode="phone"] #more-sheet .menu-group:first-child h2 { margin-top: 12px; }
+#app[data-mode="phone"] #more-sheet .menu-rows,
+.castor-settings[data-sheet] .settings-page,
+.castor-settings[data-sheet] .set-options {
+  display: block; border-radius: 12px; background: color-mix(in srgb, var(--ink) 5%, var(--paper)); padding: 0 0 0 16px; overflow: hidden;
+}
+#app[data-mode="phone"] #more-sheet .menu-group:not(:has(h2)) .menu-rows { margin-top: 24px; }
+#app[data-mode="phone"] #topbar.mast #more-sheet .menu-rows .word {
+  display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; height: auto; min-height: 48px;
+  padding: 0 16px 0 0; border: 0; border-top: 1px solid var(--rule); border-radius: 0;
+  font: 400 16px/1.25 var(--font-ui); color: var(--ink); background: none; text-align: left;
+}
+/* Each row draws the line above it, a pixel up: the card clips the first one. */
+#app[data-mode="phone"] #more-sheet .menu-rows .word,
+.castor-settings[data-sheet] :is(.set-row, .set-option, .settings-sub .cw-reading-options button) { margin-top: -1px !important; }
+#app[data-mode="phone"] #more-sheet .menu-rows .word:active { background: var(--wash); }
+#app[data-mode="phone"] #more-sheet .menu-rows .word[aria-pressed="true"] { background: none; }
+#app[data-mode="phone"] #more-sheet .menu-rows .chrome-icon { color: var(--ink-2); }
+#app[data-mode="phone"] #more-sheet .menu-rows .word-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-box: initial; }
+#app[data-mode="phone"] #more-sheet .menu-rows .count,
+#app[data-mode="phone"] #more-sheet .menu-value { margin-left: auto; font: 400 15px/1 var(--font-ui); color: var(--ink-2); font-variant-numeric: tabular-nums; text-box: initial; }
+#app[data-mode="phone"] #more-sheet .menu-rows .word:is([data-panel], #menu-settings, #menu-publish-row, #menu-share)::after,
+.castor-settings[data-sheet] :is(.set-nav, .set-action, .cw-reading-picker summary)::after {
+  content: ""; display: block; flex: none; width: 8px; height: 8px; margin: 0 2px 0 4px;
+  border: solid var(--ink-3); border-width: 1.6px 1.6px 0 0; transform: rotate(45deg); box-sizing: border-box;
+}
+#app[data-mode="phone"] #more-sheet #menu-article-list .word[aria-current="page"] .word-label { font-weight: 600; }
+#app[data-mode="phone"] #more-sheet #menu-article-list .word[aria-current="page"]::after {
+  content: ""; display: block; flex: none; width: 6px; height: 11px; margin: -3px 4px 0 auto;
+  border: solid var(--ink); border-width: 0 2px 2px 0; transform: rotate(45deg); box-sizing: border-box;
+}
+#app[data-mode="phone"] #more-sheet #menu-article-list .word[aria-current="page"] { color: var(--ink); }
+#app[data-mode="phone"] #more-sheet .menu-rows .castor-pending::after { content: none; }
+#app[data-mode="phone"] #more-sheet .foot-by { margin: 24px 16px 0; padding: 0; border: 0; min-height: 44px; align-items: center; }
+#app #more-sheet [data-icon="publish"] { --icon: var(--icon-publish); }
+
+/* Settings, laptop and iPad: the tabbed card he knows. The sheet's own parts stay out. */
+.castor-settings .settings-head { display: flex; align-items: center; gap: 8px; }
+.castor-settings .settings-head .settings-title { flex: 1; min-width: 0; }
+.castor-settings :is(.settings-done, .settings-back), .castor-settings .settings-group, .castor-settings .set-nav { display: none; }
+/* The phone's one-line rows come first in their group, hidden here: the first row you see draws no rule above it. */
+.castor-settings:not([data-sheet]) .settings-page > :nth-child(1 of :not(.set-nav, [hidden])) { border-top: 0; }
+@media not (any-pointer: coarse) { .castor-settings .set-touch-only { display: none; } }
+.castor-settings .set-font-row { display: block; padding: 0; }
+.castor-settings .cw-reading-picker summary {
+  display: flex; align-items: center; gap: .75rem; min-height: 52px; padding: 0; list-style: none; cursor: pointer;
+}
+.castor-settings .cw-reading-picker summary::-webkit-details-marker { display: none; }
+.castor-settings .cw-reading-picker summary::marker { content: ""; }
+.castor-settings .set-value { margin-left: auto; min-width: 0; color: var(--ink-2); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.castor-settings .cw-reading-picker summary::after {
+  content: ""; flex: none; width: 7px; height: 7px; margin: 0 4px 3px; box-sizing: border-box;
+  border: solid var(--ink-3); border-width: 0 1.6px 1.6px 0; transform: rotate(45deg); transition: transform .2s var(--ease, ease);
+}
+.castor-settings .cw-reading-picker[open] summary::after { transform: rotate(225deg); margin-bottom: -3px; }
+.castor-settings .cw-reading-options { margin: 0 0 .5rem; border: 0; border-top: 1px solid color-mix(in srgb, var(--ink) 9%, transparent); }
+
+/* Settings, phone: groups on one scroll, one line per setting, choices on their own page. */
+.castor-settings[data-sheet] .settings-head {
+  position: sticky; top: 0; z-index: 3; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  min-height: 52px; margin: 0 calc(-1 * max(16px, env(safe-area-inset-right))) 0 calc(-1 * max(16px, env(safe-area-inset-left))); padding: 0 8px;
+  background: var(--paper);
+}
+/* The head sticks at the very top, so nothing scrolled shows above it. */
+#app[data-mode="phone"] .castor-settings[data-sheet] { padding-top: 0; }
+/* The sheet fills the screen: a ring around all of it says nothing; its controls keep theirs. */
+#app[data-mode="phone"] .castor-settings[data-sheet]:focus-visible { outline: none; }
+.castor-settings[data-sheet] .settings-head .settings-title { grid-column: 2; margin: 0; font: 600 17px/1.2 var(--font-ui-heading); letter-spacing: 0; text-transform: none; color: var(--ink); text-align: center; }
+.castor-settings[data-sheet] :is(.settings-done, .settings-back, .settings-sub-back) {
+  display: inline-flex; align-items: center; gap: 2px; min-height: 44px; min-width: 44px; padding: 0 8px; border: 0; background: none;
+  font: 400 16px/1 var(--font-ui); color: var(--ink); cursor: pointer;
+}
+.castor-settings[data-sheet] .settings-done { grid-column: 3; justify-self: end; font-weight: 600; }
+.castor-settings[data-sheet] .settings-back { grid-column: 1; grid-row: 1; justify-self: start; }
+.castor-settings[data-sheet] .settings-back[hidden] { display: none; }
+.castor-settings[data-sheet] .settings-back::before,
+.castor-settings[data-sheet] .settings-sub-back .set-chevron { transform: scaleX(-1); }
+.castor-settings[data-sheet] .settings-back::before {
+  content: ""; width: 9px; height: 9px; margin: 0 4px 0 2px; border: solid currentColor; border-width: 0 0 2px 2px; transform: rotate(45deg); box-sizing: border-box;
+}
+.castor-settings[data-sheet] .settings-tabs { display: none; }
+.castor-settings[data-sheet] .settings-page { margin: 0; }
+.castor-settings[data-sheet] .settings-page[hidden], .castor-settings[data-sheet] .settings-group[hidden] { display: none; }
+.castor-settings[data-sheet] :is(#settings-panels, .set-wide-only, .set-keys-only, .set-has-nav),
+.castor-settings[data-sheet] .settings-group[data-for="settings-panels"] { display: none !important; }
+.castor-settings[data-sheet] :is(.set-row, .cw-reading-picker summary) {
+  min-height: 48px; padding: 0 16px 0 0; margin: 0; border-top: 1px solid var(--rule); font: 400 16px/1.3 var(--font-ui); color: var(--ink);
+}
+.castor-settings[data-sheet] #settings-offline > #descant-offline { display: none; }
+/* Two classes: the shared row rule above weighs as much as its summary selector. */
+.castor-settings[data-sheet] .set-row.set-font-row { border-top: 1px solid var(--rule); padding: 0; }
+.castor-settings[data-sheet] .set-font-row summary { border-top: 0; }
+.castor-settings[data-sheet] .set-row.set-row-explained { padding-block: 10px; }
+.castor-settings[data-sheet] .set-explain { font-size: 13px; }
+.castor-settings[data-sheet] :is(.set-nav, .set-action) { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; text-align: left; cursor: pointer; }
+.castor-settings[data-sheet] .set-nav[hidden] { display: none; }
+.castor-settings[data-sheet] .set-action .set-lbl, .castor-settings[data-sheet] .set-nav .set-lbl { flex: 1; }
+.castor-settings[data-sheet] :is(.set-value, #set-writer-name) { font-size: 16px; color: var(--ink-2); max-width: 55%; }
+.castor-settings[data-sheet] .set-chevron { display: none; }
+.castor-settings[data-sheet] .set-hint { margin: 8px 16px 8px 0; }
+.castor-settings[data-sheet] .set-hint:empty { display: none; }
+.castor-settings[data-sheet] #set-reader-color-row .set-row { border-top: 0; }
+.castor-settings[data-sheet] .cw-reading-picker[open] > .cw-reading-options { display: none; }
+.castor-settings[data-sheet][data-sub] { overflow: hidden; }
+.castor-settings[data-sheet] .settings-sub {
+  position: absolute; inset: 0; z-index: 5; overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box;
+  padding: 0 max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: var(--paper); transform: translateX(100%); transition: transform .32s cubic-bezier(.32, .72, 0, 1);
+}
+.castor-settings[data-sheet] .settings-sub[data-open] { transform: none; }
+.castor-settings[data-sheet] .settings-sub-head {
+  position: sticky; top: 0; z-index: 2; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-height: 52px;
+  margin: 0 -8px 12px; background: var(--paper);
+}
+.castor-settings[data-sheet] .settings-sub-back { grid-column: 1; grid-row: 1; justify-self: start; }
+.castor-settings[data-sheet] .settings-sub-back .set-chevron { display: inline-flex; }
+.castor-settings[data-sheet] .settings-sub-title { grid-column: 2; grid-row: 1; margin: 0; font: 600 17px/1.2 var(--font-ui-heading); color: var(--ink); text-align: center; }
+.castor-settings[data-sheet] .set-option, .castor-settings[data-sheet] .settings-sub .cw-reading-options button {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; box-sizing: border-box; margin: 0; padding: 0 16px 0 0;
+  border: 0; border-top: 1px solid var(--rule); background: none; color: var(--ink); font: 400 16px/1.3 var(--font-ui); text-align: left; cursor: pointer;
+}
+.castor-settings[data-sheet] .set-option .set-tick { margin-left: auto; color: var(--ink); visibility: hidden; display: flex; }
+.castor-settings[data-sheet] .set-option[aria-checked="true"] .set-tick { visibility: visible; }
+.castor-settings[data-sheet] .settings-sub .cw-reading-options {
+  max-height: none; border: 0; border-radius: 12px; padding: 0 0 0 16px; margin: 0; background: color-mix(in srgb, var(--ink) 5%, var(--paper));
+}
+.castor-settings[data-sheet] .settings-sub .cw-reading-options button { font-size: 17px; }
+.castor-settings[data-sheet] .settings-sub .cw-reading-options small { margin-left: auto; font-size: 13px; }
+.castor-settings[data-sheet] .settings-sub #descant-offline { padding: 0 4px; }
+/* A pushed page has this one entrance: the popover's own fade-in would run again after it (WebKit). */
+.castor-settings[data-sheet][data-pushed]:popover-open { animation: settings-push .32s cubic-bezier(.32, .72, 0, 1); transition: none; }
+#app[data-mode="phone"] #topbar.mast #more-sheet[data-under-push] { display: block !important; animation: menu-under-push .32s cubic-bezier(.32, .72, 0, 1) forwards; pointer-events: none; }
+@keyframes menu-under-push { to { transform: translateX(-28%); filter: brightness(.9); } }
+@keyframes settings-push { from { transform: translateX(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .castor-settings[data-sheet] .settings-sub { transition: none; }
+  .castor-settings[data-sheet][data-pushed]:popover-open { animation: none; }
+  #app[data-mode="phone"] #topbar.mast #more-sheet[data-under-push] { display: none !important; }
+}
 /* Touch keyboards replace, rather than add to, the top row. */
 #app .command-island[data-arrangement="writing"] {
   grid-area: topbar; position: relative; left: auto; top: auto; bottom: auto;
@@ -384,6 +517,62 @@
 #app[data-touch-format="1"][data-keyboard="up"] #topbar.mast { visibility: hidden; pointer-events: none; }
 #app[data-keyboard="up"] { --footline-h: 0px; }
 #app[data-keyboard="up"] #footline { display: none; }
+
+/* ---- the phone's floating bar ------------------------------------------------
+   Keyboard up, the phone has one bar: a capsule just above the keyboard with the
+   writing tools; the top row steps aside and the text keeps its place on screen.
+   A finger scroll tucks the capsule into its round end, which keeps the save mark;
+   a press there, a tap in the text or typing brings the whole bar back. The save
+   state shows in the capsule only when something is wrong. */
+#app[data-mode="phone"] { transition: none; --bar-spring: linear(0, .073, .23, .41, .578, .718, .825, .902, .954, .986, 1.004, 1.012, 1.015, 1.014, 1.012, 1.01, 1.007, 1.005, 1); }
+/* The row's 52 px move into the top of the page, so the text keeps its place at any scroll, even at the top. */
+#app[data-mode="phone"][data-keyboard="up"] { --bar-h: 0px; --page-pad-top: calc(var(--s8) + 52px); --page-pad-bot: 96px; }
+#app[data-mode="phone"][data-keyboard="up"][data-focus="on"] .page-scroll { padding-top: calc(var(--page-pad-top-focus, 5rem) + 52px); }
+#app[data-mode="phone"][data-keyboard="up"] #topbar.mast { display: none; }
+#app[data-mode="phone"] .command-island[data-arrangement="writing"] {
+  grid-area: auto; position: absolute; top: auto; left: var(--s2); right: var(--s2); bottom: var(--s2);
+  width: auto; height: 52px; border: 1px solid var(--rule); border-radius: 999px;
+  background: var(--surface); box-shadow: var(--shadow-overlay);
+  transform-origin: calc(100% - 26px) 50%;
+  transition: transform .42s cubic-bezier(.16, 1, .3, 1), opacity .18s ease-out;
+  transition-timing-function: var(--bar-spring), ease-out;
+}
+@starting-style {
+  #app[data-mode="phone"] .command-island[data-arrangement="writing"][data-open="1"] { opacity: 0; transform: translateY(12px); }
+}
+#app[data-mode="phone"][data-bar-tucked] .command-island[data-arrangement="writing"] {
+  opacity: 0; transform: scale(.4); pointer-events: none;
+  transition: transform .26s cubic-bezier(.4, 0, .2, 1), opacity .14s ease-in;
+}
+#app[data-mode="phone"] #writing-save-slot:not(:has(> #castor-save:is([data-signal="partial"], [data-signal="device"]))) { display: none; }
+#app[data-mode="phone"] #writing-save-slot #castor-save { width: 44px; padding: 0; justify-content: center; }
+#app[data-mode="phone"] #writing-save-slot #castor-save .save-signal-label { display: none; }
+#app .command-island-tuck { display: none; }
+#app[data-mode="phone"][data-keyboard="up"] .command-island-tuck {
+  display: flex; align-items: center; justify-content: center; position: absolute; right: var(--s2); bottom: var(--s2); z-index: 86;
+  width: 52px; height: 52px; padding: 0; border: 1px solid var(--rule); border-radius: 50%;
+  background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink-2); cursor: pointer;
+  opacity: 0; transform: scale(.6); pointer-events: none;
+  transition: transform .2s cubic-bezier(.4, 0, 1, 1), opacity .12s ease-in;
+}
+#app[data-mode="phone"][data-keyboard="up"][data-bar-tucked] .command-island-tuck {
+  opacity: 1; transform: none; pointer-events: auto;
+  transition: transform .42s cubic-bezier(.16, 1, .3, 1), opacity .18s ease-out .06s;
+  transition-timing-function: var(--bar-spring), ease-out;
+}
+#app[data-mode="phone"][data-keyboard="up"][data-bar-aside] .command-island-tuck:is([data-signal="partial"], [data-signal="device"]) { opacity: 1; transform: none; }
+#app .command-island-tuck .save-signal { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#app .command-island-tuck[data-signal="saved"] { color: var(--between); }
+#app .command-island-tuck[data-signal="partial"] { color: var(--save-amber); }
+#app .command-island-tuck[data-signal="saving"] .save-signal { animation: save-spin .9s linear infinite; }
+/* Reduced motion: no scaling; the app-wide rule (engine.css) already cuts every transition to 1 ms. */
+@media (prefers-reduced-motion: reduce) {
+  #app[data-mode="phone"] .command-island[data-arrangement="writing"],
+  #app[data-mode="phone"][data-bar-tucked] .command-island[data-arrangement="writing"],
+  #app[data-mode="phone"][data-keyboard="up"] .command-island-tuck,
+  #app[data-mode="phone"][data-keyboard="up"][data-bar-tucked] .command-island-tuck { transform: none; }
+  #app .command-island-tuck[data-signal="saving"] .save-signal { animation: none; opacity: .6; }
+}
 
 /* The name and its typed asterisk share one face, Literata, the face of every Castor product's
    name; the asterisk is Castor's own glyph in --human, and it drops (castor-identity SIGNATURE.md). */
@@ -412,7 +601,8 @@
 #app {
   --icon-search: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%2210%22%20cy%3D%2210%22%20r%3D%227%22%2F%3E%3Cpath%20d%3D%22m15%2015%206%206%22%2F%3E%3C%2Fsvg%3E");
   --icon-theme: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%229%22%2F%3E%3Cpath%20d%3D%22M12%203v18%22%2F%3E%3C%2Fsvg%3E");
-  --icon-settings: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%224%22%2F%3E%3Cpath%20d%3D%22M12%202v3m0%2014v3M2%2012h3m14%200h3M5%205l2%202m10%2010%202%202M5%2019l2-2M17%207l2-2%22%2F%3E%3C%2Fsvg%3E");
+  --icon-publish: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.5'/%3E%3Cpath d='M3.5 12h17M12 3.5c2.3 2.4 3.4 5.2 3.4 8.5s-1.1 6.1-3.4 8.5c-2.3-2.4-3.4-5.2-3.4-8.5S9.7 5.9 12 3.5Z'/%3E%3C/svg%3E");
+  --icon-settings: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9.9 3.7h4.2l.5 2.2 1.9 1.1 2.2-.7 2.1 3.6-1.7 1.5v2.2l1.7 1.5-2.1 3.6-2.2-.7-1.9 1.1-.5 2.2H9.9l-.5-2.2-1.9-1.1-2.2.7-2.1-3.6 1.7-1.5v-2.2L3.2 9.9l2.1-3.6 2.2.7 1.9-1.1Z'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3C/svg%3E");
   --icon-keyboard: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%222%22%20y%3D%225%22%20width%3D%2220%22%20height%3D%2214%22%20rx%3D%222%22%2F%3E%3Cpath%20d%3D%22M6%209h1m4%200h1m4%200h1M6%2013h1m4%200h1m4%200h1M7%2016h10%22%2F%3E%3C%2Fsvg%3E");
 }
 

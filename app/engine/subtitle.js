@@ -49,18 +49,25 @@
   function close() { input = null; if (node) node.remove(); node = null; sync(); }
   function edit() {
     if (input || !editable()) return;
-    var old = value(), finished = false;
+    var old = value(), finished = false, applied = false;
     // A one-row text area set exactly like the subtitle, so editing keeps its
     // look: same type, same wrapping, no box. Enter finishes; it never adds a line.
     input = D.createElement('textarea'); input.rows = 1; input.value = old;
     input.setAttribute('aria-label', 'Subtitle'); input.setAttribute('autocomplete', 'off'); input.setAttribute('spellcheck', 'true');
     node.classList.add('cw-subtitle-editing');
     node.replaceChildren(input); fit();
-    input.addEventListener('input', fit);
+    function persist() {
+      if (!editable()) return;
+      try {
+        var before = C.editor.getSource();
+        if (C.editor.updateSubtitle(String(input.value).replace(/[\r\n]+/g, ' '), applied) !== false && C.editor.getSource() !== before) applied = true;
+      } catch (error) { input.setCustomValidity(error.message); }
+    }
+    input.addEventListener('input', function (e) { e.stopPropagation(); fit(); persist(); });
     function finish(cancel) {
       if (finished) return; finished = true;
-      if (!cancel && editable()) {
-        try { C.editor.updateSubtitle(String(input.value).replace(/[\r\n]+/g, ' ')); }
+      if (editable()) {
+        try { C.editor.updateSubtitle(cancel ? old : String(input.value).replace(/[\r\n]+/g, ' '), applied); }
         catch (error) { input.setCustomValidity(error.message); input.reportValidity(); finished = false; return; }
       }
       close();
@@ -71,7 +78,7 @@
       else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); finish(false); }
     });
     input.addEventListener('blur', function () { finish(false); });
-    ['input', 'beforeinput', 'paste', 'copy', 'compositionstart', 'compositionend', 'dragstart'].forEach(function (type) {
+    ['beforeinput', 'paste', 'copy', 'compositionstart', 'compositionend', 'dragstart'].forEach(function (type) {
       input.addEventListener(type, function (e) { e.stopPropagation(); });
     });
     input.addEventListener('dragover', function (e) {
@@ -84,6 +91,7 @@
       var start = input.selectionStart == null ? input.value.length : input.selectionStart;
       var end = input.selectionEnd == null ? start : input.selectionEnd;
       input.value = input.value.slice(0, start) + text.replace(/[\r\n]+/g, ' ') + input.value.slice(end);
+      fit(); persist();
     });
     input.focus();
   }

@@ -44,11 +44,10 @@
   function settings() {
     if (!reviewing()) return;
     var doc = global.document;
-    ['settings-tab-writing', 'settings-writing'].forEach(function (id) {
-      var el = doc.getElementById(id); if (el) el.hidden = true;
-    });
-    ['set-dim', 'set-sentence', 'set-preset'].forEach(function (id) {
-      var el = doc.getElementById(id); if (el && el.parentNode) el.parentNode.hidden = true;
+    // A reader keeps Zen and the page's look; the writing tools are the writer's.
+    ['set-dim', 'set-marks', 'set-spell', 'set-language', 'set-touch-format', 'set-agent-tray', 'set-preset'].forEach(function (id) {
+      var el = doc.getElementById(id), row = el && el.closest ? el.closest('.set-row') : el && el.parentNode;
+      if (row) row.hidden = true;
     });
     doc.querySelectorAll('.set-panels label').forEach(function (label) {
       var input = label.querySelector('input'); if (input && ['outline', 'comments'].indexOf(input.value) < 0) label.hidden = true;

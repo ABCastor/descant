@@ -10,6 +10,8 @@
   function phone() { var app = doc.getElementById('app'); return !!(app && app.dataset.mode === 'phone'); }
   function move(node, target) { if (node && target && node.parentNode !== target) target.appendChild(node); }
   function commentPeek(value) {
+    // The caret moves on every keystroke; with no comment under it before or after, nothing changes.
+    if (!value && !peek) return commentControl;
     peek = value;
     if (menu) paintCommentPeek();
     return commentControl;
@@ -117,12 +119,24 @@
     button.addEventListener('click', function () { var target = source && doc.querySelector(source); if (target) target.click(); else if (action) action(); });
     sheet.appendChild(button); return button;
   }
-  function group(sheet, id, title, before) {
+  // A named group of the phone's Menu: its title, then its rows on one card, as in Settings.
+  function group(sheet, id, title) {
     var section = doc.getElementById(id);
-    if (section) return section;
-    section = doc.createElement('section'); section.id = id; section.className = 'menu-group'; section.setAttribute('aria-label', title);
-    var heading = doc.createElement('h2'); heading.textContent = title; section.appendChild(heading);
-    sheet.insertBefore(section, before); return section;
+    if (section) return section.querySelector('.menu-rows');
+    section = doc.createElement('section'); section.id = id; section.className = 'menu-group';
+    if (title) { section.setAttribute('aria-label', title); var heading = doc.createElement('h2'); heading.textContent = title; section.appendChild(heading); }
+    var rows = doc.createElement('div'); rows.className = 'menu-rows'; section.appendChild(rows);
+    sheet.appendChild(section); return rows;
+  }
+  function publishRow(rows) {
+    var row = proxy(rows, 'menu-publish-row', 'Publish', null, function () { if (Castor.publishState && Castor.publishState.open) Castor.publishState.open(); }, 'publish');
+    var value = row.querySelector('.menu-value');
+    if (!value) { value = doc.createElement('span'); value.className = 'menu-value'; row.appendChild(value); }
+    var live = doc.querySelector('.descant-live-marker .live-long') || doc.querySelector('.descant-live-marker');
+    var words = live ? live.textContent.trim() : '';
+    if (value.textContent !== words) value.textContent = words;
+    row.hidden = !writer();
+    return row;
   }
   function layoutMenu(value) {
     menu = value;
@@ -136,13 +150,18 @@
     if (menuLabel && menuLabel.textContent !== (small ? 'Menu' : 'More')) menuLabel.textContent = small ? 'Menu' : 'More';
     menu.word.setAttribute('aria-label', small ? 'Menu' : 'More');
     sheet.setAttribute('aria-label', small ? 'Menu' : 'More');
-    var articles = doc.getElementById('menu-articles');
-    if (!articles) { articles = doc.createElement('section'); articles.id = 'menu-articles'; articles.setAttribute('aria-label', 'Open articles'); sheet.appendChild(articles); }
-    // Phone: the Menu lists its tools in named groups, in this order, before the open
-    // articles, whose list grows (S2).
-    var groups = small && { article: group(sheet, 'menu-article', 'This article', articles), library: group(sheet, 'menu-library', 'Library', articles), app: group(sheet, 'menu-app', 'App', articles) };
-    var groupOf = { outline: 'article', changes: 'article', drafts: 'article', links: 'article', files: 'library', workspace: 'library', 'for-you': 'library' };
-    ['outline', 'comments', 'changes', 'files', 'drafts', 'workspace', 'links', 'for-you'].forEach(function (id) {
+    /* Phone: one sheet of named groups, in the order he reaches for them: the
+       article's own tools, Publish, the library, Settings, and last the open
+       articles, whose list grows, so Settings stays in view (S2). */
+    var groups = small && {
+      article: group(sheet, 'menu-article', 'This article'),
+      publish: group(sheet, 'menu-publish', 'Publish'),
+      library: group(sheet, 'menu-library', 'Library'),
+      app: group(sheet, 'menu-app', ''),
+      articles: group(sheet, 'menu-articles', 'Open articles')
+    };
+    var groupOf = { outline: 'article', changes: 'article', drafts: 'article', links: 'article', workspace: 'article', files: 'library', 'for-you': 'library' };
+    ['outline', 'comments', 'changes', 'drafts', 'links', 'workspace', 'files', 'for-you'].forEach(function (id) {
       var button = id === 'comments' && commentControl || doc.querySelector('.topwords [data-panel="' + id + '"], #more-sheet [data-panel="' + id + '"]');
       if (id === 'comments' && button) {
         commentControl = button;
@@ -158,27 +177,27 @@
         if (Castor.panels.isOpen) button.setAttribute('aria-pressed', String(Castor.panels.isOpen(id)));
       }
     });
-    var section = doc.getElementById('menu-publish');
-    if (!section) {
-      section = doc.createElement('section'); section.id = 'menu-publish'; section.setAttribute('aria-label', 'Publish');
-      var heading = doc.createElement('h2'); heading.textContent = 'Publish'; section.appendChild(heading);
-      sheet.insertBefore(section, sheet.firstChild);
-    }
+    // The live state and the Publish pill stay on the dock; the phone's Publish row opens the same sheet.
     var pub = publishButton(), live = doc.querySelector('.descant-live-marker');
-    move(live, small ? section : meta); move(pub, small ? section : meta);
+    move(live, meta); move(pub, meta);
+    if (groups) publishRow(groups.publish);
     // Search is not listed: on the phone it sits at the top right of the row.
-    move(proxy(sheet, 'menu-share', 'Share', '.descant-share', null, 'share'), small ? section : sheet);
-    move(proxy(sheet, 'menu-theme', 'Theme', '#theme-switch', null, 'theme'), groups ? groups.app : sheet);
+    move(proxy(sheet, 'menu-share', 'Share', '.descant-share', null, 'share'), groups ? groups.publish : sheet);
+    // The phone's theme lives in Settings, Page, with its value; the dock keeps its toggle.
+    var theme = proxy(sheet, 'menu-theme', 'Theme', '#theme-switch', null, 'theme'); move(theme, sheet);
     move(proxy(sheet, 'menu-settings', 'Settings', '#castor-settings-gear', null, 'settings'), groups ? groups.app : sheet);
-    var shortcuts = doc.getElementById('castor-shortcuts'); move(shortcuts, groups ? groups.app : sheet);
+    // Keyboard shortcuts are a keyboard's: the phone's Menu leaves them out.
+    var shortcuts = doc.getElementById('castor-shortcuts'); move(shortcuts, sheet);
     if (shortcuts) shortcuts.dataset.icon = 'shortcuts';
+    var list = doc.getElementById('menu-article-list');
+    if (!list) { list = doc.createElement('div'); list.id = 'menu-article-list'; list.setAttribute('role', 'group'); list.setAttribute('aria-label', 'Open articles'); }
+    if (groups && list.parentNode !== groups.articles) groups.articles.insertBefore(list, groups.articles.firstChild);
     var tabs = Array.prototype.slice.call(doc.querySelectorAll('#castor-tabs .castor-tab'));
     var stamp = tabs.map(function (tab) { return tab.textContent + ':' + tab.getAttribute('aria-selected'); }).join('|');
-    if (articles._stamp !== stamp) {
-      articles._stamp = stamp; articles.textContent = '';
-      var title = doc.createElement('h2'); title.textContent = 'Open articles'; articles.appendChild(title);
+    if (list._stamp !== stamp) {
+      list._stamp = stamp; list.textContent = '';
       tabs.forEach(function (tab, i) {
-        var button = proxy(articles, 'menu-article-' + i, tab.textContent.trim(), null, function () { tab.click(); }, 'article');
+        var button = proxy(list, 'menu-article-' + i, tab.textContent.trim(), null, function () { tab.click(); }, 'article');
         button.setAttribute('aria-current', tab.getAttribute('aria-selected') === 'true' ? 'page' : 'false');
       });
     }
@@ -220,9 +239,20 @@
     var app = doc.getElementById('app'); if (!app || !bar()) return;
     arrange();
     app.addEventListener('click', openPublishFromLive, true);
-    var observer = new global.MutationObserver(arrange);
+    // Typing rewrites the article and the status words (save, session, live, the word count) many
+    // times a second; the chrome rearranges only when its own controls change. A node already taken
+    // out of the document (a comment mark the page drew again) is no longer under #page to be known,
+    // and lays nothing out.
+    var quiet = '#page, #castor-save, .castor-session, .descant-live-marker, .command-island-tuck, #castor-words';
+    var observer = new global.MutationObserver(function (records) {
+      for (var i = 0; i < records.length; i++) {
+        var node = records[i].target, el = node.nodeType === 1 ? node : node.parentNode;
+        if (el && el.isConnected === false) continue;
+        if (!(el && el.closest && el.closest(quiet))) { arrange(); return; }
+      }
+    });
     observer.observe(app, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-mode', 'data-keyboard', 'data-preset'] });
-    if (Castor.bus && Castor.bus.on) ['comments:pending', 'comments:saved', 'comments:unsaved', 'piece:opened', 'live:reload', 'save:state'].forEach(function (name) { Castor.bus.on(name, arrange); });
+    if (Castor.bus && Castor.bus.on) ['comments:pending', 'comments:saved', 'comments:unsaved', 'piece:opened', 'live:reload'].forEach(function (name) { Castor.bus.on(name, arrange); });
     if (Castor.panels && Castor.panels.onLayout) Castor.panels.onLayout(arrange);
     global.addEventListener('resize', arrange, { passive: true });
     if (global.ResizeObserver) { var col = doc.querySelector('#page .page-column'); if (col) new global.ResizeObserver(measureMargins).observe(col); }
