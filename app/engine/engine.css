@@ -3580,12 +3580,34 @@ html[data-keyhint="on"] .castor-tab-item:has(.word-key) .castor-tab-close { visi
 .castor-thread .castor-prov-author { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; position: relative; min-width: 0; }
 .castor-thread .castor-comment-name { flex: 0 1 auto; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .castor-thread .castor-comment-for { font-weight: 400; color: var(--ink-2); }
+/* An agent acting for a founder: its name and time on the first row, as anyone's; "for <founder>" under them. */
+.castor-thread .castor-prov-author[data-for] { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
+.castor-thread .castor-prov-author[data-for] > .castor-comment-name { display: contents; }
+.castor-thread .castor-prov-author[data-for] .castor-comment-agent { grid-area: 1 / 1; min-width: 0; overflow-wrap: anywhere; }
+.castor-thread .castor-prov-author[data-for] > .castor-comment-date { grid-area: 1 / 2; justify-self: start; }
+.castor-thread .castor-prov-author[data-for] .castor-comment-for { grid-area: 2 / 1 / 3 / 3; }
 .castor-thread .castor-person-dot {
   position: absolute; left: -28px; top: 0; width: 20px; height: 20px;
   color: #1B1915; background: color-mix(in srgb, var(--human) 35%, white); font: 600 11px/20px var(--font-ui, system-ui, sans-serif);
 }
 .castor-thread .castor-person-dot:not([data-agent])::after { content: attr(data-initial); }
-.castor-thread .castor-person-dot[data-agent] { color: #1B1915; background: color-mix(in srgb, var(--machine) 35%, white); }
+/* An agent: a rounded square in the agent's colour with its model's initial, and the founder it acted
+   for as a small dot of that founder's colour on its corner. A person is a round initial. */
+.castor-thread .castor-person-dot[data-agent] {
+  --agent-ink: var(--machine); --agent-fill: 14%;
+  border-radius: 6px; color: var(--agent-ink);
+  background: color-mix(in srgb, var(--agent-ink) var(--agent-fill), var(--surface, #FFFDF8));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agent-ink) 40%, transparent);
+}
+:root[data-theme="dark"] .castor-thread .castor-person-dot[data-agent] { --agent-ink: #2BB0B8; --agent-fill: 20%; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .castor-thread .castor-person-dot[data-agent] { --agent-ink: #2BB0B8; --agent-fill: 20%; }
+}
+.castor-thread .castor-person-dot[data-agent]::before { content: attr(data-mono); font: 650 11px/20px var(--font-ui, system-ui, sans-serif); color: var(--agent-ink); }
+.castor-thread .castor-person-dot[data-agent][data-for]::after {
+  content: ''; position: absolute; right: -3px; bottom: -3px; width: 9px; height: 9px; box-sizing: border-box;
+  border-radius: 50%; background: var(--founder); box-shadow: 0 0 0 2px var(--surface, #FFFDF8);
+}
 .castor-thread .castor-comment-date { flex: 0 0 auto; max-width: 100%; min-width: 0; margin: 0; white-space: nowrap; font-weight: 400; }
 .castor-thread .castor-comment-time { display: inline; margin: 0; font-size: 13px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .castor-thread .castor-comment-context { color: var(--ink-3); margin-top: 4px; }

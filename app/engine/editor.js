@@ -2031,11 +2031,24 @@
     return { start: start, end: a, insertedLength: b - start };
   }
 
+  // The browser paints a space it must keep visible (at a line's end, beside another, or left beside a
+  // replaced character) as a non-breaking one. Where the source holds a space at that place, the NBSP is
+  // that space; one the writer typed as a key, or one with no space under it, stays.
+  function paintedSpaces(source, raw, intent) {
+    if (raw.indexOf('\u00a0') < 0 || intent && /^\u00a0+$/.test(intent.data || '')) return raw;
+    var same = function (a, b) { return a === b || a === ' ' && b === '\u00a0'; };
+    var out = raw.split(''), i = 0, a = source.length, b = raw.length;
+    while (i < a && i < b && same(source.charAt(i), raw.charAt(i))) { if (source.charAt(i) === ' ') out[i] = ' '; i++; }
+    while (a > i && b > i && same(source.charAt(a - 1), raw.charAt(b - 1))) { if (source.charAt(a - 1) === ' ') out[b - 1] = ' '; a--; b--; }
+    return out.join('');
+  }
+
   function syncNativeInput(intent, restoreOffset) {
     var host = focusId && editOf(focusId), b = focusId && blockOf(focusId);
     if (!host || !b) return;
     if (intent && intent.host && (intent.host !== host || intent.blockId !== b.id || intent.source !== b.source)) return;
     var raw = host.textContent.replace(/\r\n?/g, '\n');
+    if (typeof paintedSpaces === 'function') raw = paintedSpaces(b.source, raw, intent);
     // contenteditable substitutes NBSP to paint a final/repeated ASCII space.
     // Reconcile only the browser's changed input, retaining authored NBSP.
     if (intent && intent.data && intent.data.includes(' ') && !intent.data.includes('\u00a0') && raw.includes('\u00a0')) {
@@ -2089,7 +2102,7 @@
     }
     if (intent && intent.selectionEdit) {
       var edit = intent.selectionEdit;
-      var inserted = intent.data != null ? intent.data : span.insertedLength >= 0 ? raw.slice(edit.start, edit.start + span.insertedLength) : '';
+      var inserted = intent.data != null ? (typeof paintedSpaces === 'function' ? paintedSpaces(b.source.slice(edit.start, edit.end), intent.data, intent) : intent.data) : span.insertedLength >= 0 ? raw.slice(edit.start, edit.start + span.insertedLength) : '';
       host.innerHTML = editingHtml(liveHtml(b), b.source);
       if (intent.pair) {
         setCaret(b.id, edit.start, edit.end);
@@ -2815,6 +2828,7 @@
       // meanwhile stays beside the number, where the browser's own placement would not leave it.
       var numbered = touch && focusId && number.closest('.cw-block');
       var beside = numbered && numbered.getAttribute('data-block-id') === focusId ? tappedSourceOffset(numbered, e.clientX, e.clientY) : null;
+      if (beside != null && typeof atomSide === 'function' && typeof lineEndAtom === 'function') beside = atomSide(focusId, lineEndAtom(focusId, beside, e.clientX, e.clientY), e.clientX, e.clientY);
       if (beside != null && typeof guardTap === 'function') guardTap(focusId, beside);
       return;
     }
@@ -2846,9 +2860,13 @@
       focusBlock(id, off);
       // Read in the reading view, the finger's place beside an atom is only its character count, the
       // same on both sides of it: the side is where the finger is, measured once the words are typed in.
-      var side = typeof atomSide === 'function' ? atomSide(id, off, e.clientX, e.clientY) : off;
+      var side = typeof atomSide === 'function' ? atomSide(id, typeof lineEndAtom === 'function' ? lineEndAtom(id, off, e.clientX, e.clientY) : off, e.clientX, e.clientY) : off;
       if (side !== off) { off = side; setCaret(id, off); }
-    } else setCaret(id, off);
+    } else {
+      // In the paragraph being typed in, the same: beside a number is the number's side, not past it.
+      if (touch && typeof atomSide === 'function' && typeof lineEndAtom === 'function') off = atomSide(id, lineEndAtom(id, off, e.clientX, e.clientY), e.clientX, e.clientY);
+      setCaret(id, off);
+    }
     if (paddedIndex != null) {
       var paddedCell = editOf(id).querySelectorAll('td,th')[paddedIndex];
       var paddedRange = document.createRange(), paddedSelection = global.getSelection();
@@ -2907,6 +2925,24 @@
     var atom = atomAt(editOf(id), off), box = atom && atom.el.getBoundingClientRect();
     if (!box || !box.height || y < box.top - box.height || y > box.bottom + box.height) return off;
     return x > (box.left + box.right) / 2 ? atom.end : atom.start;
+  }
+  // A finger right of a footnote number that ends its line is beside the number. The browser's
+  // hit-test puts it past the space the line broke at, where the caret draws at the next line's start.
+  function lineEndAtom(id, off, x, y) {
+    var host = editOf(id), b = blockOf(id), atoms = host && b && off != null ? host.querySelectorAll('.cw-atom') : [];
+    for (var i = 0; i < atoms.length; i++) {
+      var a = atoms[i], parent = a.parentNode, start = parent ? domOffset(host, parent, Array.prototype.indexOf.call(parent.childNodes, a)) : null;
+      if (start == null) continue;
+      var end = start + a.textContent.length, box = a.getBoundingClientRect();
+      if (off <= end || !/^[ \u00a0]+$/.test(b.source.slice(end, off)) || !box.height || x < box.left || y < box.top - box.height || y > box.bottom + box.height) continue;
+      var from = sourcePoint(host, off, true), to = off < b.source.length ? sourcePoint(host, off + 1, true) : null;
+      if (!from || !to) return end;
+      var r = document.createRange();
+      try { r.setStart(from.node, from.offset); r.setEnd(to.node, to.offset); } catch (err) { return off; }
+      var next = r.getClientRects()[0] || r.getBoundingClientRect();
+      return next && next.height && next.top >= box.bottom - 1 ? end : off;
+    }
+    return off;
   }
   function inAtom(node) {
     var el = node && (node.nodeType === 1 ? node : node.parentElement);
@@ -4957,7 +4993,7 @@
     if (e.cancelable !== false && visibleCaret && liveInputCaret &&
         (visibleCaret.start !== liveInputCaret.start || visibleCaret.end !== liveInputCaret.end) &&
         /^(insertText|insertReplacementText)$/.test(t || '') && e.data != null) {
-      e.preventDefault(); replaceVisible(focusId, visibleCaret.start, visibleCaret.end, e.data);
+      e.preventDefault(); replaceVisible(focusId, visibleCaret.start, visibleCaret.end, typeof paintedSpaces === 'function' ? paintedSpaces(blockOf(focusId).source.slice(visibleCaret.start, visibleCaret.end), e.data, t === 'insertText' ? { data: e.data } : null) : e.data);
       finishInput(global.performance && performance.now ? performance.now() : Date.now()); return;
     }
     if (t === 'deleteContentBackward' && e.cancelable !== false && visibleCaret && visibleCaret.start === visibleCaret.end && pending.some(function (p) { return p.blockId === focusId && p.index === visibleCaret.start; }) && pairedDelete(focusId)) {
@@ -4976,7 +5012,7 @@
     }
     if (e.cancelable !== false && visibleCaret && visibleCaret.end > visibleCaret.start && el.querySelector && el.querySelector('.cw-mk') &&
         (/^delete/.test(t || '') || /^(insertText|insertReplacementText)$/.test(t || '') && e.data != null)) {
-      e.preventDefault(); replaceVisible(focusId, visibleCaret.start, visibleCaret.end, /^delete/.test(t) ? '' : e.data); finishInput(global.performance && performance.now ? performance.now() : Date.now()); return;
+      e.preventDefault(); replaceVisible(focusId, visibleCaret.start, visibleCaret.end, /^delete/.test(t) ? '' : typeof paintedSpaces === 'function' ? paintedSpaces(blockOf(focusId).source.slice(visibleCaret.start, visibleCaret.end), e.data, t === 'insertText' ? { data: e.data } : null) : e.data); finishInput(global.performance && performance.now ? performance.now() : Date.now()); return;
     }
     handledBackspace = false;
     var started = global.performance && performance.now ? performance.now() : Date.now();

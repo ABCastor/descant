@@ -2100,10 +2100,11 @@
       model: msg.model || author, short: agent.split(/\s+/)[0] };
   }
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  // One way to write a time everywhere a comment shows one: 4 Oct 2026, or 4 Oct 2026, 14:05.
-  function stampText(stamp, when) {
+  // One way to write a time everywhere a comment shows one: 4 Oct, or 4 Oct, 14:05, in the current
+  // year; 4 Oct 2025 and 4 Oct 2025, 14:05 in any other. The element keeps the full stamp.
+  function stampText(stamp, when, now) {
     var day = stamp.length === 10 ? new Date(+stamp.slice(0, 4), +stamp.slice(5, 7) - 1, +stamp.slice(8, 10)) : when;
-    var text = day.getDate() + ' ' + MONTHS[day.getMonth()] + ' ' + day.getFullYear();
+    var text = day.getDate() + ' ' + MONTHS[day.getMonth()] + (day.getFullYear() === (now || new Date()).getFullYear() ? '' : ' ' + day.getFullYear());
     if (stamp.length === 10) return text;
     function two(n) { return (n < 10 ? '0' : '') + n; }
     return text + ', ' + two(when.getHours()) + ':' + two(when.getMinutes());
@@ -2118,19 +2119,24 @@
       var agentEl = el('span', 'castor-comment-agent', who.agent);
       if (who.model) agentEl.setAttribute('data-model', who.model);
       credited.appendChild(agentEl);
-      if (who.forName) credited.appendChild(el('span', 'castor-comment-for', ' for ' + who.forName));
+      if (who.forName) { credited.appendChild(el('span', 'castor-comment-for', ' for ' + who.forName)); row.setAttribute('data-for', ''); }
     }
     credited.setAttribute('data-by', kind);credited.title=name;
     var pColor = messagePersonColor(msg);
     if (pColor) credited.style.color = 'color-mix(in srgb, var(--ink) 65%, ' + pColor + ')';
     row.appendChild(credited);
-    var dot = el('span', 'castor-person-dot',kind==='agent'?'a':'');
-    dot.setAttribute('data-initial', kind === 'agent' ? 'a' : name.charAt(0).toUpperCase());
+    var dot = el('span', 'castor-person-dot');
     dot.setAttribute('aria-hidden', 'true');
-    if (kind === 'agent') dot.setAttribute('data-agent', 'true');
-    if (pColor) dot.style.backgroundColor = kind === 'agent'
-      ? 'color-mix(in srgb, ' + pColor + ' 35%, white)' : pColor;
-    if (pColor && kind !== 'agent') dot.style.color = avatarInk(pColor);
+    if (kind === 'agent') {
+      // An agent's own mark: its model's initial on the agent's colour, and the founder it acted
+      // for only as a dot of that founder's colour. Never the founder's initial or colour as its face.
+      dot.setAttribute('data-agent', 'true');
+      dot.setAttribute('data-mono', (who.agent || 'A').charAt(0).toUpperCase());
+      if (pColor && who.forName) { dot.setAttribute('data-for', 'true'); dot.style.setProperty('--founder', pColor); }
+    } else {
+      dot.setAttribute('data-initial', name.charAt(0).toUpperCase());
+      if (pColor) { dot.style.backgroundColor = pColor; dot.style.color = avatarInk(pColor); }
+    }
     row.appendChild(dot);
     line.appendChild(row);
     if (msg.created) {

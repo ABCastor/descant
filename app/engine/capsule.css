@@ -300,6 +300,8 @@
   border-radius: var(--radius-sheet, 16px) var(--radius-sheet, 16px) 0 0;
   background: var(--surface); box-shadow: var(--shadow-overlay);
 }
+/* The sheet is the panel's one surface, as the laptop's card is: no second frame inside it. */
+#app:is([data-mode="tablet"], [data-mode="phone"]) .dock[data-open="1"] .panel { background: transparent; border: 0; border-radius: 0; box-shadow: none; }
 
 /* ---- icons: one stroke, one weight (the K1 set) ------------------------------- */
 #app, #topbar {
