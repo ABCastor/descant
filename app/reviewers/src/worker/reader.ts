@@ -23,7 +23,8 @@ export async function readerApi(req: Request, env: Env, url: URL, person: Person
       const founders = env.WRITER_ORIGIN ? (await env.DB.prepare("SELECT key FROM founders WHERE emailSha256=?")
         .bind(await sha256Hex(foldEmail(person.email))).all<{ key: string }>()).results : [];
       const writingApp = founders.length === 1 && isWriter(env, founders[0].key);
-      return json({ role: "reviewer", name: person.name, id: person.id, ...(person.color ? { color: person.color } : {}), ...(writingApp ? { writingApp: true } : {}) });
+      // Their own address, so the page can say which account is signed in.
+      return json({ role: "reviewer", name: person.name, email: person.email, id: person.id, ...(person.color ? { color: person.color } : {}), ...(writingApp ? { writingApp: true } : {}) });
     }
     if (path === "/api/pieces") return pieces(env, person);
     const asked = url.searchParams.getAll("path");

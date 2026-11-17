@@ -377,6 +377,7 @@
   var caretReducedMotion = global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)');
   var suppressClickUntil = 0;
   var touchInput = false, touchMoved = false, touchStart = null, touchSelection = null, touchCount = 0, everFocused = false;
+  var fingerDown = false, fingerMade = null;   // a finger on the page; the words its long press selected (nativeDraws)
   var lastEnter = null;
   var typewriterRaf = 0, typewriterOwnUntil = 0, typewriterLast = null, lastFocusPara = null;
   var pickerRaf = 0;
@@ -1240,6 +1241,7 @@
     try { if (!range.intersectsNode || !range.intersectsNode(page)) return empty; }
     catch (e) { return empty; }
     if (!sel.isCollapsed) {
+      if (nativeDraws(range)) return { caret: null, selection: [], bounds: bounds };
       var rects = selectedTextRects(range, bounds);
       return { caret: null, selection: mergeLineRects(rects), bounds: bounds };
     }
@@ -1355,6 +1357,16 @@
   function coarsePointer() {
     return touchInput || !!(global.matchMedia && global.matchMedia('(pointer: coarse)').matches);
   }
+  // One highlight at a time. On a touch screen iOS draws its own highlight and handles over any words
+  // in the paragraph being typed in, and over words a finger is selecting or has just selected (a long
+  // press, until the page takes them over: ownSelection, heldRange). Everything else is the page's.
+  function nativeDraws(range) {
+    if (!range || !coarsePointer()) return false;
+    var host = focusId && editOf(focusId);
+    if (host && document.activeElement === host && host.contains(range.startContainer)) return true;
+    if (heldRange && sameRange(range, heldRange)) return false;
+    return fingerDown || !!(fingerMade && sameRange(range, fingerMade));
+  }
   var handleEdges = null;
   function paintHandles(selection) {
     if (!handles) return;
@@ -1402,7 +1414,7 @@
         else next.setEnd(p.node, p.offset);
       } catch (err) { return; }
       if (next.collapsed) return;
-      draggingHandle.range = next;
+      draggingHandle.range = next; heldRange = next;
       if (typeof selectionTurn !== 'undefined') selectionTurn++; sel.removeAllRanges(); sel.addRange(next);
       requestOverlay('navigate');
     }
@@ -2513,7 +2525,58 @@
     applyEdit(p.blockId, p.start, end, text, caretAt);
     if (p.handle) p.handle.close();
   }
-  function ensureSelMenu() {
+  // The page's one menu for words it holds: Copy first, then Comment; Share where the device has a
+  // share sheet; and with a mouse or trackpad, Bold, Italic and Link for words in the paragraph being
+  // written (on a touch screen that paragraph has iOS's own menu, and the writing bar has these).
+  function menuItems(range) {
+    var items = ['copy'];
+    if (!(Castor.comments && Castor.comments.available && !Castor.comments.available())) items.push('comment');
+    var host = focusId && editOf(focusId);
+    var writing = !opts.readOnly && !!host && document.activeElement === host && !!range &&
+      host.contains(range.startContainer) && host.contains(range.endContainer);
+    if (writing && !coarsePointer()) items.push('bold', 'italic', 'link');
+    if (coarsePointer() && global.navigator && typeof global.navigator.share === 'function') items.push('share');
+    return items;
+  }
+  function menuWord(id) {
+    return {
+      copy: { label: 'Copy', keys: ['MOD C', 'MOD+C'] },
+      comment: { label: 'Comment', command: 'edit.comment' },
+      bold: { label: 'Bold', keys: ['MOD B', 'MOD+B'] },
+      italic: { label: 'Italic', keys: ['MOD I', 'MOD+I'] },
+      link: { label: 'Link' },
+      share: { label: 'Share' }
+    }[id];
+  }
+  function copyWords() {
+    var done = false;
+    try { done = document.execCommand('copy'); } catch (e) { done = false; }
+    if (done) return Promise.resolve(true);
+    var clip = global.navigator && global.navigator.clipboard, text = String(global.getSelection ? global.getSelection() : '');
+    return clip && clip.writeText ? clip.writeText(text).then(function () { return true; }, function () { return false; }) : Promise.resolve(false);
+  }
+  function runMenu(id, btn) {
+    var a = selAnchor;
+    if (id === 'copy') {
+      copyWords().then(function (ok) {
+        btn.textContent = ok ? 'Copied' : 'Could not copy';
+        global.setTimeout(hideSelMenu, 900);
+      });
+      return;
+    }
+    hideSelMenu();
+    if (id === 'share') {
+      var words = String(global.getSelection ? global.getSelection() : '') || (a && a.quote) || '';
+      if (words) global.navigator.share({ text: words }).catch(function () { /* the share sheet was closed */ });
+      return;
+    }
+    if (id === 'bold' || id === 'italic' || id === 'link') { command(id); return; }
+    if (!a) return;
+    if (opts.onComment) opts.onComment(a);
+    else if (Castor.comments && Castor.comments.add) Castor.comments.add(a, '');
+    else if (bus && bus.emit) bus.emit('comment:new', a);
+  }
+  function ensureSelMenu(range) {
     if (!selMenu) {
       selMenu = document.createElement('div');
       document.body.appendChild(selMenu);
@@ -2524,36 +2587,25 @@
     // page (like the dev harness) that never loads engine.css.
     selMenu.className = 'selection-menu cw-selmenu';
     selMenu.setAttribute('role', 'toolbar');
+    selMenu.setAttribute('aria-label', 'Selected words');
     selMenu.setAttribute('data-open', '0');
     selMenu.hidden = true;
+    menuItems(range).forEach(function (id) {
+      var item = menuWord(id), btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = item.label;
+      btn.setAttribute('data-command', id);
+      if (item.command && Castor.commands && Castor.commands.hint) Castor.commands.hint(btn, item.command);
+      else if (item.keys && Castor.keys && Castor.keys.hint) Castor.keys.hint(btn, item.keys[0], item.keys[1]);
+      btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
+      btn.addEventListener('click', function () { runMenu(id, btn); });
+      selMenu.appendChild(btn);
+    });
     if (Castor.comments && Castor.comments.available && !Castor.comments.available()) {
       var hint = document.createElement('span');
       hint.textContent = 'Comments are available after moving this draft into the article.';
       selMenu.appendChild(hint);
-      return selMenu;
     }
-    ['Comment'].forEach(function (word) {
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = word;
-      btn.setAttribute('data-command', 'comment');
-      if (Castor.commands && Castor.commands.hint) Castor.commands.hint(btn, 'edit.comment');
-      btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
-      btn.addEventListener('click', function () {
-        var a = selAnchor;
-        hideSelMenu();
-        if (!a) return;
-        if (word === 'Comment') {
-          if (opts.onComment) opts.onComment(a);
-          else if (Castor.comments && Castor.comments.add) Castor.comments.add(a, '');
-          else if (bus && bus.emit) bus.emit('comment:new', a);
-        } else {
-          if (opts.onLink) opts.onLink(a);
-          else linkSelection(a);
-        }
-      });
-      selMenu.appendChild(btn);
-    });
     return selMenu;
   }
 
@@ -2573,8 +2625,8 @@
     if (activePicker) activePicker.handle.update(a.quote, caretRect());
   }
 
-  function showSelMenu(rect) {
-    var m = ensureSelMenu();
+  function showSelMenu(rect, range) {
+    var m = ensureSelMenu(range);
     m.hidden = false;
     m.setAttribute('data-open', '1');
     var w = m.offsetWidth || 132, h = m.offsetHeight || 32;
@@ -2596,7 +2648,7 @@
       active.contains(range.startContainer) && active.contains(range.endContainer));
   }
   function offerSelMenu(range) {
-    if (systemMenuOver(range)) hideSelMenu(); else showSelMenu(range.getBoundingClientRect());
+    if (systemMenuOver(range)) hideSelMenu(); else showSelMenu(range.getBoundingClientRect(), range);
   }
   // A scroll or resize hides the menu where it stood; once the page is still it is back over the
   // words: a long press iOS answers with a scroll still offers Comment.
@@ -3010,7 +3062,7 @@
     var selected = sel && sel.rangeCount && !sel.isCollapsed && sel.getRangeAt(0);
     // A long-press selection someone is about to comment on is never collapsed by its own touch.
     if (selected && page.contains(selected.startContainer) && page.contains(selected.endContainer)) {
-      if (!sameRange(touchSelection, selected)) ownSelection(selected.cloneRange());   // this touch selected them
+      if (!sameRange(touchSelection, selected)) { fingerMade = selected.cloneRange(); ownSelection(selected.cloneRange()); }   // this touch selected them
       return;
     }
     if (touchMoved) return;
@@ -3044,6 +3096,7 @@
   // Each caret or selection the editor sets itself counts here, so a long press's pending hand-back of
   // older words (ownSelection) gives way to it.
   var selectionTurn = 0;
+  var heldRange = null;   // the words the page holds itself on a touch screen (nativeDraws)
   // iOS draws its own handles and Copy menu over a selection it made, beside the page's own (N11),
   // and none over one the page set. In reading mode the page hands the same words back while they
   // cannot be selected for a moment; then they can be again, for the next long press. Typing keeps
@@ -3067,13 +3120,14 @@
       if (!sel.rangeCount || sel.isCollapsed || taken(sel)) { ownSelection.busy = false; return; }
       // WebKit can drop the words as they become unselectable, once or more: the page sets them again,
       // until the words can be selected again or the selection is taken.
-      var hold = function () { if (!taken(sel) && (!sel.rangeCount || sel.isCollapsed)) { sel.removeAllRanges(); sel.addRange(range); } };
+      var hold = function () { if (!taken(sel) && (!sel.rangeCount || sel.isCollapsed)) { heldRange = range; sel.removeAllRanges(); sel.addRange(range); } };
       page.setAttribute('data-own-selection', '');
       global.requestAnimationFrame(function () {
         if (taken(sel)) {
           page.removeAttribute('data-own-selection'); ownSelection.busy = false;
           return;
         }
+        heldRange = range;
         sel.removeAllRanges(); sel.addRange(range);
         document.addEventListener('selectionchange', hold);
         global.setTimeout(function () {
@@ -6006,6 +6060,10 @@
         page.addEventListener('focusout', own(onFocusOut));
         page.addEventListener('touchstart', own(onTouchStart), { passive: true });
         page.addEventListener('touchmove', own(onTouchMove), { passive: true });
+        page.addEventListener('touchstart', function (e) { fingerDown = !!(e.touches && e.touches.length); }, { passive: true, capture: true });
+        ['touchend', 'touchcancel'].forEach(function (t) {
+          document.addEventListener(t, function (e) { fingerDown = !!(e.touches && e.touches.length); }, { passive: true, capture: true });
+        });
         page.addEventListener('touchend', own(onTouchEnd), { passive: false });
         document.addEventListener('pointerdown', function (e) { if (e.pointerType) touchInput = e.pointerType === 'touch'; }, true);
         document.addEventListener('selectionchange', onSelectionChange);

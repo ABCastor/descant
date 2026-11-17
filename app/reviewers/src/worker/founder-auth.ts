@@ -17,7 +17,7 @@ const invalid = () => message("This code no longer works", "It expired, was used
 const codeHash = (env: Env, token: string, value: string) => emailCodeHash(env.SESSION_SECRET, "founder:" + token, value);
 
 /** Undefined leaves the established reader sign-in path unchanged. */
-export async function requestFounderCode(req: Request, env: Env, email: string): Promise<Response | undefined> {
+export async function requestFounderCode(req: Request, env: Env, email: string, write = false): Promise<Response | undefined> {
   const digest = await sha256Hex(email);
   const rows = (await env.DB.prepare("SELECT key FROM founders WHERE emailSha256=?").bind(digest).all<{ key: string }>()).results;
   if (!rows.length) return undefined;
@@ -43,11 +43,11 @@ export async function requestFounderCode(req: Request, env: Env, email: string):
         .bind(await codeHash(env, token, randomId("decoy", 32)), hash).run();
     }
   }
-  return codePage(token, "", 200, new URL(req.url).pathname);
+  return codePage(token, "", 200, new URL(req.url).pathname, email, write);
 }
 
 /** Claim once, with the live unique key/digest mapping inside the SQL write. */
-export async function verifyFounderCode(req: Request, env: Env, token: string, value: string, back: string): Promise<Response | undefined> {
+export async function verifyFounderCode(req: Request, env: Env, token: string, value: string, back: string, email = "", write = false): Promise<Response | undefined> {
   const hash = await sha256Hex(token);
   const found = await env.DB.prepare("SELECT tokenHash FROM founder_email_codes WHERE tokenHash=?").bind(hash).first();
   if (!found) return undefined;
@@ -59,11 +59,11 @@ export async function verifyFounderCode(req: Request, env: Env, token: string, v
   // The IP bucket is shared with the established reader-code guess limit.
   const keys = (await guessKeys(req, live.emailSha256)).map(k => `code:${k}`);
   const wait = await reserveTry(env.DB, keys);
-  if (wait) return codePage(token, `Too many tries. Wait ${waitWords(wait)}, then try again.`, 429, back);
+  if (wait) return codePage(token, `Too many tries. Wait ${waitWords(wait)}, then try again.`, 429, back, email, write);
   const row = await env.DB.prepare("UPDATE founder_email_codes SET attempts=attempts+1 WHERE " + valid + " RETURNING *")
     .bind(hash, at).first<FounderCode>();
   if (!row) return invalid();
-  if (!sameText(row.codeHash, await codeHash(env, token, value))) return codePage(token, "That code does not match. Try again.", 401, back);
+  if (!sameText(row.codeHash, await codeHash(env, token, value))) return codePage(token, "That code does not match. Try again.", 401, back, email, write);
   let claimed: { founderKey: string } | null;
   const writer = writerList(env);
   try {

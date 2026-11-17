@@ -2486,9 +2486,11 @@
     var actionRow=el('div','castor-comment-actionrow'),own=null;
     if(c&&a){own=el('div','castor-comment-menu castor-comment-own');if(authorKind(msg)==='human'&&a.permissions.edit&&!a.withdrawn)withIcon(button(own,'Edit',function(){openActionEditor(thread,msg);}),'edit');if(authorKind(msg)==='human'&&a.permissions.withdraw)withIcon(button(own,a.withdrawn?'Restore':'Delete',function(){sendAction(newAction(thread,msg,a.withdrawn?'restore':'withdraw'));}),a.withdrawn?'restore':'delete');if(!own.children.length)own=null;}
     var canResolve=c&&root&&thread.statusActions&&thread.statusActions.canResolve&&c.actor.kind==='founder-capability';
-    if(c&&((a&&a.permissions.react)||canResolve)){
+    // Agree is the thread's: under its first message only, not under each answer.
+    var canReact=!!(c&&root&&a&&a.permissions.react);
+    if(canReact||canResolve){
       var reactions=el('div','castor-comment-reactions');
-      if(a&&a.permissions.react)(c.reactionKeys||[]).filter(function(k){return k==='agree';}).forEach(function(k){var state=a.reactions[k];if(!state)return;var b=withIcon(button(reactions,(state.active?'Agreed':'Agree')+(state.count?' '+state.count:''),function(){try{global.localStorage.setItem('castor.comments.agree-hint','seen');}catch(e){}S.agreeHintFor=false;sendAction(newAction(thread,msg,'reaction',{reaction:k,active:!state.active}));}),k);b.setAttribute('aria-pressed',String(state.active));b.title=(state.active?'Remove':'Record')+' your Agree reaction. This does not change the article or mark the comment done.';b.setAttribute('aria-label',b.title);pendingControl(b,actionBusy(thread,msg,'reaction'),'Saving...');});
+      if(canReact)(c.reactionKeys||[]).filter(function(k){return k==='agree';}).forEach(function(k){var state=a.reactions[k];if(!state)return;var b=withIcon(button(reactions,(state.active?'Agreed':'Agree')+(state.count?' '+state.count:''),function(){try{global.localStorage.setItem('castor.comments.agree-hint','seen');}catch(e){}S.agreeHintFor=false;sendAction(newAction(thread,msg,'reaction',{reaction:k,active:!state.active}));}),k);b.setAttribute('aria-pressed',String(state.active));b.title=(state.active?'Remove':'Record')+' your Agree reaction. This does not change the article or mark the comment done.';b.setAttribute('aria-label',b.title);pendingControl(b,actionBusy(thread,msg,'reaction'),'Saving...');});
       if(canResolve){
         var done=withIcon(button(reactions,'Done',function(){sendAction(newAction(thread,null,thread.done?'reopen':'resolve'));}),'done');
         done.setAttribute('aria-pressed',String(thread.done));

@@ -195,7 +195,8 @@
     }
     var name = typeof payload.name === 'string' ? payload.name.replace(/\s+/g, ' ').trim().slice(0, 40) : '';
     var id = typeof payload.id === 'string' ? payload.id : '';
-    return Object.assign({ reviewer: true, confirmed: true, name: name }, payload.writingApp === true ? { writingApp: true } : {}, id ? { id: id } : {}, typeof payload.color === 'string' && payload.color.length === 7 && /^#[0-9a-fA-F]{6}$/.test(payload.color) ? { color: payload.color } : {});
+    var email = typeof payload.email === 'string' && payload.email.length <= 254 && /^[^\s@]+@[^\s@]+$/.test(payload.email) ? payload.email : '';
+    return Object.assign({ reviewer: true, confirmed: true, name: name }, payload.writingApp === true ? { writingApp: true } : {}, id ? { id: id } : {}, email ? { email: email } : {}, typeof payload.color === 'string' && payload.color.length === 7 && /^#[0-9a-fA-F]{6}$/.test(payload.color) ? { color: payload.color } : {});
   };
   function reviewing() { return !!(Castor.role && Castor.role.reviewer); }
 
@@ -3545,7 +3546,7 @@
     root.setAttribute('data-theme-choice', mode);
     root.setAttribute('data-resolved', dark ? 'dark' : 'light');
     var metas = document.querySelectorAll('meta[name="theme-color"]');
-    for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', dark ? '#141311' : '#FAF9F4');
+    for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', dark ? '#000000' : '#F7F4EC');
     var next = THEME_ORDER[(THEME_ORDER.indexOf(mode) + 1) % THEME_ORDER.length];
     var toggles = document.querySelectorAll('[data-theme-toggle]');
     for (var j = 0; j < toggles.length; j++) {

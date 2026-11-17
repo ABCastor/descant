@@ -26,6 +26,15 @@
     { id: 'indent', label: 'Indent', title: 'Indent' }
   ];
 
+  // The phone's floating bar has room to scroll: after the approved order, the tools a writer
+  // reaches for next.
+  var MORE = [
+    { id: 'comment', label: 'Comment', title: 'Comment' },
+    { id: 'numbered', label: 'Numbered', title: 'Numbered list' },
+    { id: 'quote', label: 'Quote', title: 'Quote' },
+    { id: 'strike', label: 'Strike', title: 'Strikethrough' }
+  ];
+
   if (toolbarChoice === 'symbols') COMMANDS.splice(7, 0,
     { id: 'quote', label: 'Quote', title: 'Quote' });
   if (toolbarChoice !== 'words' && toolbarChoice !== 'symbols') {
@@ -38,6 +47,7 @@
     if (id === 'italic') return '<i>I</i>';
     if (id === 'highlight') return '<u>H</u>';
     if (id === 'footnote') return 'x<sup>1</sup>';
+    if (id === 'strike') return '<s>S</s>';
     var paths = {
       bullet: '<circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/><path d="M9 6h11M9 12h11M9 18h11"/>',
       checkbox: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m7 12 3 3 7-7"/>',
@@ -48,6 +58,8 @@
       'hide-keyboard': '<rect x="3" y="3" width="18" height="11" rx="2"/><path d="M6 7h1m3 0h1m3 0h1m3 0h0M7 11h10m-9 7 4 3 4-3"/>',
       'show-keyboard': '<rect x="3" y="3" width="18" height="11" rx="2"/><path d="M6 7h1m3 0h1m3 0h1m3 0h0M7 11h10m-9 10 4-3 4 3"/>',
       quote: '<path d="M4 6h6v7H4V6m6 7c0 4-2 5-4 5M14 6h6v7h-6V6m6 7c0 4-2 5-4 5"/>',
+      comment: '<path d="M4 5.5h16v10.5H10l-4.5 3.5V16H4z"/>',
+      numbered: '<path d="M10 6h10M10 12h10M10 18h10M4 4.5h1.5V9M4 9h3M4 14.2c.3-.5.8-.7 1.3-.7.8 0 1.4.5 1.4 1.2 0 1-2.7 2-2.7 3.3h2.8"/>',
       link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'
     };
     return '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + paths[id] + '</svg>';
@@ -135,8 +147,16 @@
     else b.textContent = def.label;
     b.setAttribute('title', def.title);
     b.setAttribute('aria-label', def.title);
-    b.addEventListener('pointerdown', function (event) { event.preventDefault(); });
-    b.addEventListener('click', function () { run(def.id); });
+    // The press keeps the focus in the paragraph. iOS still sends the mouse events of a cancelled
+    // pointerdown, and an uncancelled mousedown would take the focus off the paragraph before the click.
+    b.addEventListener('pointerdown', function (event) { event.preventDefault(); S.press = { id: def.id, up: keyboardUp() }; });
+    b.addEventListener('pointercancel', function () { S.press = null; });
+    b.addEventListener('mousedown', function (event) { event.preventDefault(); });
+    b.addEventListener('click', function () {
+      var press = S.press && S.press.id === def.id ? S.press : null;
+      S.press = null;
+      run(def.id, press);
+    });
     return b;
   }
 
@@ -157,12 +177,14 @@
     var row = DOC.createElement('div');
     row.className = 'command-island-row';
     row.setAttribute('role', 'toolbar');
-    COMMANDS.forEach(function (def) {
+    (writing ? COMMANDS.concat(MORE) : COMMANDS).forEach(function (def) {
       var button = createButton(def, symbols);
       row.appendChild(button);
       if (def.id === 'heading') S.heading = button;
     });
     clip.appendChild(row);
+    // The strip says where tools wait out of view: a fade at that edge, and only there.
+    row.addEventListener('scroll', function () { edges(clip, row); }, { passive: true });
 
     var close = DOC.createElement('button');
     close.type = 'button';
@@ -191,8 +213,9 @@
       while (actions.firstChild) row.appendChild(actions.firstChild);
       var saveSlot = DOC.createElement('span'); saveSlot.id = 'writing-save-slot';
       actions.appendChild(saveSlot);
-      var done = createButton({ id: 'done', label: 'Done', title: 'Done' }, false);
-      actions.appendChild(done); actionButtons.push(done);
+      // A keyboard with its arrow says what the word Done never did: the keyboard goes away.
+      var keyboard = createButton({ id: 'hide-keyboard', label: 'Hide keyboard', title: 'Hide keyboard' }, true);
+      actions.appendChild(keyboard); actionButtons.push(keyboard);
     }
     root.appendChild(actions);
     if (split) {
@@ -216,6 +239,22 @@
     refreshHeading(true);
     refreshControls();
     return root;
+  }
+
+  // When the strip holds more tools than fit, its buttons widen (never below 44 px) so that the last
+  // one in view is cut in half under the fade: the half tool says there is more without a word. Only
+  // where the first five (Paragraph, Bold, Italic, Link, Bullet) still show whole; where they fill the
+  // strip exactly, the fade alone says so.
+  function peek(clip, row) {
+    var w = row.clientWidth, n = row.children.length, tool = '', fit = Math.floor(w / 44 - 0.5);
+    if (w && n * 44 > w + 1 && fit >= 5) tool = (w / (fit + 0.5)).toFixed(1) + 'px';
+    if ((clip.castorTool || '') !== tool) { clip.castorTool = tool; if (tool) clip.style.setProperty('--tool-w', tool); else clip.style.removeProperty('--tool-w'); }
+  }
+
+  function edges(clip, row) {
+    var start = row.scrollLeft > 1, end = row.scrollLeft + row.clientWidth < row.scrollWidth - 1;
+    var more = start && end ? 'both' : start ? 'start' : end ? 'end' : 'none';
+    if (clip.dataset.more !== more) clip.dataset.more = more;
   }
 
   function ensureDesktopHistory() {
@@ -369,7 +408,8 @@
       Math.max(lr.start + indent.length + marker.length, saved.end + delta));
   }
 
-  function run(id) {
+  // `press`, from a finger or pointer on this page's button: whether the keyboard was up when it began.
+  function run(id, press) {
     var e = editor();
     if (!e) return false;
     if (id === 'undo' || id === 'redo') {
@@ -377,21 +417,26 @@
       if (!history || !history[id] || typeof e[id] !== 'function') return false;
       e[id](); refreshControls(); return true;
     }
-    if (id === 'done') {
-      var active = DOC.activeElement;
-      if (e.hideKeyboard) e.hideKeyboard();
-      else if (active && active.blur) active.blur();
-      refresh(); return true;
+    if (id === 'comment') {
+      var range = e.getCaret && e.getCaret();
+      if (!range || range.end <= range.start || !Castor.commands || !Castor.commands.run) return false;
+      return Castor.commands.run('edit.comment') !== false;
     }
     if (id === 'hide-keyboard') {
       var savedKeyboard = keyboardCaret();
+      var toggled;
+      // A press that began with the keyboard up hides it, whatever moved the focus before the click.
+      if (press && press.up || keyboardUp()) {
+        if (savedKeyboard) S.keyboardCaret = savedKeyboard;
+        var focused = DOC.activeElement;
+        toggled = e.hideKeyboard ? e.hideKeyboard() : !!(focused && focused.blur && (focused.blur(), true));
+        refresh(); return !!toggled;
+      }
       if (!savedKeyboard) return false;
       S.keyboardCaret = savedKeyboard;
-      var toggled;
-      if (keyboardUp()) toggled = e.hideKeyboard && e.hideKeyboard();
       // Keep focus inside the trusted click. Deferring this to a timer or a
       // frame prevents iOS from reopening the software keyboard.
-      else toggled = e.restoreCaret && e.restoreCaret(savedKeyboard, 'snap');
+      toggled = e.restoreCaret && e.restoreCaret(savedKeyboard, 'snap');
       refresh(); return !!toggled;
     }
     if (e.can && !e.can(id)) return false;
@@ -479,7 +524,7 @@
      command button in the order the page draws it, with its words, its markup, whether it can
      be pressed and, for the heading button, the level in force. null while there is no row.
      A tap from elsewhere goes through run(id), as a tap here does. */
-  var GROUP = { undo: 'history', redo: 'history', 'hide-keyboard': 'keyboard', done: 'done' };
+  var GROUP = { undo: 'history', redo: 'history', 'hide-keyboard': 'keyboard' };
   function describe() {
     if (!S.root) return null;
     var items = [];
@@ -519,6 +564,11 @@
     if (button.disabled !== off) button.disabled = off;
     setAttr(button, 'aria-disabled', off ? 'true' : 'false');
   }
+  function selected(e) {
+    var range = e && e.getCaret && e.getCaret();
+    return !!(range && range.end > range.start && Castor.commands && Castor.commands.run &&
+      !(Castor.comments && Castor.comments.available && !Castor.comments.available()));
+  }
   function refreshControls() {
     var e = editor();
     if (!S.actions && !S.desktopActions) { announce(); return; }
@@ -527,7 +577,7 @@
     if (editFocused() && saved) S.keyboardCaret = saved;
     (S.actions || []).concat(S.desktopActions || []).forEach(function (button) {
       var id = button.dataset.command;
-      setDisabled(button, id === 'done' ? false : id === 'hide-keyboard' ? !saved : !state[id]);
+      setDisabled(button, id === 'hide-keyboard' ? !saved && !keyboardUp() : !state[id]);
       if (id === 'hide-keyboard') {
         var up = keyboardUp(), label = up ? 'Hide keyboard' : 'Show keyboard';
         setAttr(button, 'title', label);
@@ -542,8 +592,10 @@
     });
     if (S.row) Array.prototype.forEach.call(S.row.children, function (button) {
       var id = button.dataset.command;
-      setDisabled(button, id === 'undo' || id === 'redo' ? !state[id] : !e || !!(e.can && !e.can(id)));
+      setDisabled(button, id === 'undo' || id === 'redo' ? !state[id] : id === 'comment' ? !selected(e) : !e || !!(e.can && !e.can(id)));
     });
+    if (S.row && S.row.parentNode && S.root.dataset.arrangement === 'writing') peek(S.row.parentNode, S.row);
+    if (S.row && S.row.parentNode) edges(S.row.parentNode, S.row);
     announce();
   }
 

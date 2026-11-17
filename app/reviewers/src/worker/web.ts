@@ -12,18 +12,24 @@ export function esc(value: unknown): string {
 
 // The house look kept plain: the system font, the product's name with its typed terracotta
 // asterisk, 1 px lines. The stylesheet is public/descant.css, so these pages need no inline style.
-export function page(title: string, body: string, status = 200, headers: Record<string, string> = {}): Response {
+// The page reaches under a phone's status bar and home indicator (viewport-fit=cover) and its paper
+// colours the browser around it, so the screen is one surface. Sign-in pages (auth) are one narrow
+// column under the product's name.
+export function page(title: string, body: string, status = 200, headers: Record<string, string> = {}, layout: "plain" | "auth" = "plain"): Response {
   const html = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F7F4EC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta name="robots" content="noindex, nofollow">
 <title>${esc(title)}</title>
 <link rel="stylesheet" href="/descant.css">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 </head>
-<body>
+<body class="${layout}">
 <header class="brand"><a href="/">Descant<span class="ast">*</span></a><span class="brand-line" aria-hidden="true"><span class="brand-dot"></span></span></header>
 <main>
 ${body}
@@ -46,7 +52,7 @@ export function redirect(to: string, cookies: string[] = [], status = 303): Resp
 
 /** A plain page with one paragraph: what happened, in words. */
 export function message(title: string, text: string, status: number, extra = ""): Response {
-  return page(title, `<h1>${esc(title)}</h1>\n<p>${esc(text)}</p>\n${extra}`, status);
+  return page(title, `<h1>${esc(title)}</h1>\n<p>${esc(text)}</p>\n${extra}`, status, {}, "auth");
 }
 
 // Pages made here run no script at all; the reader's page carries its own policy (index.ts).

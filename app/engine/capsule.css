@@ -514,7 +514,6 @@
 #app .command-island[data-arrangement="writing"] .command-island-actions { display: flex; align-items: center; gap: 4px; border-left: 1px solid var(--rule); padding-left: 4px; }
 #app #writing-save-slot { display: flex; align-items: center; }
 #app #writing-save-slot #castor-save { display: flex; min-height: 44px; padding: 0 4px; }
-#app .command-island[data-arrangement="writing"] [data-command="done"] { font: 500 14px/1 var(--font-ui); text-box: trim-both cap alphabetic; }
 #app[data-touch-format="1"][data-keyboard="up"] #topbar.mast { visibility: hidden; pointer-events: none; }
 #app[data-keyboard="up"] { --footline-h: 0px; }
 #app[data-keyboard="up"] #footline { display: none; }
@@ -527,7 +526,10 @@
    state shows in the capsule only when something is wrong. */
 #app[data-mode="phone"] { transition: none; --bar-spring: linear(0, .073, .23, .41, .578, .718, .825, .902, .954, .986, 1.004, 1.012, 1.015, 1.014, 1.012, 1.01, 1.007, 1.005, 1); }
 /* The row's 52 px move into the top of the page, so the text keeps its place at any scroll, even at the top. */
-#app[data-mode="phone"][data-keyboard="up"] { --bar-h: 0px; --page-pad-top: calc(var(--s8) + 52px); --page-pad-bot: 96px; }
+/* On the phone the page starts 32 px under the row: the screen is short, and 64 px of paper above
+   the title bought nothing. */
+#app[data-mode="phone"] { --page-pad-top: var(--s6); }
+#app[data-mode="phone"][data-keyboard="up"] { --bar-h: 0px; --page-pad-top: calc(var(--s6) + 52px); --page-pad-bot: 96px; }
 #app[data-mode="phone"][data-keyboard="up"][data-focus="on"] .page-scroll { padding-top: calc(var(--page-pad-top-focus, 5rem) + 52px); }
 #app[data-mode="phone"][data-keyboard="up"] #topbar.mast { display: none; }
 #app[data-mode="phone"] .command-island[data-arrangement="writing"] {
@@ -818,3 +820,68 @@
   /* iOS zooms the page when a field below 16px takes focus, and the zoom stays after the keyboard closes. */
   #app .versions-create input { font-size: 16px; }
 }
+
+/* ---- pressed, never underlined ------------------------------------------------
+   A control says it is open, current or pressed with the wash, never with a coloured
+   underline; while a finger is down it takes the wash at once, and iOS's grey tap
+   flash is off. Underlines belong to links in the text. */
+:root { -webkit-tap-highlight-color: transparent; }
+#app #topbar.mast :is(.nav, #more-sheet, .topwords) .word,
+#app #castor-save[aria-expanded="true"],
+#app #castor-shortcuts[aria-pressed="true"],
+#app .castor-comment-reactions button[aria-pressed="true"] { text-decoration: none; }
+#app #castor-save[aria-expanded="true"] { background: var(--wash); color: var(--ink); border-radius: 6px; }
+#app :is(.topwords, #more-sheet) .word:active,
+#app #topbar.mast :is(.descant-share, .find-lens, .theme-toggle, .settings-toggle):active,
+#app :is(.castor-comment-reactions, .castor-comment-own, .castor-comment-menu) button:active:not(:disabled),
+#app .castor-shows button:active { background: var(--wash); color: var(--ink); }
+#app .castor-comment-reactions button[aria-pressed="true"] { font-weight: 600; color: var(--ink); }
+#app :is(.castor-comment-reactions, .castor-comment-own, .castor-comment-menu) button { border-radius: 6px; padding-inline: 6px; margin-inline: -6px; }
+@media (hover: none) {
+  #app .castor-comment-menu button:hover,
+  #app .castor-comment-reactions button:hover,
+  #app .changes-screen button:hover,
+  #app .changes-menu button:hover,
+  #app #descant-offline button:hover { text-decoration: none; }
+}
+
+/* In the page / Beside: one segmented pair, each pressed while it is on. */
+#app .panel-head .castor-shows { display: inline-flex; flex: 0 0 auto; gap: 2px; padding: 2px; margin: 0 0 var(--s2); border-radius: 8px; background: var(--wash); }
+#app .castor-shows button {
+  min-height: 32px; margin: 0; padding: 0 10px; border: 0; border-radius: 6px; background: none;
+  color: var(--ink-2); font: 500 13px/1 var(--font-ui); white-space: nowrap; cursor: pointer;
+}
+#app .castor-shows button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-raised); }
+#app:is([data-mode="phone"], [data-mode="tablet"]) .castor-shows button { min-height: 40px; }
+@media (pointer: coarse) { #app .castor-shows button { min-height: 40px; } }
+
+/* The writing strip fades at the edge that still hides tools, so the sideways scroll shows itself. */
+#app .command-island[data-arrangement="writing"] .command-island-clip { --fade: 32px; }
+#app .command-island[data-arrangement="writing"] .command-island-row > .command-island-word { flex: 0 0 var(--tool-w, auto); }
+#app .command-island[data-arrangement="writing"] .command-island-clip[data-more="end"] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - var(--fade)), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--fade)), transparent);
+}
+#app .command-island[data-arrangement="writing"] .command-island-clip[data-more="start"] {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - var(--fade)), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - var(--fade)), transparent);
+}
+#app .command-island[data-arrangement="writing"] .command-island-clip[data-more="both"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent);
+}
+#app .command-island[data-arrangement="writing"] .command-island-word s { text-decoration-thickness: 1.5px; }
+
+/* The selection menu: one row of words on the card surface, Copy first, hairlines between them. */
+.selection-menu.cw-selmenu {
+  gap: 0; padding: 0 4px; border: 1px solid var(--rule); border-radius: 12px;
+  background: var(--surface-raised, #FFFDF8); color: var(--ink); box-shadow: 0 2px 6px rgba(27, 25, 21, .06), 0 18px 44px rgba(27, 25, 21, .12);
+  font: 500 14px/1 var(--font-ui, system-ui, sans-serif);
+}
+:root[data-resolved="dark"] .selection-menu.cw-selmenu, :root[data-theme="dark"] .selection-menu.cw-selmenu { box-shadow: 0 18px 44px #000; }
+.selection-menu.cw-selmenu button { min-height: 44px; min-width: 44px; padding: 0 12px; border-radius: 8px; color: var(--ink); white-space: nowrap; }
+.selection-menu.cw-selmenu button + button::before {
+  content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 1px; background: var(--rule);
+}
+.selection-menu.cw-selmenu button:active { background: var(--wash); }
+@media (hover: hover) { .selection-menu.cw-selmenu button:hover { background: var(--wash); } }

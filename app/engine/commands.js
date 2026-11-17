@@ -188,7 +188,9 @@
       if (d === 'tablet' || s === 'ipad') return 'tablet';
       return 'desktop';
     }
-    function visibleFor(f, seen) { return f === 'desktop' || (f === 'tablet' && !!seen); }
+    /* A computer has a keyboard. A phone or tablet shows key caps only once a hardware keyboard has
+       made itself known; a touch-only device never does. */
+    function visibleFor(f, seen) { return f === 'desktop' || !!seen; }
 
     /* A key from a real keyboard, not the on-screen one. A modifier cannot come
        from a touch keyboard; a printable key can, so it only counts while no
@@ -209,6 +211,15 @@
       return global.innerHeight - vv.height * (vv.scale || 1) > 120;
     }
 
+    /* Whether a hardware keyboard is attached, from a real key here or from the app shell, which can
+       ask the system directly. */
+    function hardware(on) {
+      on = !!on;
+      if (on === seenKeyboard) return;
+      seenKeyboard = on;
+      apply();
+      if (Castor.bus && Castor.bus.emit) Castor.bus.emit('keys:shown', on && visibleFor(form(), true));
+    }
     function apply() {
       var root = global.document && global.document.documentElement;
       if (!root) return;
@@ -224,11 +235,17 @@
       /* On the window, in the capture phase, and registered before the tour's
          own listener, so a key the tour consumes still counts. */
       global.addEventListener('keydown', function (e) {
-        if (seenKeyboard || !physical(e, touchKeyboardUp())) return;
-        seenKeyboard = true;
-        apply();
-        if (Castor.bus && Castor.bus.emit) Castor.bus.emit('keys:shown', true);
+        // On a phone only a modifier counts: its own keyboard may send a letter or an arrow before
+        // the page sees it rise.
+        if (seenKeyboard || !physical(e, touchKeyboardUp() || form() === 'phone')) return;
+        hardware(true);
       }, true);
+      /* iOS shows the full on-screen keyboard only while no hardware keyboard is attached (with
+         one, just a short bar of suggestions): once it rises, that keyboard is gone. */
+      var vv = global.visualViewport;
+      if (vv && vv.addEventListener) vv.addEventListener('resize', function () {
+        if (seenKeyboard && form() !== 'desktop' && touchKeyboardUp()) hardware(false);
+      });
       /* The size switch re-frames the app as an iPad or a phone. */
       var f = global.document.getElementById('frame');
       if (f && global.MutationObserver) {
@@ -241,6 +258,7 @@
       format: format, text: text, hint: hint, composing: composing,
       chordFor: chordFor, tabChord: tabChord, digitOf: digitOf,
       shown: function () { return visibleFor(form(), seenKeyboard); },
+      hardware: hardware,
       wire: wire, apply: apply,
       // pure pieces, for the tests
       _osFrom: osFrom, _deviceFrom: deviceFrom, _visibleFor: visibleFor, _physical: physical,

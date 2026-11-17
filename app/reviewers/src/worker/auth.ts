@@ -24,25 +24,41 @@ const canEmail = (env: Env) => !!env.MAIL && !!env.FROM_ADDRESS;
 function signInPage(env: Env, writing = false): Response {
   const title = writing ? "Sign in to write" : "Sign in";
   return page(title + " · Descant", `<h1>${title}</h1>
-${canEmail(env) ? `<p>${writing ? "Use your writing-account email." : "Use your account email address."}</p>
+${canEmail(env) ? `<p class="lead">${writing ? "Use your writing-account email." : "Use your account email address."} We email you a six-digit code; no password.</p>
 <form method="post" action="/signin" class="stack">
-<label>Email <input type="email" name="email" autocomplete="email" required maxlength="254"></label>
+${writing ? `<input type="hidden" name="write" value="1">\n` : ""}<label>Email <input type="email" name="email" autocomplete="email" autocapitalize="off" spellcheck="false" required maxlength="254"></label>
 <button type="submit">Email me a code</button>
 </form>` : `<p>Email is unavailable. Ask the person who invited you to try again later.</p>`}
-${passwordsOn(env) ? `<p><a href="/signin/password">Sign in to write with a password</a></p>
-` : ""}<p class="quiet">${writing ? "Reader invitations use a separate account." : "If you used a password before, ask the person who invited you for a recovery link."}</p>`);
+${passwordsOn(env) ? `<p class="aside"><a href="/signin/password">Sign in to write with a password</a></p>
+` : ""}<p class="quiet">${writing ? "Reader invitations use a separate account." : "If you used a password before, ask the person who invited you for a recovery link."}</p>`, 200, {}, "auth");
 }
 
 export async function signInRoute(req: Request, env: Env): Promise<Response> {
   return emailCodeRoute(req, env, false);
 }
 
-export function signOutRoute(req: Request): Response {
+export async function signOutRoute(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return page("Sign out · Descant", `<h1>Sign out</h1>
 <form method="post" action="/signout"><button type="submit">Sign out of Descant</button></form>`);
   }
-  return redirect("/signin", [cookie(READER_COOKIE, "", 0), cookie(FOUNDER_COOKIE, "", 0)]);
+  // From "This address can read, not write": back to the writing sign-in.
+  const next = (await formOf(req))("next", 8);
+  return redirect(next === "write" ? "/signin?write=1" : "/signin", [cookie(READER_COOKIE, "", 0), cookie(FOUNDER_COOKIE, "", 0)]);
+}
+
+// A "Sign in to write" that proved a reader's inbox: signed in as that reader, and told so plainly,
+// with the way back to the writing sign-in and the way to what was shared.
+function readsOnlyPage(name: string, email: string, session: string): Response {
+  const res = page("This address can read, not write · Descant", `<h1>This address can read, not write</h1>
+<p class="lead">You signed in as <b>${esc(name)}</b> (${esc(email)}), an account invited to read and comment. To write, sign out and sign in with your writing address.</p>
+<form method="post" action="/signout" class="stack">
+<input type="hidden" name="next" value="write">
+<button type="submit">Sign out</button>
+</form>
+<p class="aside"><a href="/">Read what was shared with you</a></p>`, 200, {}, "auth");
+  res.headers.append("Set-Cookie", session);
+  return res;
 }
 
 // --------------------------------------------------------------------------------- invitations
@@ -168,7 +184,7 @@ interface EmailCode {
 }
 
 
-async function requestCode(req: Request, env: Env, email: string, o: { person?: Person; invite?: Invite; name?: string; recoveryHash?: string } = {}): Promise<Response> {
+async function requestCode(req: Request, env: Env, email: string, o: { person?: Person; invite?: Invite; name?: string; recoveryHash?: string; write?: boolean } = {}): Promise<Response> {
   if (!canEmail(env)) return message("Email is unavailable", "Ask the person who invited you to try again later. No sign-in code can be sent right now.", 503);
   const wait = await reserveTry(env.DB, (await guessKeys(req, email)).map(k => `mail:${k}`));
   if (wait) return message("Too many requests", `Wait ${waitWords(wait)}, then try again.`, 429);
@@ -184,7 +200,8 @@ async function requestCode(req: Request, env: Env, email: string, o: { person?: 
   await env.DB.prepare("DELETE FROM email_codes WHERE expiresAt < ?").bind(at).run();
   await env.DB.prepare("INSERT INTO email_codes (tokenHash,codeHash,email,personId,inviteId,name,secret,sessionsFrom,expiresAt,recoveryHash) VALUES (?,?,?,?,?,?,?,?,?,?)")
     .bind(hash, codeHash, email, o.person?.id ?? null, o.invite?.id ?? null, o.name ?? "", secret, o.person?.sessionsFrom ?? 0, new Date(now + CODE_MINUTES * 60_000).toISOString(), o.recoveryHash ?? null).run();
-  if (!eligible) return codePage(token, "", 200, back);
+  const typed = o.invite || o.recoveryHash ? "" : email;
+  if (!eligible) return codePage(token, "", 200, back, typed, !!o.write);
   try {
     await env.MAIL!.send({ from: { email: env.FROM_ADDRESS!, name: "Descant" }, to: email, subject: "Your Descant sign-in code",
       text: `Your Descant code is ${digits}.\n\nEnter it on the page where you asked for it. It works once, for ${CODE_MINUTES} minutes.\n\nIf you did not ask for this code, ignore this email.` });
@@ -193,12 +210,12 @@ async function requestCode(req: Request, env: Env, email: string, o: { person?: 
     if (!o.invite && !o.recoveryHash) {
       await env.DB.prepare("UPDATE email_codes SET codeHash=?,personId=NULL,name='',secret='',sessionsFrom=0 WHERE tokenHash=?")
         .bind(await emailCodeHash(env.SESSION_SECRET, token, randomId("decoy", 32)), hash).run();
-      return codePage(token, "", 200, back);
+      return codePage(token, "", 200, back, typed, !!o.write);
     }
     await env.DB.prepare("DELETE FROM email_codes WHERE tokenHash=?").bind(hash).run();
     return message("The code could not be sent", "No account or access was added. Ask the person who invited you to check email delivery, then try again.", 503);
   }
-  return codePage(token, "", 200, back);
+  return codePage(token, "", 200, back, typed, !!o.write);
 }
 
 export async function emailCodeRoute(req: Request, env: Env, verify: boolean): Promise<Response> {
@@ -209,20 +226,23 @@ export async function emailCodeRoute(req: Request, env: Env, verify: boolean): P
     const email = foldEmail(rawEmail);
     const problem = emailProblem(email);
     if (rawEmail.length > 254 || problem) return message("Check your email address", problem ?? "Use an email address of at most 254 characters.", 400);
-    const founder = await requestFounderCode(req, env, email);
+    const write = field("write", 1) === "1";
+    const founder = await requestFounderCode(req, env, email, write);
     if (founder) return founder;
     const person = await personByEmail(env.DB, email);
-    return requestCode(req, env, email, { person: person?.emailVerifiedAt ? person : undefined });
+    return requestCode(req, env, email, { person: person?.emailVerifiedAt ? person : undefined, write });
   }
   if (req.method !== "POST") return redirect("/signin");
   const field = await formOf(req);
   const token = field("challenge", 44);
   const back = field("back", 100);
+  const email = foldEmail(field("email", 254));
+  const write = field("write", 1) === "1";
   const invalid = () => message("This code no longer works", "It expired, was used, or had too many guesses. Ask for a new code.", 410);
   if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return invalid();
   const code = field("code", 7);
-  if (!/^[0-9]{6}$/.test(code)) return codePage(token, "That code does not match. Try again.", 401, back);
-  const founder = await verifyFounderCode(req, env, token, code, back);
+  if (!/^[0-9]{6}$/.test(code)) return codePage(token, "That code does not match. Try again.", 401, back, email, write);
+  const founder = await verifyFounderCode(req, env, token, code, back, email, write);
   if (founder) return founder;
   const at = new Date().toISOString();
   const hash = await sha256Hex(token);
@@ -232,11 +252,11 @@ export async function emailCodeRoute(req: Request, env: Env, verify: boolean): P
   // Founder, reader and unknown addresses share a stable guess limit across fresh challenges.
   const keys = (await guessKeys(req, await sha256Hex(live.email))).map(k => `code:${k}`);
   const wait = await reserveTry(env.DB, keys);
-  if (wait) return codePage(token, `Too many tries. Wait ${waitWords(wait)}, then try again.`, 429, back);
+  if (wait) return codePage(token, `Too many tries. Wait ${waitWords(wait)}, then try again.`, 429, back, email, write);
   const row = await env.DB.prepare("UPDATE email_codes SET attempts=attempts+1 WHERE tokenHash=? AND usedAt IS NULL AND expiresAt>? AND attempts<5 RETURNING *")
     .bind(hash, at).first<EmailCode>();
   if (!row) return invalid();
-  if (!sameText(row.codeHash, await emailCodeHash(env.SESSION_SECRET, token, code))) return codePage(token, "That code does not match. Try again.", 401, back);
+  if (!sameText(row.codeHash, await emailCodeHash(env.SESSION_SECRET, token, code))) return codePage(token, "That code does not match. Try again.", 401, back, email, write);
   const person = row.personId ? await personByEmail(env.DB, row.email) : null;
   if (row.personId && (!person || person.id !== row.personId || person.secret !== row.secret || person.sessionsFrom !== row.sessionsFrom)) return invalid();
   const inv = row.inviteId ? await env.DB.prepare("SELECT * FROM invites WHERE id=?").bind(row.inviteId).first<Invite>() : null;
@@ -260,7 +280,10 @@ export async function emailCodeRoute(req: Request, env: Env, verify: boolean): P
     if (!kept[0].meta.changes) return invalid();
   } catch { return invalid(); }
   await clearFailures(env.DB, keys);
-  return signedInAs(env, id, "/", Math.max(Date.now(), from * 1000));
+  const signedAt = Math.max(Date.now(), from * 1000);
+  // Only the writing sign-in, and only an existing reader (an invitation is a reader's own way in).
+  if (write && person && !inv) return readsOnlyPage(person.name, row.email, await readerCookie(env, id, signedAt));
+  return signedInAs(env, id, "/", signedAt);
 }
 
 // --------------------------------------------------------------------------- account recovery

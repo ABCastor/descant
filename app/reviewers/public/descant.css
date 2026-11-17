@@ -1,58 +1,79 @@
-/* Descant's own pages: sign in, an invitation, a reset, the founders' dashboard. The house look kept
-   plain: the system font, the product's name with its typed terracotta asterisk, 1 px lines. */
+/* Descant's own pages: sign in, an invitation, a reset, the founders' dashboard. The Capsule (K1-A)
+   look: Folio paper and ink, the system font for words and controls, Newsreader for titles, the
+   product's name in its own face with its typed terracotta asterisk, 1 px lines, round buttons.
+   The paper runs under a phone's status bar and home indicator, so the screen is one surface. */
 :root {
   color-scheme: light dark;
-  --paper: #FAF9F4;
-  --ink: #14130F;
-  --ink-2: rgba(20, 19, 15, .70);
-  --rule: rgba(20, 19, 15, .16);
+  --paper: #F7F4EC;
+  --surface: #FFFDF8;
+  --ink: #1B1915;
+  --ink-2: #5D584E;
+  --ink-3: #6F685C;
+  --rule: #E1DACB;
+  --edge: #948C7C;
+  --wash: #EDE8DC;
   --human: #C4552A;
   --agent: #006770;
   --shared: #667D2F;
   --err: #A3341A;
+  --top: env(safe-area-inset-top, 0px);
+  --bottom: env(safe-area-inset-bottom, 0px);
+  --left: env(safe-area-inset-left, 0px);
+  --right: env(safe-area-inset-right, 0px);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #141311;
-    --ink: #E9E6DF;
-    --ink-2: rgba(233, 230, 223, .72);
-    --rule: rgba(233, 230, 223, .18);
-    --human: #E07A52;
-    --agent: #00858F;
+    --paper: #000000;
+    --surface: #13120F;
+    --ink: #EEE9DE;
+    --ink-2: #A8A296;
+    --ink-3: #938C80;
+    --rule: #2A2721;
+    --edge: #6F695E;
+    --wash: #1A1814;
+    --human: #E27B52;
+    --agent: #2BB0B8;
+    --shared: #9DB563;
     --err: #F08A6A;
   }
 }
 * { box-sizing: border-box; }
-html { background: var(--paper); color: var(--ink); }
-body { margin: 0; font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+html { background: var(--paper); color: var(--ink); -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+body {
+  margin: 0; min-height: 100vh; min-height: 100dvh;
+  padding: var(--top) var(--right) var(--bottom) var(--left);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
 @font-face { font-family: Word; font-weight: 200 900; src: url('/fonts/literata.woff2') format('woff2'); font-display: swap; }
+@font-face { font-family: Title; font-weight: 400 600; src: url('/fonts/newsreader.woff2') format('woff2'); font-display: swap; }
 .brand { padding: 18px 24px 22px; position: relative; }
 .brand-line { position: absolute; height: 2px; bottom: 0; inset-inline: 24px; background: linear-gradient(to right,var(--human) 50%,var(--agent) 50%); }
 .brand-dot { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--shared); left: 50%; top: 50%; transform: translate(-50%,-50%); box-shadow: 0 0 0 4px var(--paper); }
-.brand a { color: var(--ink); text-decoration: none; font-family: Word,Georgia,serif; font-weight: 560; font-size: 22px; letter-spacing: -.02em; }
+.brand a { display: inline-flex; align-items: center; color: var(--ink); text-decoration: none; font-family: Word,Georgia,serif; font-weight: 560; font-size: 22px; letter-spacing: -.02em; }
 .brand .ast { color: var(--human); margin-left: 1px; }
 main { max-width: 860px; margin: 0 auto; padding: 24px 24px 64px; }
 h1 { font-size: 22px; font-weight: 600; margin: 8px 0 16px; }
 h2 { font-size: 16px; font-weight: 600; margin: 32px 0 10px; padding-top: 16px; border-top: 1px solid var(--rule); }
 h3 { font-size: 15px; font-weight: 600; margin: 20px 0 8px; }
 p { margin: 0 0 12px; }
-a { color: var(--ink); }
+a { color: var(--ink); text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .quiet { color: var(--ink-2); font-size: 13.5px; }
 .err { color: var(--err); }
 .stack { display: grid; gap: 12px; max-width: 420px; }
-.stack label, .row label { display: grid; gap: 4px; font-size: 13.5px; }
+.stack label, .row label { display: grid; gap: 6px; font-size: 13.5px; color: var(--ink-2); }
 .row { display: flex; gap: 16px; }
 input[type="text"], input[type="email"], input[type="password"], input[type="number"], input:not([type]) {
-  font: inherit; color: inherit; background: transparent; border: 1px solid var(--rule); border-radius: 4px; padding: 7px 9px;
+  font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 7px 9px;
 }
 input.copy { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 button {
-  font: inherit; color: var(--paper); background: var(--ink); border: 1px solid var(--ink); border-radius: 4px;
-  padding: 7px 14px; cursor: pointer; justify-self: start;
+  font: inherit; font-weight: 500; color: var(--paper); background: var(--ink); border: 1px solid var(--ink); border-radius: 999px;
+  padding: 7px 16px; cursor: pointer; justify-self: start;
 }
-button.small { font-size: 12.5px; padding: 2px 8px; color: var(--ink); background: transparent; border-color: var(--rule); }
+button:active { opacity: .8; }
+button.small { font-size: 12.5px; padding: 2px 10px; color: var(--ink); background: transparent; border-color: var(--rule); }
 button.danger { color: var(--err); }
-fieldset { border: 1px solid var(--rule); border-radius: 4px; padding: 10px 12px; margin: 0; display: grid; gap: 6px; }
+fieldset { border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; margin: 0; display: grid; gap: 6px; }
 legend { font-size: 13.5px; padding: 0 4px; }
 .stack .check { display: flex; gap: 8px; align-items: baseline; font-size: 14px; }
 form.inline { display: inline; }
@@ -64,7 +85,7 @@ th { font-weight: 600; font-size: 12.5px; color: var(--ink-2); }
 ul.plain { list-style: none; margin: 0; padding: 0; }
 ul.plain li + li { margin-top: 4px; }
 ul.titles { margin: 0 0 16px; }
-.shown { border: 1px solid var(--human); border-radius: 4px; padding: 4px 14px 6px; margin-bottom: 16px; }
+.shown { border: 1px solid var(--human); border-radius: 6px; padding: 4px 14px 6px; margin-bottom: 16px; }
 .shown h2 { border: 0; margin-top: 8px; padding-top: 0; }
 .make { margin-top: 18px; }
 
@@ -73,5 +94,42 @@ ul.titles { margin: 0 0 16px; }
 .stack button { min-height: 44px; }
 .stack + p { margin-top: 16px; }
 [hidden] { display: none !important; }
-:where(a,button,input,summary):focus-visible { outline: 2px solid var(--shared); outline-offset: 3px; }
-::selection { background: color-mix(in srgb,var(--shared) 25%,var(--paper)); color: var(--ink); }
+:where(a,button,input,summary):focus-visible { outline: 2px solid var(--edge); outline-offset: 3px; }
+::selection { background: color-mix(in srgb,var(--ink) 16%,transparent); color: var(--ink); }
+
+/* ---- sign in: one narrow column under the mark and the name ------------------- */
+body.auth { display: flex; flex-direction: column; }
+body.auth .brand { display: flex; align-items: center; width: 100%; max-width: 440px; height: 52px; margin: 0 auto; padding: 0 24px; }
+body.auth .brand-line { display: none; }
+body.auth main { width: 100%; max-width: 440px; margin: 0 auto; padding: clamp(24px, 9vh, 96px) 24px 48px; }
+body.auth h1 { margin: 0 0 8px; font: 600 30px/1.15 Title, Georgia, serif; letter-spacing: -.01em; }
+body.auth .lead { margin: 0 0 28px; color: var(--ink-2); }
+body.auth .lead b { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+body.auth .stack { max-width: none; gap: 16px; }
+body.auth .stack input:not([type="hidden"]) { min-height: 48px; padding: 0 14px; border-color: var(--rule); }
+body.auth .stack input:not([type="hidden"]):focus { border-color: var(--edge); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--edge) 22%, transparent); }
+body.auth .stack button { justify-self: stretch; min-height: 48px; font-size: 16px; }
+body.auth input.code { font-size: 26px; letter-spacing: .32em; text-align: center; font-variant-numeric: tabular-nums; padding-left: calc(14px + .32em); }
+body.auth .err { margin: -12px 0 16px; }
+body.auth .aside { margin-top: 24px; }
+body.auth .quiet { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--rule); color: var(--ink-3); font-size: 13px; }
+
+/* Send the code again: pressable once the first email has had time to arrive. The wait is drawn
+   by the stylesheet alone (these pages run no script); the server's own limit still applies. */
+@keyframes resend-count { from { transform: none; } to { transform: translateY(-30lh); } }
+@keyframes resend-ready { 0%, 99.9% { opacity: .45; pointer-events: none; } 100% { opacity: 1; pointer-events: auto; } }
+@keyframes resend-gone { 0%, 99.9% { opacity: 1; } 100% { opacity: 0; } }
+body.auth .resend { display: grid; gap: 8px; margin-top: 28px; }
+body.auth .resend .quiet-button {
+  justify-self: stretch; min-height: 48px; color: var(--ink); background: transparent; border-color: var(--rule);
+  animation: resend-ready 30s linear both;
+}
+body.auth .resend-wait {
+  margin: 0; color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums;
+  animation: resend-gone 30s linear both;
+}
+body.auth .resend-count { display: inline-block; height: 1lh; overflow: hidden; vertical-align: top; text-align: right; min-width: 2ch; }
+body.auth .resend-count > span { display: block; animation: resend-count 30s steps(30, end) both; }
+body.auth .resend-note { margin: 0; color: var(--ink-3); font-size: 13px; }
+body.auth .resend.ready .quiet-button { animation: none; }
+body.auth .resend.ready .resend-wait { display: none; }

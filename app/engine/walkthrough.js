@@ -190,7 +190,7 @@
       sentence: 'Fonts and colours live in the Type panel. Open search, type Type and choose it. Previous type choice takes you back.',
       phone: 'Fonts and colours live in the Type panel. Open search, type Type and choose it. Previous type choice takes you back.',
       keys: ['go.search'], done: opened('type') },
-    { id: 'shortcuts', title: 'Use only the keyboard', target: '#castor-shortcuts', dismiss: 'castor-keys-reference',
+    { id: 'shortcuts', title: 'Use only the keyboard', target: '#castor-shortcuts', dismiss: 'castor-keys-reference', needs: 'keys',
       sentence: "Everything in Descant works from the keyboard. Hold the key below for a second to see each control's shortcut, or open Shortcuts for the full list.",
       phone: 'With a keyboard attached, everything works from the keyboard. Hold Command or Ctrl for a second to see the shortcuts; Shortcuts has the full list.',
       keys: ['MOD'] },
@@ -220,7 +220,9 @@
   ];
 
   var QUICK = ['write', 'structure', 'outline', 'save', 'changes', 'history', 'settings', 'focus', 'unfocus', 'end'];
-  function activeSteps() { if (reviewing()) return READER_STEPS; return S.short ? STEPS.filter(function (s) { return QUICK.indexOf(s.id) >= 0; }) : STEPS; }
+  // A step about the keyboard is for a device with one: a touch-only phone or tablet skips it.
+  function offered(step) { return !(step.needs === 'keys' && !(Castor.keys && Castor.keys.shown && Castor.keys.shown())); }
+  function activeSteps() { if (reviewing()) return READER_STEPS; return (S.short ? STEPS.filter(function (s) { return QUICK.indexOf(s.id) >= 0; }) : STEPS).filter(offered); }
   function stepAt(i) { return activeSteps()[i]; }
   function key() { return 'castor.' + S.world + '.walkthrough' + (reviewing() ? '.reader.' + encodeURIComponent(Castor.role.id || 'unconfirmed') : ''); }
   function autoStartEnabled() {

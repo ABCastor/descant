@@ -19,6 +19,20 @@
     return { state: state.state, label: state.state === 'saved' ? 'Saved: your comments reached the review service. Drafts are sent when you save them.' : state.reason,
       rows: [{ ok: state.state === 'saved', label: 'On the review service', detail: state.reason }] };
   }
+  // Which account is signed in, and the way out of it: a reader who signed in with the wrong address
+  // must be able to see it and leave. The form posts to the server, which clears the session.
+  function signOut(doc) {
+    var form = doc.createElement('form'); form.method = 'post'; form.action = '/signout'; form.className = 'reader-sign-out';
+    var button = doc.createElement('button'); button.type = 'submit'; button.className = 'set-row set-action'; button.textContent = 'Sign out';
+    form.appendChild(button);
+    return form;
+  }
+  function account(doc, className) {
+    var row = doc.createElement('p'); row.className = className;
+    var who = Castor.role.name || 'a reader', email = Castor.role.email || '';
+    row.textContent = 'Signed in as ' + who + (email ? ' (' + email + ')' : '') + '.';
+    return row;
+  }
   function details() {
     var panel = global.document.getElementById('castor-reader-save-details');
     if (!panel) return;
@@ -27,6 +41,8 @@
     var identity = global.document.createElement('p'); identity.className = 'save-explanation';
     identity.textContent = 'Reviewing as ' + (Castor.role.name || 'you') + '. The writers receive your saved comments and can reply in the same thread.';
     panel.appendChild(identity);
+    panel.appendChild(account(global.document, 'save-explanation'));
+    panel.appendChild(signOut(global.document));
   }
   function render() {
     if (!reviewing()) return;
@@ -52,10 +68,15 @@
     doc.querySelectorAll('.set-panels label').forEach(function (label) {
       var input = label.querySelector('input'); if (input && ['outline', 'comments'].indexOf(input.value) < 0) label.hidden = true;
     });
-    var account = doc.getElementById('settings-account');
-    if (account && Castor.role.writingApp === true && !doc.getElementById('reader-writing-app')) {
+    var page = doc.getElementById('settings-account');
+    if (page && !page.reader) {
+      page.reader = { row: account(doc, 'set-hint reader-account'), out: signOut(doc) };
+      page.insertBefore(page.reader.out, page.children[0] || null);
+      page.insertBefore(page.reader.row, page.reader.out);
+    } else if (page) page.reader.row.textContent = account(doc, '').textContent;
+    if (page && Castor.role.writingApp === true && !doc.getElementById('reader-writing-app')) {
       var link = doc.createElement('a'); link.id = 'reader-writing-app'; link.className = 'set-row set-action';
-      link.href = '/signin?write=1'; link.textContent = 'Open the writing app'; account.appendChild(link);
+      link.href = '/signin?write=1'; link.textContent = 'Open the writing app'; page.appendChild(link);
     }
   }
   function mount() {
@@ -75,5 +96,5 @@
     if (brand) brand.setAttribute('aria-label', 'Descant');
     settings(); render();
   }
-  Castor.readerShell = { mount: mount, render: render, settings: settings, view: view };
+  Castor.readerShell = { mount: mount, render: render, settings: settings, view: view, details: details };
 })(typeof window !== 'undefined' ? window : globalThis);

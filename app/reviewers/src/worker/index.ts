@@ -21,6 +21,7 @@ const FILES: Record<string, { file: string; type: string; cache?: string }> = {
   "/favicon.ico": { file: "/favicon.ico", type: "image/x-icon" },
   "/icons/apple-touch-icon.png": { file: "/icons/apple-touch-icon.png", type: "image/png" },
   "/fonts/literata.woff2": { file: "/fonts/literata.woff2", type: "font/woff2" },
+  "/fonts/newsreader.woff2": { file: "/fonts/newsreader.woff2", type: "font/woff2" },
   "/fonts/randosans-500-sharpie.woff2": { file: "/fonts/randosans-500-sharpie.woff2", type: "font/woff2" },
 };
 const TOKEN = "([A-Za-z0-9_-]{43})";
@@ -85,7 +86,7 @@ async function route(req: Request, env: Env): Promise<Response> {
   if (path === '/signin/password') return secure(await founderPasswordSignIn(req, env));
   if (path === '/admin/password') return secure(await founderPasswordSettings(req, env));
   if (path === "/signin/code" || path === "/signin/code/verify") return secure(await emailCodeRoute(req, env, path.endsWith("/verify")));
-  if (path === "/signout") return secure(signOutRoute(req));
+  if (path === "/signout") return secure(await signOutRoute(req));
   let m = new RegExp(`^/join/${TOKEN}$`).exec(path);
   if (m) return secure(await joinRoute(req, env, m[1], person));
   m = new RegExp(`^/reset/${TOKEN}$`).exec(path);
