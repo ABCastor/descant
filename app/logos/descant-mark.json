@@ -1,0 +1,6 @@
+{
+  "about": "The Descant mark: the nib (logo 2's drawing, in its own units) with the Castor logo, castor.svg exactly as it ships, at its top right. Every drawing of the mark (header, tab, touch, install, and the iOS app icon) places the logo here. box is the header drawing's viewBox: the composition and nothing else.",
+  "nib": [3.5, 8, 20.5, 28],
+  "castor": {"x": 17.4, "y": 3.5, "size": 6.8},
+  "box": [3.3, 3.3, 21, 24.9]
+}

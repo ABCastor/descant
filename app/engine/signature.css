@@ -453,8 +453,11 @@ html[data-signature="full"] .footline{display:flex;align-items:flex-end;overflow
 html[data-signature="full"] .footline::before{display:none}
 html[data-signature="full"] .foot-meta{position:absolute;right:var(--bar-pad,1.25rem);bottom:44px}
 
-/* Opt-in Descant marks keep one compact lockup. The wordmark-only option adds no symbol. */
-.descant-mark{display:inline-block;width:40px;height:calc(40px * 30 / 36);margin-right:3px;vertical-align:-8px}
+/* Opt-in Descant marks keep one compact lockup. The wordmark-only option adds no symbol.
+   The default mark's drawing is cropped to the nib and its Castor logo (logos/descant-mark.json,
+   21 x 24.9 units) at 10/9 px a unit, the nib's size and baseline as before the crop. */
+.descant-mark{display:inline-block;width:23.33px;height:27.67px;margin-right:7px;vertical-align:-6px}
+html:not([data-logo="2"]) .descant-mark{width:40px;height:33.33px;margin-right:3px;vertical-align:-8px}
 
 /* More follows the available row width, rather than a device name. */
 #topbar[data-compact] #more-sheet .word{display:flex;align-items:center;box-sizing:border-box;min-height:44px;margin:0;padding:.45em .6em;text-box:none;line-height:1.3;color:var(--quiet);text-align:left}

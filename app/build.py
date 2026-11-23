@@ -473,10 +473,9 @@ def with_signature(html, name, missing, reviewer=False):
 
 
 def write_manifest(name):
-    """What Chrome reads to install the app. The icons are the Castor logo exactly as
-    castor-identity/logo ships it (192 scaled from castor-1024.png by sips, 512 copied),
-    and, where a platform masks the icon to its own shape and fills what is transparent,
-    the same logo on the paper ground inside the mask's safe circle."""
+    """What Chrome reads to install the app. The icons are the Descant mark as the iOS app
+    icon draws it (the nib with the Castor logo at its top right, on paper), rendered by
+    engine/dev/descant-mark-assets.mjs, and a maskable copy inside the mask's safe circle."""
     manifest = {
         "id": "/",
         "name": name,

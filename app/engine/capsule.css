@@ -336,7 +336,8 @@
 #app[data-mode="phone"] #topbar.mast .brand { width: 44px; height: 44px; min-width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; }
 #app[data-mode="phone"] #topbar.mast .brand-name { display: flex; align-items: center; font-size: 0; line-height: 1; }
 #app[data-mode="phone"] #topbar.mast .brand-name .star { display: none; }
-#app[data-mode="phone"] #topbar.mast .descant-mark { display: block; width: 36px; height: 30px; margin: 0; vertical-align: initial; }
+#app[data-mode="phone"] #topbar.mast .descant-mark { display: block; width: 22px; height: 26.09px; margin: 0; vertical-align: initial; }
+html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { width: 36px; height: 30px; }
 #app[data-mode="phone"] #phone-save-slot { display: flex; align-items: center; margin-right: auto; }
 #app[data-mode="phone"] #castor-save { min-height: 44px; padding: 0 4px; }
 #app[data-mode="phone"] #castor-save .save-signal-label { max-width: 64px; white-space: normal; line-height: 1.15; }
