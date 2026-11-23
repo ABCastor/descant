@@ -210,7 +210,10 @@
       var timer = setTimeout(function () { roleStatus = 0; finish(null); }, ROLE_WAIT);
       function ask(retries) {
         if (settled) return;
-        global.fetch('/api/whoami', { cache: 'no-store' })
+        // The writer page's head asked already, before the engine parsed (shell.html); used once.
+        var early = global.__descantWhoami;
+        global.__descantWhoami = null;
+        (early && typeof early.then === 'function' ? early : global.fetch('/api/whoami', { cache: 'no-store' }))
           .then(function (r) {
             roleStatus = r.status;
             // A first-load font may bind the new worker client before whoami
@@ -246,7 +249,8 @@
   // in 20 s while the page is on screen (coming back to the screen asks at once).
   function onScreen() { return document.visibilityState === 'visible'; }
   function unconfirmed() {
-    if (PUBLIC_WRITER && (roleStatus === 401 || roleStatus === 403)) showSignedOut();
+    // An ended session takes this device's copies of the articles with it (the journal stays).
+    if (PUBLIC_WRITER && (roleStatus === 401 || roleStatus === 403)) { deviceForget(''); showSignedOut(); }
     // 409: this page's writer is no longer the one signed in in this browser. A reload would open
     // the other writer, so the way back as himself is the sign-in page.
     else if (PUBLIC_WRITER && roleStatus === 409) showSignedOut('Another writer is signed in in this browser. Everything you typed stays on this device. To go on writing as yourself, sign in again; to write as them, open Descant in a new tab.', 'Another writer', '/signin?write=1');
@@ -355,11 +359,17 @@
     }
     pieceCache.set(path, { payload: payload, bytes: bytes, at: Date.now(), authority: writingAuthority() });
     pieceCacheBytes += bytes;
+    if (path === displayedPath) deviceKeep(path, payload);
   }
+  function pieceAddress(path) { return '/api/piece?path=' + encodeURIComponent(path); }
+  /* The boot's article read, already on its way (earlyPiece): handed to the one fetchPiece
+     call the opening makes, synchronously, and to nothing else. */
+  var earlyRead = null;
   function fetchPiece(path, options) {
+    if (earlyRead) { var early = earlyRead; earlyRead = null; return early.take(path); }
     var authority = writingAuthority(), epoch = pieceEpoch[path] || 0;
     var read = pieceRead[path] = (pieceRead[path] || 0) + 1;
-    return global.fetch('/api/piece?path=' + encodeURIComponent(path), Object.assign({ cache: 'no-store' }, options))
+    return global.fetch(pieceAddress(path), Object.assign({ cache: 'no-store' }, options))
       .then(function (r) {
         if (!r.ok) throw new Error('/api/piece answered ' + r.status);
         return r.json();
@@ -427,6 +437,104 @@
       Castor.role.reviewer, Castor.role.publicWriter]);
   }
 
+  /* --- the device copy ---------------------------------------------------------
+     The server's last answer for the few articles a writer opened here, kept on this
+     device so the next opening shows the article at once, as a reading app does,
+     while the server is asked. It is only a server snapshot: never unsaved words (the
+     journal holds those), never authority to save. It is read only once the server has
+     confirmed the same writer it was kept for, and the server's answer always settles
+     what the page then holds (attachSaver: same version, newer words, or typing over
+     the shown copy, exactly as for an article reopened from the session cache). */
+  var DEVICE_DB = 'descant-device', DEVICE_STORE = 'pieces', DEVICE_KEEP = 4, DEVICE_WAIT = 600;
+  var deviceDatabase = null, deviceQueue = {}, deviceTimer = 0;
+  function deviceAccount() {
+    return PUBLIC_WRITER && !reviewing() && Castor.role.publicWriter && Castor.role.confirmed &&
+      /^founder:[a-z][a-z0-9-]{0,23}$/.test(String(Castor.role.id || '')) ? Castor.role.id : '';
+  }
+  function deviceOpen() {
+    if (deviceDatabase) return deviceDatabase;
+    deviceDatabase = new Promise(function (resolve) {
+      var settled = false;
+      function settle(handle) { if (!settled) { settled = true; resolve(handle); } }
+      var factory = null;
+      try { factory = global.indexedDB || null; } catch (e) { factory = null; }
+      if (!factory || typeof factory.open !== 'function') { settle(null); return; }
+      setTimeout(function () { settle(null); }, 2000);
+      try {
+        var request = factory.open(DEVICE_DB, 1);
+        request.onupgradeneeded = function () {
+          try { request.result.createObjectStore(DEVICE_STORE, { keyPath: 'key' }); } catch (e) { /* already there */ }
+        };
+        request.onsuccess = function () { settle(request.result); };
+        request.onerror = request.onblocked = function () { settle(null); };
+      } catch (e) { settle(null); }
+    });
+    return deviceDatabase;
+  }
+  function deviceTx(mode, work) {
+    return deviceOpen().then(function (handle) {
+      if (!handle) return null;
+      return new Promise(function (resolve) {
+        var tx, request;
+        try { tx = handle.transaction(DEVICE_STORE, mode); request = work(tx.objectStore(DEVICE_STORE)); }
+        catch (e) { resolve(null); return; }
+        tx.oncomplete = function () { resolve(request ? request.result : null); };
+        tx.onerror = tx.onabort = function () { resolve(null); };
+      });
+    }).catch(function () { return null; });
+  }
+  function deviceRows(account) {
+    return deviceTx('readonly', function (store) { return store.getAll(); }).then(function (rows) {
+      return (Array.isArray(rows) ? rows : []).filter(function (row) {
+        return row && row.v === 1 && row.account === account && typeof row.path === 'string' &&
+          row.payload && Array.isArray(row.payload.versions) && typeof row.payload.markdown === 'string';
+      });
+    });
+  }
+  /* The kept answer for this writer and article, or null; never waits long. */
+  function deviceCopy(path) {
+    var account = deviceAccount();
+    if (!account || !WRITABLE.test(String(path || ''))) return Promise.resolve(null);
+    var cap = new Promise(function (resolve) { setTimeout(function () { resolve(null); }, DEVICE_WAIT); });
+    return Promise.race([deviceRows(account).then(function (rows) {
+      var row = rows.filter(function (r) { return r.path === path; })[0];
+      if (!row || account !== deviceAccount()) return null;
+      var versions = row.payload.versions, latest = versions[versions.length - 1];
+      return latest && latest.sha && latest.markdown === row.payload.markdown ? row.payload : null;
+    }), cap]);
+  }
+  /* Kept after the page settles, a few at a time: the newest DEVICE_KEEP articles per writer. */
+  function deviceKeep(path, payload) {
+    var account = deviceAccount();
+    if (!account || !WRITABLE.test(String(path || '')) || !payload || !Array.isArray(payload.versions) ||
+        payload.offline === true || payload.locked) return;
+    deviceQueue[account + '|' + path] = { key: account + '|' + path, v: 1, account: account, path: path, at: Date.now(), payload: payload };
+    if (deviceTimer) return;
+    deviceTimer = setTimeout(function () {
+      deviceTimer = 0;
+      var rows = Object.keys(deviceQueue).map(function (k) { return deviceQueue[k]; });
+      deviceQueue = {};
+      rows.forEach(function (row) {
+        // A writer who changed since is never written for.
+        if (row.account !== deviceAccount()) return;
+        deviceTx('readwrite', function (store) { return store.put(row); }).then(function () {
+          return deviceRows(row.account);
+        }).then(function (all) {
+          var old = (all || []).sort(function (a, b) { return (b.at || 0) - (a.at || 0); }).slice(DEVICE_KEEP);
+          if (old.length) deviceTx('readwrite', function (store) { old.forEach(function (r) { store.delete(r.key); }); return null; });
+        });
+      });
+    }, 1200);
+  }
+  /* One article of one writer, every article of a writer, or (no account) every copy here. */
+  function deviceForget(account, path) {
+    Object.keys(deviceQueue).forEach(function (key) { if (!account || key === account + '|' + path || !path && key.indexOf(account + '|') === 0) delete deviceQueue[key]; });
+    return deviceTx('readonly', function (store) { return store.getAll(); }).then(function (all) {
+      var gone = (Array.isArray(all) ? all : []).filter(function (r) { return r && (!account || r.account === account && (!path || r.path === path)); });
+      if (gone.length) return deviceTx('readwrite', function (store) { gone.forEach(function (r) { store.delete(r.key); }); return null; });
+    });
+  }
+
   /* --- the article last open -------------------------------------------------
      A founder's browser remembers the article that writer last had open, and a
      page opened with no article named goes back to it. The record is never
@@ -459,6 +567,18 @@
     forgetPiece(who);
     return '';
   }
+  /* Before whoami answers, the writer page does not know its writer yet: the one writer whose
+     article this browser remembers is the best guess, and only a guess (earlyPiece checks it). */
+  function lastWriterHere() {
+    var found = [];
+    try {
+      for (var i = 0; i < global.localStorage.length; i++) {
+        var key = global.localStorage.key(i);
+        if (key && key.indexOf(RESUME_PREFIX) === 0) found.push(key.slice(RESUME_PREFIX.length));
+      }
+    } catch (e) { return ''; }
+    return found.length === 1 ? found[0] : '';
+  }
   /* The article to open when the address names none: the saved one for a founder
      the server confirms, if the server's own list for this account holds it. An
      unconfirmed role (the server did not answer) resumes nothing. */
@@ -489,6 +609,40 @@
       console.error('[castor] live mode could not read the piece', err);
       return { path: path, payload: null, error: String((err && err.message) || err) };
     });
+  }
+
+  /* The article is asked for in the same beat as the writer, not after: the address names
+     it, or this device remembers the one its writer last had open. The answer is used only
+     for the path the confirmed writer then opens, only if the server answered for that
+     same writer (X-Descant-Account) and nobody changed since whoami answered; anything
+     else is read again, as before. */
+  function earlyPiece(live, answered) {
+    if (!PUBLIC_WRITER || !live || !global.fetch) return null;
+    var path = live.explicit ? live.path : (savedPiece(whoGet() || lastWriterHere()) || live.path), used = false;
+    var read = global.fetch(pieceAddress(path), { cache: 'no-store' }).then(function (r) {
+      var account = r.headers && r.headers.get ? r.headers.get('X-Descant-Account') : null;
+      return (r.ok ? r.json() : Promise.resolve(null)).then(function (payload) { return { status: r.status, account: account, payload: payload }; });
+    }, function (err) { return { status: 0, error: err }; });
+    return {
+      path: path,
+      // Taken once whoami answered. The writer whoami established is the one the answer may
+      // open for: any change since (before or during the read) is refused, as for any read.
+      take: function (asked) {
+        if (used || asked !== path) return fetchPiece(asked);
+        used = true;
+        function same() { var authority = answered(); return authority !== null && authority === writingAuthority(); }
+        if (!same()) return Promise.reject(new Error('The writer changed while the article loaded.'));
+        return read.then(function (got) {
+          if (!same()) throw new Error('The writer changed while the article loaded.');
+          // A worker that refused a read pending while it bound this writer (409) is asked once more.
+          if (got.status === 409 || (got.payload && got.account && got.account !== Castor.role.id)) return fetchPiece(asked);
+          if (got.status === 0) throw (got.error || new Error('The article could not be reached.'));
+          if (!got.payload) throw new Error('The article could not be read (' + got.status + ').');
+          cachePiece(asked, got.payload);
+          return got.payload;
+        });
+      }
+    };
   }
 
   /* The served piece replaces what the piece IS; it never touches what the world is
@@ -2505,9 +2659,20 @@
       if (global.requestAnimationFrame) global.requestAnimationFrame(function () { setTimeout(resolve, 0); });
       else setTimeout(resolve, 0);
     }).then(freshPiece) : null;
-    var read = PUBLIC_WRITER && initial && initial.payload && initial.path === path &&
-      initial.writerRole === Castor.role && initial.writerAuthority === writingAuthority() && Castor.role.confirmed
-      ? Promise.resolve(initial.payload)
+    var same = PUBLIC_WRITER && initial && initial.payload && initial.path === path &&
+      initial.writerRole === Castor.role && initial.writerAuthority === writingAuthority() && Castor.role.confirmed;
+    var read = same && initial.device ? initial.network.then(function (got) {
+        // The server's answer for the article on screen; anything else is read again.
+        if (initial.writerRole !== Castor.role || initial.writerAuthority !== writingAuthority()) throw new Error('The writer changed while the article loaded.');
+        if (got && got.path === path && got.payload) { cachePiece(path, got.payload); return got.payload; }
+        if (got && got.path !== path) {
+          // The server no longer lists it for this writer: its copy here is not kept either.
+          deviceForget(Castor.role.id, path);
+          if (got.payload) forgetPiece(whoGet());
+        }
+        return freshPiece();
+      })
+      : same ? Promise.resolve(initial.payload)
       : backgroundRead || freshPiece();
     return read
       .then(function (p) {
@@ -4561,14 +4726,30 @@
        the offline storage check below still runs. What comes back
        is shown only if the writer is the same once that check settles; otherwise it
        is dropped and the article is read again, as it was before. */
-    var whoami = askRole().then(function (payload) { applyRole(Castor.roleFrom(payload)); return payload; });
+    /* The article is now asked for in the same beat (earlyPiece), so it is pending from
+       before whoami answers. A writer changed while whoami is on its way, or while the
+       offline storage binds the writer whoami confirmed, is a change during the opening:
+       that whoami restores nothing, the read is not shown, and the opening ends
+       unconfirmed below, as a change during the read always did. */
+    var askedRole = Castor.role, askedAuthority = writingAuthority(), changedWhileAsked = false, bindChanged = false;
+    var answeredRole = null, answeredAuthority = null;
+    var whoami = askRole().then(function (payload) {
+      if (PUBLIC_WRITER && (Castor.role !== askedRole || writingAuthority() !== askedAuthority)) { changedWhileAsked = true; return null; }
+      applyRole(Castor.roleFrom(payload)); answeredRole = Castor.role; answeredAuthority = writingAuthority();
+      return payload;
+    });
+    function changedDuringOpening() { return changedWhileAsked || bindChanged; }
+    var speculative = earlyPiece(live, function () { return changedDuringOpening() ? null : answeredAuthority; });
     openingCheck = whoami.then(function () { roleSettled = true; if (PUBLIC_WRITER && !Castor.role.confirmed) unconfirmed(); });
     var role = whoami.then(function (payload) {
+      if (PUBLIC_WRITER && answeredRole && (Castor.role !== answeredRole || writingAuthority() !== answeredAuthority)) { bindChanged = true; return null; }
       if (PUBLIC_WRITER && Castor.role.confirmed && Castor.offline) {
         var original = Castor.role.id;
         function sameWriter() { return Castor.role.confirmed && Castor.role.id === original; }
         function denied() { applyRole(Castor.roleFrom(null)); return null; }
-        return Castor.offline.connect().then(function () { return sameWriter() ? payload : denied(); }, function () {
+        // Bound for the original writer while the page's writer changed: this tab's storage
+        // belongs to someone else now, so nothing read for this opening is shown.
+        return Castor.offline.connect().then(function () { if (sameWriter()) return payload; bindChanged = true; return denied(); }, function () {
           // An installed worker can change during its first upgrade. Recheck
           // authentication before one retry; every storage handshake still runs.
           if (!sameWriter()) return denied();
@@ -4589,20 +4770,36 @@
       return !live ? Promise.resolve('') : live.explicit ? Promise.resolve(live.path)
         : asked.then(restoredPath).then(function (saved) { return saved || live.path; });
     }
-    function pieceAfter(asked) {
+    function pieceAfter(asked, answered) {
       return !live ? Promise.resolve(null) : Promise.all([chosenAfter(asked), asked]).then(function (ready) {
-        var path = ready[0], writerRole = Castor.role, writerAuthority = writingAuthority();
+        // The first opening belongs to the writer whoami established, even if this runs a beat later.
+        var path = ready[0], writerRole = answered ? answeredRole : Castor.role, writerAuthority = answered ? answeredAuthority : writingAuthority();
         /* What this device kept for the piece is read in the same beat, so text
            typed here and never saved is what the editor first shows. */
-        return Promise.all([readLive(path, live.path), keptFor(path)]).then(function (got) {
-          got[0].writerRole = writerRole;
-          got[0].writerAuthority = writerAuthority;
-          if (got[0].path === path) { got[0].kept = got[1]; return got[0]; }
-          return keptFor(got[0].path).then(function (kept) { got[0].kept = kept; return got[0]; });
+        // readLive's first read is the one already on its way (earlyPiece), taken synchronously.
+        earlyRead = speculative;
+        var network;
+        try { network = readLive(path, live.path); } finally { earlyRead = null; }
+        var networkDone = false;
+        network.then(function () { networkDone = true; }, function () { networkDone = true; });
+        /* The device copy (deviceCopy) opens the article without waiting for the server,
+           unless the server has already answered: then there is nothing to wait for. */
+        var settledFirst = network.then(function () { return null; }, function () { return null; });
+        return Promise.all([Promise.race([deviceCopy(path), settledFirst]), keptFor(path)]).then(function (local) {
+          if (local[0] && !networkDone && writerAuthority === writingAuthority()) {
+            return { path: path, payload: local[0], device: true, network: network, kept: local[1],
+              writerRole: writerRole, writerAuthority: writerAuthority };
+          }
+          return network.then(function (got) {
+            got.writerRole = writerRole;
+            got.writerAuthority = writerAuthority;
+            if (got.path === path) { got.kept = local[1]; return got; }
+            return keptFor(got.path).then(function (kept) { got.kept = kept; return got; });
+          });
         });
       });
     }
-    var early = pieceAfter(whoami);
+    var early = pieceAfter(whoami, PUBLIC_WRITER && !!speculative);
     // The writer as the offline check left it. A change after this point is a
     // change during the read and is refused below, as before.
     var checked = role.then(function () { return { role: Castor.role, authority: writingAuthority() }; });
@@ -4614,12 +4811,12 @@
       /* The service worker refuses a read that was pending while the page bound its
          writer, so a failed early read is asked again, but only while the writer is
          still the one the check confirmed; a change is refused below, as before. */
-      if (same && (Castor.role !== at.role || writingAuthority() !== at.authority)) return got;
+      if (same && (Castor.role !== at.role || writingAuthority() !== at.authority) || changedDuringOpening()) return got;
       return pieceAfter(role);
     });
     Promise.all([role, piece]).then(function (both) {
       if (!PUBLIC_WRITER) applyRole(Castor.roleFrom(both[0]));
-      else if (both[1] && (both[1].writerRole !== Castor.role || both[1].writerAuthority !== writingAuthority())) {
+      else if (both[1] && (changedDuringOpening() || both[1].writerRole !== Castor.role || both[1].writerAuthority !== writingAuthority())) {
         applyRole(Castor.roleFrom(null));
         both[1] = { path: both[1].path, payload: null, error: 'The writer changed while this article opened. Reconnect and reopen this page.' };
       }
@@ -4706,8 +4903,11 @@
     liveState = live;
     displayedPath = live && live.payload ? live.path : null;
     data = readData();
-    if (live && live.payload) { applyLive(data, live.payload); cachePiece(live.path, live.payload); }
+    // A device copy is not this session's server answer: attachSaver caches that one.
+    if (live && live.payload) { applyLive(data, live.payload); if (!live.device) cachePiece(live.path, live.payload); }
     else if (reviewing()) notShared(data);
+    // For anyone timing the opening: this one did not wait for the server's article.
+    if (live && live.device) { try { global.performance.mark('descant-device-copy'); } catch (e) { /* no timing */ } }
     world = data.world || document.documentElement.dataset.world || 'dev';
     source = sourceOf(data);
     if (live && live.payload) opening(live.path, live.payload, prepared.entries || [], prepared.entry);
@@ -4813,7 +5013,10 @@
     bus.on('save:state', queuePiecePrefetch);
     bus.on('piece:opened', queuePiecePrefetch);
     var attached = attachSaver(live);
-    Promise.resolve(attached).then(function () {
+    /* A device copy is shown at once and settled with the server's answer afterwards, as an
+       article reopened from the session cache is; the server's own answer is shown once
+       recovery has settled. */
+    Promise.resolve(live && live.device ? null : attached).then(function () {
       // The article opens where it was left: placed while the frame is still hidden, and
       // placed again once fonts and margin notes settle, unless the writer has scrolled.
       var place = displayedPath && !linkedPlace() ? placeOf(displayedPath) : null, placedAt = null;
