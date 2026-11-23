@@ -181,8 +181,24 @@
     try { return global.localStorage || null; } catch (e) { return null; }
   }
 
+  /* The writer page's head opens this database and reads it once, at first byte
+     (window.__descantKept: {db, rows, local}, or null). The handle is this page's;
+     the read is the opening's first read (everything), taken once. */
+  var head = global.__descantKept ? Promise.resolve(global.__descantKept).then(function (got) {
+    // A read older than this is not the opening's.
+    return got && got.db && Date.now() - (got.at || 0) < 10000 ? got : got && got.db ? { db: got.db } : null;
+  }, function () { return null; }) : null;
+  var early = head, wrote = false;
+  try { delete global.__descantKept; } catch (e) { global.__descantKept = undefined; }
   function openDatabase() {
     if (database) return database;
+    if (head) {
+      database = head.then(function (got) { return got ? got.db : openFresh(); });
+      return database;
+    }
+    return openFresh();
+  }
+  function openFresh() {
     database = new Promise(function (resolve) {
       var settled = false;
       function settle(handle) { if (!settled) { settled = true; resolve(handle); } }
@@ -217,6 +233,19 @@
         tx.onerror = tx.onabort = function () { reject(tx.error || new Error('IndexedDB did not take the write')); };
       });
     });
+  }
+
+  /* Device copies of articles (app.js) share this store under keys from DEVICE on. They
+     have no text, so no journal read takes them for writing (valid); a browser that can
+     read key ranges does not read their bytes at all. */
+  var DEVICE = '~device|';
+  function journalRows(s) {
+    var Range = global.IDBKeyRange;
+    if (!Range || !Range.upperBound || !Range.lowerBound) return s.getAll();
+    var out = { result: [] }, before = s.getAll(Range.upperBound(DEVICE, true)), after = s.getAll(Range.lowerBound(DEVICE + '\uffff', true));
+    before.onsuccess = function () { out.result = (before.result || []).concat(out.result); };
+    after.onsuccess = function () { out.result = out.result.concat(after.result || []); };
+    return out;
   }
 
   function valid(entry) {
@@ -266,17 +295,24 @@
     try { s.removeItem(name); } catch (e) { /* nothing to drop */ }
   }
 
-  function localAll(strict) {
+  function localAll(strict, taken) {
     var s, out = [], names = [];
-    try { s = global.localStorage; if (!s) return out; for (var i = 0; i < s.length; i++) names.push(s.key(i)); }
-    catch (e) { if (strict) throw e; return out; }
+    function read(name) {
+      if (!taken) return localRead(name, strict);
+      try { return JSON.parse(taken[name]); } catch (e) { return null; }
+    }
+    if (taken) names = Object.keys(taken);
+    else {
+      try { s = global.localStorage; if (!s) return out; for (var i = 0; i < s.length; i++) names.push(s.key(i)); }
+      catch (e) { if (strict) throw e; return out; }
+    }
     names.forEach(function (name) {
       if (typeof name !== 'string') return;
       if (name.indexOf(LOCAL) === 0) {
-        var entry = localRead(name, strict);
+        var entry = read(name);
         if (valid(entry)) out.push(entry);
       } else if (name.indexOf(LEGACY) === 0) {
-        var old = localRead(name, strict);
+        var old = read(name);
         if (old && typeof old.markdown === 'string') {
           out.push({ key: name, path: name.slice(LEGACY.length), text: old.markdown, base: '',
             at: Date.parse(old.at) || 0, page: '', legacy: true });
@@ -292,9 +328,17 @@
 
   /* A timestamp cannot choose between divergent physical-store revisions. */
   function everything(strict) {
-    var fromLocal;
+    var fromLocal, first = early && !wrote ? early : null;
+    early = null;
     try { fromLocal = localAll(strict); } catch (e) { return Promise.reject(e); }
-    return idb('readonly', function (s) { return s.getAll(); })
+    // The head's read: its localStorage copies were taken before its IndexedDB rows, as here,
+    // so words moving from one store to the other are in one of them. Anything since is added.
+    var stored = first ? first.then(function (got) {
+      if (!got || !Array.isArray(got.rows) || wrote) return idb('readonly', journalRows);
+      if (got.local) fromLocal = fromLocal.concat(localAll(false, got.local));
+      return got.rows;
+    }) : idb('readonly', journalRows);
+    return stored
       .then(function (rows) { return rows || []; }, function (e) {
         // A cached absent handle cannot later overwrite unread IndexedDB data.
         // A failed read on an available handle can: never treat that as empty.
@@ -321,6 +365,7 @@
     if (ours && localCopy && snapshotSignature(localCopy) === snapshotSignature(entry)) localDrop(localName);
     if (entry.legacy) return Promise.resolve(false);
     var removed = false;
+    wrote = true;
     return idb('readwrite', function (s) {
       var request = s.getAll();
       request.onsuccess = function () {
@@ -365,6 +410,7 @@
 
   // Called within the journal queue so a multi-copy handoff cannot interleave writes.
   function write(entry) {
+    wrote = true;
     var guard = handoffs[entry.path], mutable = entry.key === keyOf(entry.path);
     var prepared = guard && mutable ? everything(true).then(function (entries) { return protectCurrent(entry.path, entries); }, function () { return false; }) : Promise.resolve(true);
     return prepared.then(function (ok) {
@@ -642,8 +688,30 @@
     return Castor.saveStatus ? Castor.saveStatus.track(flight) : flight;
   }
 
+  /* --- device copies (app.js) ------------------------------------------------
+     Server snapshots of a few articles, in this store under DEVICE keys, read once with
+     the journal by the head; never unsent words, and never read as journal entries. */
+  function isDevice(row) { return !!row && typeof row.key === 'string' && row.key.indexOf(DEVICE) === 0; }
+  var earlyDevices = head ? head.then(function (got) { return got && Array.isArray(got.rows) ? got.rows.filter(isDevice) : null; }) : null;
+  function deviceRead() {
+    var first = earlyDevices; earlyDevices = null;
+    return Promise.resolve(first).then(function (rows) {
+      if (rows) return rows;
+      return idb('readonly', function (s) {
+        var Range = global.IDBKeyRange;
+        return Range && Range.bound ? s.getAll(Range.bound(DEVICE, DEVICE + '\uffff')) : s.getAll();
+      }).then(function (all) { return (all || []).filter(isDevice); });
+    }).catch(function () { return []; });
+  }
+  /* work(store) in one readwrite transaction; true once it committed. Only DEVICE keys. */
+  function deviceChange(work) {
+    earlyDevices = null;
+    return idb('readwrite', work).then(function () { return true; }, function () { return false; });
+  }
+
   Castor.keep = {
     page: PAGE,
+    device: { prefix: DEVICE, read: deviceRead, change: deviceChange },
     note: note,
     now: now,
     nowSync: nowSync,

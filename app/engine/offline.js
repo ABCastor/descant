@@ -34,18 +34,88 @@
     var index = (await readIndex()).index;
     return index && index.accounts && index.accounts[account()] || null;
   }
-  async function connect() {
+  /* The generation an installed worker answers, or 0 when it does not answer. */
+  function generationOf(worker) {
+    return new Promise(function (resolve) {
+      var channel = new global.MessageChannel(), timer = setTimeout(function () { finish(0); }, 2000);
+      function finish(value) { clearTimeout(timer); channel.port1.close(); resolve(value); }
+      channel.port1.onmessage = function (event) { finish(event.data && event.data.generation || 0); };
+      try { worker.postMessage({ type: 'descant-flight-version-v1' }, [channel.port2]); } catch (_) { finish(0); }
+    });
+  }
+  /* Opening fast (connect({ opening: true })): a worker already active for a scope that
+     answers the current generation is bound at once, and its upgrade discovery runs after
+     the article is shown (afterShown). Until that discovery, and any rebinding it needs, has
+     settled, ready() holds the article's saves, so a worker whose generation was not checked
+     never receives one. A worker that does not answer the current generation goes the
+     ordinary way, exactly as before: update, activation, handshake. */
+  var gate = null, gateOpen = true, startDiscovery = null, discoveryTimer = 0, watching = false, connecting = 0;
+  function setGate(run) {
+    gateOpen = false; gate = run;
+    run.then(function (ok) { if (gate === run) gateOpen = ok; });
+    return run;
+  }
+  function rebind() { return setGate(connect().then(function () { return true; }, function () { return false; })); }
+  /* null when saves may go now; otherwise a promise of true once they may go to the worker
+     this page is bound to, or false when it could not be confirmed. */
+  function ready() {
+    if (gateOpen || !gate) return null;
+    var asked = gate;
+    // A rebinding that failed is tried again for the next save.
+    return asked.then(function (ok) { return ok || !account() ? ok : gate !== asked ? ready() || true : rebind(); });
+  }
+  function postpone(found) {
+    clearTimeout(discoveryTimer);
+    setGate(new Promise(function (resolve) { startDiscovery = resolve; }).then(async function () {
+      try {
+        for (var registration of found.registrations) { try { await registration.update(); } catch (_) {} }
+        var changed = navigator.serviceWorker.controller !== found.controller || found.registrations.some(function (registration, index) {
+          return registration.installing || registration.waiting || registration.active !== found.workers[index];
+        });
+        // Something newer was found: the ordinary order, update, activation and handshake, before any save.
+        if (changed) await connect();
+        return true;
+      } catch (_) { return false; }
+    }));
+    // The article is normally shown well before this; discovery never waits on it for ever.
+    discoveryTimer = setTimeout(afterShown, 4000);
+  }
+  /* Called once the article is on screen: the postponed upgrade discovery runs now. */
+  function afterShown() {
+    clearTimeout(discoveryTimer); discoveryTimer = 0;
+    var start = startDiscovery; startDiscovery = null;
+    if (start) start();
+    return ready() || Promise.resolve(true);
+  }
+  function watch() {
+    if (watching || !navigator.serviceWorker.addEventListener) return;
+    watching = true;
+    // A worker that takes this page over later (the browser's own update check) is checked before any save.
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (!account() || connecting) return;
+      clearTimeout(discoveryTimer); discoveryTimer = 0; startDiscovery = null;
+      rebind();
+    });
+  }
+  async function connect(options) {
+    connecting++;
+    try { return await bindWriter(options || {}); } finally { connecting--; }
+  }
+  async function bindWriter(options) {
     if (!/^founder:[a-z][a-z0-9-]{0,23}$/.test(account()) || !navigator.serviceWorker || !global.MessageChannel) throw Error('The writer could not be bound to offline storage.');
     var service = navigator.serviceWorker;
     // Keep the original slash scope usable by older cached shells. Updating
     // both scopes also covers the bare launch address without deleting a pack.
-    var registrations = [], workers = [];
+    var registrations = [], workers = [], postponed = false;
     for (var scope of ['/write', '/write/']) {
       var registration = await service.register('/write/sw.js', { scope: scope });
+      var current = options.opening && registration.active && registration.active.state === 'activated' &&
+        !registration.installing && !registration.waiting && await generationOf(registration.active) === 2;
+      if (current) postponed = true;
       // Force online upgrade discovery. Offline, an already installed compatible
       // worker remains usable; the generation handshake below is mandatory.
-      try { await registration.update(); } catch (_) {}
-      var candidate = registration.installing || registration.waiting || registration.active;
+      else try { await registration.update(); } catch (_) {}
+      var candidate = current ? registration.active : registration.installing || registration.waiting || registration.active;
       if (!candidate) throw Error('The writing app did not install its offline worker.');
       if (candidate.state !== 'activated') await new Promise(function (resolve, reject) {
         var timer = setTimeout(function () { finish(Error('Offline installation did not finish. Your previous copy is unchanged.')); }, 8000);
@@ -53,7 +123,7 @@
         function change() { if (candidate.state === 'activated') finish(); else if (candidate.state === 'redundant') finish(Error('Offline installation was replaced. Prepare again.')); }
         candidate.addEventListener('statechange', change); change();
       });
-      await new Promise(function (resolve, reject) {
+      if (!current) await new Promise(function (resolve, reject) {
         var channel = new global.MessageChannel(), timer = setTimeout(function () { finish(Error('Reopen Descant online to finish its offline update. Your previous copy is unchanged.')); }, 8000);
         function finish(error) { clearTimeout(timer); channel.port1.close(); error ? reject(error) : resolve(); }
         channel.port1.onmessage = function (event) { finish(event.data && event.data.generation === 2 ? null : Error('The offline worker needs an update. Your previous copy is unchanged.')); };
@@ -80,6 +150,8 @@
       };
       controller.postMessage({ type: 'descant-flight-bind-v1', account: expected }, [channel.port2]);
     });    if (registrations.some(function (registration, index) { return registration.active !== workers[index]; })) throw Error('The offline worker changed while this writer was bound. Prepare again.');
+    watch();
+    if (postponed) postpone({ registrations: registrations, workers: workers, controller: controller });
     return { registrations: registrations, workers: workers };
   }
   async function prepare() {
@@ -427,5 +499,5 @@
     }).catch(function (error) { if (!mountedWhileBusy && preparation === mountedPreparation && !busy) say(error.message); });
     if (Castor.commands && Castor.commands.register) Castor.commands.register({ id: 'offline.prepare', title: 'Prepare all articles offline', section: 'Files', run: function () { prepareAndRecover().catch(function () {}); } });
   }
-  Castor.offline = { connect: connect, mount: mount, prepare: prepare, prepareAndRecover: prepareAndRecover, download: download, restore: restore, receipt: function () { return receipt; } };
+  Castor.offline = { connect: connect, ready: ready, afterShown: afterShown, mount: mount, prepare: prepare, prepareAndRecover: prepareAndRecover, download: download, restore: restore, receipt: function () { return receipt; } };
 })(typeof window !== 'undefined' ? window : this);

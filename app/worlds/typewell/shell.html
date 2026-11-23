@@ -3,7 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script>(function(){try{if(/^\/write(\/|$)/.test(location.pathname)&&window.fetch)window.__descantWhoami=fetch('/api/whoami',{cache:'no-store'});}catch(e){}})();</script>
+<script>(function(){try{if(!/^\/write(\/|$)/.test(location.pathname))return;if(window.fetch)window.__descantWhoami=fetch('/api/whoami',{cache:'no-store'});
+var w=window,L='castor.keep.',U='castor.unsaved.';if(!w.indexedDB)return;
+w.__descantKept=new Promise(function(done){var local={},s=w.localStorage,i,k;try{for(i=0;i<s.length;i++){k=s.key(i);if(k&&(k.indexOf(L)===0||k.indexOf(U)===0))local[k]=s.getItem(k);}}catch(e){local=null;}
+var r=w.indexedDB.open('castor-keep',1);setTimeout(function(){done(null);},2000);
+r.onupgradeneeded=function(){try{r.result.createObjectStore('entries',{keyPath:'key'});}catch(e){}};
+r.onsuccess=function(){var db=r.result,q;function end(rows){done({db:db,rows:rows,local:local,at:Date.now()});}try{q=db.transaction('entries','readonly').objectStore('entries').getAll();q.onsuccess=function(){end(local?q.result:null);};q.onerror=function(){end(null);};}catch(e){end(null);}};
+r.onerror=r.onblocked=function(){done(null);};});}catch(e){}})();</script>
 <title>Castor · Typewell</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

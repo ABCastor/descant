@@ -445,52 +445,27 @@
      confirmed the same writer it was kept for, and the server's answer always settles
      what the page then holds (attachSaver: same version, newer words, or typing over
      the shown copy, exactly as for an article reopened from the session cache). */
-  var DEVICE_DB = 'descant-device', DEVICE_STORE = 'pieces', DEVICE_KEEP = 4, DEVICE_WAIT = 600;
-  var deviceDatabase = null, deviceQueue = {}, deviceTimer = 0;
+  /* They live in the journal's own database (keep.js: Castor.keep.device), which the head
+     reads once at first byte with the journal, so the opening does one read in all. */
+  var DEVICE_KEEP = 4, DEVICE_WAIT = 600;
+  var deviceQueue = {}, deviceTimer = 0;
   function deviceAccount() {
     return PUBLIC_WRITER && !reviewing() && Castor.role.publicWriter && Castor.role.confirmed &&
       /^founder:[a-z][a-z0-9-]{0,23}$/.test(String(Castor.role.id || '')) ? Castor.role.id : '';
   }
-  function deviceOpen() {
-    if (deviceDatabase) return deviceDatabase;
-    deviceDatabase = new Promise(function (resolve) {
-      var settled = false;
-      function settle(handle) { if (!settled) { settled = true; resolve(handle); } }
-      var factory = null;
-      try { factory = global.indexedDB || null; } catch (e) { factory = null; }
-      if (!factory || typeof factory.open !== 'function') { settle(null); return; }
-      setTimeout(function () { settle(null); }, 2000);
-      try {
-        var request = factory.open(DEVICE_DB, 1);
-        request.onupgradeneeded = function () {
-          try { request.result.createObjectStore(DEVICE_STORE, { keyPath: 'key' }); } catch (e) { /* already there */ }
-        };
-        request.onsuccess = function () { settle(request.result); };
-        request.onerror = request.onblocked = function () { settle(null); };
-      } catch (e) { settle(null); }
-    });
-    return deviceDatabase;
-  }
-  function deviceTx(mode, work) {
-    return deviceOpen().then(function (handle) {
-      if (!handle) return null;
-      return new Promise(function (resolve) {
-        var tx, request;
-        try { tx = handle.transaction(DEVICE_STORE, mode); request = work(tx.objectStore(DEVICE_STORE)); }
-        catch (e) { resolve(null); return; }
-        tx.oncomplete = function () { resolve(request ? request.result : null); };
-        tx.onerror = tx.onabort = function () { resolve(null); };
-      });
-    }).catch(function () { return null; });
-  }
+  function deviceStore() { return Castor.keep && Castor.keep.device || null; }
+  function deviceKey(account, path) { return deviceStore().prefix + account + '|' + path; }
   function deviceRows(account) {
-    return deviceTx('readonly', function (store) { return store.getAll(); }).then(function (rows) {
+    var store = deviceStore();
+    if (!store) return Promise.resolve([]);
+    return store.read().then(function (rows) {
       return (Array.isArray(rows) ? rows : []).filter(function (row) {
-        return row && row.v === 1 && row.account === account && typeof row.path === 'string' &&
+        return row && row.v === 1 && row.account === account && typeof row.path === 'string' && row.key === deviceKey(account, row.path) &&
           row.payload && Array.isArray(row.payload.versions) && typeof row.payload.markdown === 'string';
       });
     });
   }
+  function deviceChange(work) { var store = deviceStore(); return store ? store.change(work) : Promise.resolve(false); }
   /* The kept answer for this writer and article, or null; never waits long. */
   function deviceCopy(path) {
     var account = deviceAccount();
@@ -508,7 +483,13 @@
     var account = deviceAccount();
     if (!account || !WRITABLE.test(String(path || '')) || !payload || !Array.isArray(payload.versions) ||
         payload.offline === true || payload.locked) return;
-    deviceQueue[account + '|' + path] = { key: account + '|' + path, v: 1, account: account, path: path, at: Date.now(), payload: payload };
+    if (!deviceStore()) return;
+    // The copies an earlier version kept in a database of their own are not read any more.
+    if (!deviceKeep.cleared) {
+      deviceKeep.cleared = true;
+      try { if (global.indexedDB && typeof global.indexedDB.deleteDatabase === 'function') global.indexedDB.deleteDatabase('descant-device'); } catch (e) { /* nothing to clear */ }
+    }
+    deviceQueue[account + '|' + path] = { key: deviceKey(account, path), v: 1, account: account, path: path, at: Date.now(), payload: payload };
     if (deviceTimer) return;
     deviceTimer = setTimeout(function () {
       deviceTimer = 0;
@@ -517,11 +498,11 @@
       rows.forEach(function (row) {
         // A writer who changed since is never written for.
         if (row.account !== deviceAccount()) return;
-        deviceTx('readwrite', function (store) { return store.put(row); }).then(function () {
+        deviceChange(function (store) { return store.put(row); }).then(function () {
           return deviceRows(row.account);
         }).then(function (all) {
           var old = (all || []).sort(function (a, b) { return (b.at || 0) - (a.at || 0); }).slice(DEVICE_KEEP);
-          if (old.length) deviceTx('readwrite', function (store) { old.forEach(function (r) { store.delete(r.key); }); return null; });
+          if (old.length) deviceChange(function (store) { old.forEach(function (r) { store.delete(r.key); }); return null; });
         });
       });
     }, 1200);
@@ -529,9 +510,11 @@
   /* One article of one writer, every article of a writer, or (no account) every copy here. */
   function deviceForget(account, path) {
     Object.keys(deviceQueue).forEach(function (key) { if (!account || key === account + '|' + path || !path && key.indexOf(account + '|') === 0) delete deviceQueue[key]; });
-    return deviceTx('readonly', function (store) { return store.getAll(); }).then(function (all) {
+    var store = deviceStore();
+    if (!store) return Promise.resolve();
+    return store.read().then(function (all) {
       var gone = (Array.isArray(all) ? all : []).filter(function (r) { return r && (!account || r.account === account && (!path || r.path === path)); });
-      if (gone.length) return deviceTx('readwrite', function (store) { gone.forEach(function (r) { store.delete(r.key); }); return null; });
+      if (gone.length) return deviceChange(function (store) { gone.forEach(function (r) { store.delete(r.key); }); return null; });
     });
   }
 
@@ -2251,6 +2234,8 @@
     var text = editorSource();
     return Castor.saveStatus.describe({
       current: text === saver.text, offline: saver.state === 'offline', saving: !!saver.inflight || saver.state === 'saving',
+      // Nothing typed here since the article opened: the server's own saved text is on screen.
+      idle: !saver.typed && ['ready', 'saved'].indexOf(saver.state) >= 0 && text === saver.text,
       deviceAt: Castor.keep && Castor.keep.receipt ? Castor.keep.receipt(saver.path, text) : 0,
       history: evidence.history, shared: evidence.shared, warning: [commentWarning(), fileWarning()].filter(Boolean).join(' '),
       held: (['ready', 'saved'].indexOf(saver.state) >= 0 && heldRules() || {}).note || '',
@@ -3111,12 +3096,20 @@
     var ctl = null, timer = 0, sent;
     try { ctl = new global.AbortController(); } catch (e) { ctl = null; }
     if (ctl) timer = setTimeout(function () { ctl.abort(); }, SAVE_TIMEOUT);
-    try {
-      sent = global.fetch('/api/piece', {
+    function send() {
+      return global.fetch('/api/piece', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: !!keepalive,
         signal: ctl ? ctl.signal : undefined,
         body: JSON.stringify({ path: path, markdown: text, base: base, who: who })
       });
+    }
+    // The writer page saves only through an offline worker whose generation it has checked.
+    var checked = Castor.offline && Castor.offline.ready ? Castor.offline.ready() : null;
+    try {
+      sent = checked ? checked.then(function (ok) {
+        if (!ok) throw new Error('The offline worker could not be confirmed.');
+        return send();
+      }) : send();
     } catch (e) { sent = Promise.reject(e); }
     var flight = Promise.resolve(sent).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (b) { return { status: r.status, body: b || {} }; });
@@ -4749,7 +4742,8 @@
         function denied() { applyRole(Castor.roleFrom(null)); return null; }
         // Bound for the original writer while the page's writer changed: this tab's storage
         // belongs to someone else now, so nothing read for this opening is shown.
-        return Castor.offline.connect().then(function () { if (sameWriter()) return payload; bindChanged = true; return denied(); }, function () {
+        // The opening binds to a current worker at once; its upgrade check runs once the article is shown.
+        return Castor.offline.connect({ opening: true }).then(function () { if (sameWriter()) return payload; bindChanged = true; return denied(); }, function () {
           // An installed worker can change during its first upgrade. Recheck
           // authentication before one retry; every storage handshake still runs.
           if (!sameWriter()) return denied();
@@ -5031,6 +5025,8 @@
         els.frame.setAttribute('data-ready', '');
         // The moment the article is shown, for anyone timing how fast the page opens.
         try { if (global.performance && global.performance.mark) global.performance.mark('descant-ready'); } catch (e) { /* no timing */ }
+        // The offline worker's upgrade check, postponed by the opening, runs now.
+        if (Castor.offline && Castor.offline.afterShown) Castor.offline.afterShown();
       }
       /* Recovery has settled. Background frame throttling and font swapping
          must not hide a ready writing sheet. */

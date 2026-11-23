@@ -23,12 +23,15 @@
     var shared = history && !!(s.shared && s.shared.ok === true && s.shared.at);
     var sharedFailed = history && !shared && !!(s.shared && s.shared.failed === true);
     var lastConfirmed = s.shared && s.shared.last_confirmed_at;
+    // Nothing typed since the article opened: the text on screen is the server's saved text, in
+    // its history and on the shared server. This device writing its own receipt of it is not saving.
+    var idle = s.idle === true && !s.saving && shared;
     // Words typed since the last save are saving: the pause before it is part of saving. "Kept on
     // this device" is for words that cannot reach the server (offline), below.
     var word = s.saving || !current ? 'Saving…'
-      : !history ? 'Checking…' : !shared ? (sharedFailed ? 'Not backed up' : 'Checking backup…') : !device ? 'Kept in history' : 'Saved';
+      : !history ? 'Checking…' : !shared ? (sharedFailed ? 'Not backed up' : 'Checking backup…') : !device && !idle ? 'Kept in history' : 'Saved';
     var rows = [
-      { ok: device, label: 'On this device', detail: device ? time(s.deviceAt) : 'Waiting for this browser to keep a copy.' },
+      { ok: device, label: 'On this device', detail: device ? time(s.deviceAt) : idle ? 'Writing this browser’s copy of the saved text.' : 'Waiting for this browser to keep a copy.' },
       { ok: history, label: 'In the article’s history', detail: history ? s.history.sha.slice(0, 7) + ' · ' + time(s.history.at) : 'Waiting for the article’s save.' },
       { ok: shared, label: 'Copied to the shared server', detail: shared ? (s.shared.checked ? 'Checked ' : '') + time(s.shared.at)
         : ((s.shared && s.shared.reason) || 'Waiting for the server to confirm the backup.')
@@ -38,14 +41,14 @@
     var failed = !!(s.warning || s.problem || sharedFailed);
     var onDevice = s.offline && device && !s.warning;
     if (onDevice) word = 'On device';
-    var state = onDevice ? 'device' : failed ? 'partial' : pending || s.saving || !rows.every(function (row) { return row.ok; }) ? 'saving' : 'saved';
+    var state = onDevice ? 'device' : failed ? 'partial' : idle ? 'saved' : pending || s.saving || !rows.every(function (row) { return row.ok; }) ? 'saving' : 'saved';
     var missing = rows.filter(function (row) { return !row.ok; }).map(function (row) { return row.label + ': ' + row.detail; });
     if (s.warning) missing.push(s.warning);
     if (s.problem) missing.push(s.problem);
-    var label = state === 'device' ? 'Kept on this device. Waiting to sync when the connection returns.' : state === 'saving' ? (history && !shared ? 'Checking the shared backup. ' + rows[2].detail : 'Saving') : state === 'saved' ? 'Saved: all three copies confirmed' : 'Save incomplete. ' + missing.join(' ');
+    var label = state === 'device' ? 'Kept on this device. Waiting to sync when the connection returns.' : state === 'saving' ? (history && !shared ? 'Checking the shared backup. ' + rows[2].detail : 'Saving') : state === 'saved' ? (device ? 'Saved: all three copies confirmed' : 'Saved in the article’s history and on the shared server. This browser is writing its own copy.') : 'Save incomplete. ' + missing.join(' ');
     // Saved words that break a writing rule are safe; only publishing waits. Calm words, the same mark.
     var held = state === 'saved' && s.held ? s.held : '';
-    if (held) { word = 'Saved as draft'; label = 'All three copies confirmed. ' + held; }
+    if (held) { word = 'Saved as draft'; label = (device ? 'All three copies confirmed. ' : 'Saved in the article’s history and on the shared server. ') + held; }
     return { word: word, state: state, label: label, rows: rows, sharedFailed: sharedFailed, held: !!held };
   }
   function shortWord(view) {
