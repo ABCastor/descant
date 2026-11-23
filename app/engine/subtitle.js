@@ -189,7 +189,8 @@
     if (node) node.remove(); input = null; node = null; ctx = context;
     if (!bound) {
       bound = true;
-      ctx.bus.on('doc:change', sync); ctx.bus.on('who:set', sync);
+      // Another article drawn in place: its subtitle line in the same frame, not one later.
+      ctx.bus.on('doc:change', sync); ctx.bus.on('who:set', sync); ctx.bus.on('live:reload', sync);
       if (D.addEventListener) D.addEventListener('selectionchange', keepCaretOutOfMarker);
     }
     sync();

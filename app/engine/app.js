@@ -523,6 +523,69 @@
      now holds, and the saves rail grows the agent's own save. */
   var pieceScroll = {};
   var sheetMotion = null, pieceRequest = 0;
+
+  /* Where the writer left each article, kept on this device, so that reopening the app or
+     the article shows that place from its first frame, as a reading or writing app does.
+     A place is the first block on screen and how far the scroller sits past its top, so it
+     survives a different line wrap; `top` is the plain offset for a page without blocks. */
+  var PLACES = 'places', PLACES_KEPT = 30, placeTimer = 0;
+  function readPlaces() {
+    try { var all = JSON.parse(recall(PLACES) || '{}'); return all && typeof all === 'object' ? all : {}; }
+    catch (e) { return {}; }
+  }
+  // Without layout (a shell or test with no geometry) a place is the scroller's plain offset.
+  function geometry() {
+    return !!(els.scroll && els.page && els.scroll.getBoundingClientRect && els.page.querySelectorAll);
+  }
+  function placeNow() {
+    if (!els.scroll) return null;
+    var at = Math.round(els.scroll.scrollTop || 0);
+    if (!at || !geometry()) return { block: -1, offset: 0, top: at };
+    var top = els.scroll.getBoundingClientRect().top, blocks = els.page.querySelectorAll('.cw-block');
+    for (var i = 0; i < blocks.length; i++) {
+      var r = blocks[i].getBoundingClientRect();
+      if (r.height && r.bottom > top + 1) return { block: i, offset: Math.round(top - r.top), top: at };
+    }
+    return { block: -1, offset: 0, top: at };
+  }
+  function keepPlace(path) {
+    var place = path && placeNow();
+    if (!place) return;
+    var all = readPlaces();
+    all[path] = { block: place.block, offset: place.offset, top: place.top, at: Date.now() };
+    var paths = Object.keys(all).sort(function (a, b) { return (all[b].at || 0) - (all[a].at || 0); });
+    paths.slice(PLACES_KEPT).forEach(function (p) { delete all[p]; });
+    store(PLACES, JSON.stringify(all));
+  }
+  function placeOf(path) {
+    var place = path && readPlaces()[path];
+    return place && typeof place.top === 'number' ? place : null;
+  }
+  /* Instant, never the scroller's smooth scrolling: the article is shown already there. */
+  function goToPlace(place) {
+    if (!place || !els.scroll) return false;
+    var block = place.block >= 0 && geometry() && els.page.querySelectorAll('.cw-block')[place.block];
+    var target = Math.max(0, block ? els.scroll.scrollTop + block.getBoundingClientRect().top - els.scroll.getBoundingClientRect().top + place.offset : place.top);
+    if (els.scroll.scrollTo) {
+      try { els.scroll.scrollTo({ top: target, behavior: 'instant' }); return true; } catch (e) { /* set it directly */ }
+    }
+    els.scroll.scrollTop = target;
+    return true;
+  }
+  /* A link that names a comment opens at the comment, never at the kept place. */
+  function linkedPlace() {
+    var loc = global.location || {};
+    return /[?&#]thread=/.test((loc.search || '') + (loc.hash || ''));
+  }
+  function watchPlace() {
+    if (!els.scroll || !els.scroll.addEventListener) return;
+    els.scroll.addEventListener('scroll', function () {
+      if (placeTimer) clearTimeout(placeTimer);
+      placeTimer = setTimeout(function () { placeTimer = 0; keepPlace(displayedPath); }, 250);
+    }, { passive: true });
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') keepPlace(displayedPath); });
+    global.addEventListener('pagehide', function () { keepPlace(displayedPath); });
+  }
   function nextSheet(from, to) {
     if (!els.article || !els.article.animate || reducedMotion()) return;
     if (sheetMotion) sheetMotion.cancel();
@@ -608,7 +671,8 @@
       return Promise.resolve(true);
     }
     try {
-      pieceScroll[displayedPath || liveState.path] = { y: global.scrollY || 0, top: els.scroll ? els.scroll.scrollTop : 0 };
+      pieceScroll[displayedPath || liveState.path] = Object.assign({ y: global.scrollY || 0 }, placeNow() || { top: 0 });
+      keepPlace(displayedPath);
     } catch (e) { /* no scroll to keep */ }
     var previous = displayedPath || liveState.path;
     liveState.path = path;
@@ -619,11 +683,8 @@
       rememberPieceUrl(path);
       nextSheet(previous, path);
       bus.emit('piece:open', { path: path, from: previous });
-      var back = pieceScroll[path] || { y: 0, top: 0 };
-      try {
-        global.scrollTo(0, back.y);
-        if (els.scroll) els.scroll.scrollTop = back.top;
-      } catch (e2) { /* nothing to restore */ }
+      // The article was already shown at its place when it was drawn (reloadLive).
+      try { global.scrollTo(0, (pieceScroll[path] || {}).y || 0); } catch (e2) { /* nothing to restore */ }
       renderTabs();
       return true;
     }).catch(function (error) {
@@ -3404,6 +3465,7 @@
         if (request === pieceRequest && liveState.path === path && displayedPath !== path) liveState.path = displayedPath;
         return { superseded: true };
       }
+      var switching = displayedPath !== path;
       applyLive(data, payload);
       displayedPath = path;
       source = sourceOf(data);
@@ -3434,6 +3496,9 @@
         else setTimeout(queueHistory, 32);
       }
       bus.emit('live:reload', { path: liveState.path, before: before, doc: doc, cached: !!cached });
+      // Another article is drawn at the place it was left, before the frame that shows it
+      // (after live:reload, which adds the subtitle line above the text).
+      if (switching && !goToPlace(pieceScroll[path] || placeOf(path))) goToPlace({ block: -1, offset: 0, top: 0 });
       var notify = function () {
         if (request !== pieceRequest || liveState.path !== path) return;
         bus.emit('doc:change', { doc: doc, source: editorSource() });
@@ -4736,6 +4801,7 @@
     registerPreferenceCommands();
     wireTabs();
     loadPieces();
+    watchPlace();
     bus.on('live:reload', function (info) { attachSaver(null, info && info.cached); queuePiecePrefetch(); });
     bus.on('piece:save-start', stopPiecePrefetch);
     bus.on('piece:saved', function (info) { savedPieceCache(info.path, info.text, info.res, info.done); });
@@ -4748,9 +4814,14 @@
     bus.on('piece:opened', queuePiecePrefetch);
     var attached = attachSaver(live);
     Promise.resolve(attached).then(function () {
+      // The article opens where it was left: placed while the frame is still hidden, and
+      // placed again once fonts and margin notes settle, unless the writer has scrolled.
+      var place = displayedPath && !linkedPlace() ? placeOf(displayedPath) : null, placedAt = null;
+      if (goToPlace(place)) placedAt = els.scroll.scrollTop;
       function settledLayout() {
         queueKnot(false);
         if (Castor.footnotes && Castor.footnotes.layout) Castor.footnotes.layout();
+        if (placedAt !== null && els.scroll.scrollTop === placedAt && goToPlace(place)) placedAt = els.scroll.scrollTop;
       }
       function reveal() {
         if (!els.frame) return;

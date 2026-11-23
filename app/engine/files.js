@@ -558,7 +558,11 @@
         S.folded[entry.path] = !S.folded[entry.path];
         persist(); renderFiles(entry.path);
       } else if (opts.otherPiece && opts.articlePath && Castor.pieces && Castor.pieces.open) {
-        Castor.pieces.open(opts.articlePath);
+        // On a phone the sheet covers most of the article: once it opens, the sheet goes away.
+        var app = DOC.getElementById('app'), phone = !!(app && app.dataset.mode === 'phone');
+        Promise.resolve(Castor.pieces.open(opts.articlePath)).then(function (ok) {
+          if (ok && phone && Castor.panels && Castor.panels.close) Castor.panels.close('files');
+        });
       } else if (/\.md$/i.test(entry.path) || opts.otherPiece) {
         openBeside(opts.openTarget || entry.path);
       }

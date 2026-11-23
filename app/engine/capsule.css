@@ -827,6 +827,11 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
    underline; while a finger is down it takes the wash at once, and iOS's grey tap
    flash is off. Underlines belong to links in the text. */
 :root { -webkit-tap-highlight-color: transparent; }
+/* Controls are not text. A long press on Comments or Saved selected the word, with handles, a
+   loupe and the copy callout, as on a web page. Buttons take no selection and no callout; the
+   writing and every field keep theirs (dev/chrome-select-browser.js). */
+#app :is(button, [role="button"], [role="menuitem"], [role="tab"], summary),
+.command-island :is(button, [role="button"]) { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 #app #topbar.mast :is(.nav, #more-sheet, .topwords) .word,
 #app #castor-save[aria-expanded="true"],
 #app #castor-shortcuts[aria-pressed="true"],
