@@ -221,10 +221,49 @@
     var menu = doc.getElementById('more-sheet');
     if (menu) menu.removeAttribute('data-under-push');
   }
+  /* Escape and a tap outside close the popover natively (light dismiss), and WebKit cannot animate a
+     popover once it is hidden. So as it closes that way, a still copy of it, exactly where it stood,
+     takes the same 120 ms leave Done takes (motion.js), then goes: three ways out, one motion, with
+     the popover's own light dismiss kept. A close asked from inside it (Done, Back, a row) has none. */
+  var askedInside = 0;
+  function copyLeaves() {
+    if (!Castor.motion || !Castor.motion.leave || !panel.getBoundingClientRect || !global.getComputedStyle) return;
+    var at = panel.getBoundingClientRect();
+    if (!at.width || !at.height) return;
+    var style = global.getComputedStyle(panel), copy = panel.cloneNode(true), i;
+    // Same classes, attributes and place in the page, so the page's rules draw it as they draw the
+    // popover; it keeps the popover attribute those rules name. Never shown as a popover, it differs
+    // only by what open popovers get: its display (an inline one wins over a closed popover's none)
+    // and its place, held where the popover stood, over everything.
+    ['position:fixed', 'display:' + style.display, 'opacity:' + style.opacity, 'left:' + at.left + 'px', 'top:' + at.top + 'px', 'right:auto', 'bottom:auto', 'width:' + at.width + 'px', 'height:' + at.height + 'px',
+      'margin:0', 'box-sizing:border-box', 'translate:none', 'transform:none', 'animation:none', 'transition:none', 'z-index:2147483000', 'pointer-events:none']
+      .forEach(function (pair) { var k = pair.indexOf(':'); copy.style.setProperty(pair.slice(0, k), pair.slice(k + 1)); });
+    copy.setAttribute('aria-hidden', 'true');
+    copy.setAttribute('data-leaving-copy', '');
+    copy.inert = true;
+    // After the popover in the page, so every id still finds the real one first.
+    panel.parentNode.insertBefore(copy, panel.nextSibling);
+    copy.scrollTop = panel.scrollTop;
+    var subs = panel.querySelectorAll('.settings-sub'), copies = copy.querySelectorAll('.settings-sub');
+    for (i = 0; i < subs.length && i < copies.length; i++) copies[i].scrollTop = subs[i].scrollTop;
+    Castor.motion.leave(copy, function () { if (copy.parentNode) copy.parentNode.removeChild(copy); });
+  }
   function wire() {
     panel = doc.getElementById('castor-settings');
     if (!panel || wired) return;
     wired = true;
+    // A finger or a key inside asks for its own close (Done leaves by itself); Escape never does.
+    // On the window, ahead of the popovers' own Escape handler on the document, which stops the key.
+    ['pointerdown', 'keydown'].forEach(function (name) {
+      global.addEventListener(name, function (event) {
+        if (name === 'keydown' && event.key === 'Escape') askedInside = 0;
+        else if (event.target && panel.contains(event.target)) askedInside = Date.now();
+      }, true);
+    });
+    panel.addEventListener('beforetoggle', function (event) {
+      if (event.newState !== 'closed' || panel._castorLeaving || Date.now() - askedInside < 1000) return;
+      try { copyLeaves(); } catch (e) { /* the popover still closes; only its leaving is not drawn */ }
+    });
     var done = doc.getElementById('settings-done'), back = doc.getElementById('settings-back');
     if (done) done.addEventListener('click', function () {
       if (!panel.hidePopover) return;

@@ -70,7 +70,11 @@ button {
   font: inherit; font-weight: 500; color: var(--paper); background: var(--ink); border: 1px solid var(--ink); border-radius: 999px;
   padding: 7px 16px; cursor: pointer; justify-self: start;
 }
-button:active { opacity: .8; }
+/* The press, as in the app (engine/motion.css): a finger down shows the wash and ink on the first
+   frame, nothing easing into it, with no grey tap flash and no double-tap wait. iOS shows :active
+   under a finger because the page listens for touches (web.ts). */
+:where(button, a[href], summary, label, select, input[type="checkbox"], input[type="radio"]) { touch-action: manipulation; }
+button:active:not(:disabled) { background-color: var(--wash) !important; color: var(--ink) !important; transition-duration: 0s; transition-delay: 0s; }
 button.small { font-size: 12.5px; padding: 2px 10px; color: var(--ink); background: transparent; border-color: var(--rule); }
 button.danger { color: var(--err); }
 fieldset { border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px; margin: 0; display: grid; gap: 6px; }
@@ -115,7 +119,7 @@ body.auth .aside { margin-top: 24px; }
 body.auth .quiet { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--rule); color: var(--ink-3); font-size: 13px; }
 
 /* Send the code again: pressable once the first email has had time to arrive. The wait is drawn
-   by the stylesheet alone (these pages run no script); the server's own limit still applies. */
+   by the stylesheet alone (no script counts on these pages); the server's own limit still applies. */
 @keyframes resend-count { from { transform: none; } to { transform: translateY(-30lh); } }
 @keyframes resend-ready { 0%, 99.9% { opacity: .45; pointer-events: none; } 100% { opacity: 1; pointer-events: auto; } }
 @keyframes resend-gone { 0%, 99.9% { opacity: 1; } 100% { opacity: 0; } }

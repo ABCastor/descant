@@ -15,6 +15,12 @@ export function esc(value: unknown): string {
 // The page reaches under a phone's status bar and home indicator (viewport-fit=cover) and its paper
 // colours the browser around it, so the screen is one surface. Sign-in pages (auth) are one narrow
 // column under the product's name.
+// The one script these pages run. iOS shows a button's :active press under a finger only when the
+// page listens for touches; this listener does nothing and never holds a scroll (passive). The pages'
+// policy allows it alone, by its hash (PAGE_CSP).
+const PRESS = "document.addEventListener('touchstart',function(){},{passive:true,capture:true})";
+const PRESS_HASH = "sha256-QB/xoQhM52IzteDF9g1nhiba5VsZKvPp02XDjCSE48M=";
+
 export function page(title: string, body: string, status = 200, headers: Record<string, string> = {}, layout: "plain" | "auth" = "plain"): Response {
   const html = `<!doctype html>
 <html lang="en">
@@ -28,6 +34,7 @@ export function page(title: string, body: string, status = 200, headers: Record<
 <title>${esc(title)}</title>
 <link rel="stylesheet" href="/descant.css">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script>${PRESS}</script>
 </head>
 <body class="${layout}">
 <header class="brand"><a href="/">Descant<span class="ast">*</span></a><span class="brand-line" aria-hidden="true"><span class="brand-dot"></span></span></header>
@@ -55,8 +62,9 @@ export function message(title: string, text: string, status: number, extra = "")
   return page(title, `<h1>${esc(title)}</h1>\n<p>${esc(text)}</p>\n${extra}`, status, {}, "auth");
 }
 
-// Pages made here run no script at all; the reader's page carries its own policy (index.ts).
-const PAGE_CSP = "default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+// Pages made here run one script, the touch listener above, and nothing else; the reader's page
+// carries its own policy (index.ts).
+const PAGE_CSP = `default-src 'none'; script-src '${PRESS_HASH}'; style-src 'self'; img-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`;
 
 /** The headers every answer carries, whatever made it. */
 export function secure(res: Response, csp = PAGE_CSP, cache = "no-store"): Response {

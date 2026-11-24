@@ -37,15 +37,19 @@
         : ((s.shared && s.shared.reason) || 'Waiting for the server to confirm the backup.')
           + (lastConfirmed ? ' Last confirmed ' + time(lastConfirmed) + '.' : '') }
     ];
+    /* Nothing typed, and the server not yet asked which version is on screen (restarting, or the
+       sign-in being confirmed): the words are the server's own, so this is checking, not a fault. */
+    var checking = s.checking === true && !s.warning;
     /* Amber only for a known failure; a receipt still on its way is part of saving, not a fault. */
-    var failed = !!(s.warning || s.problem || sharedFailed);
+    var failed = !checking && !!(s.warning || s.problem || sharedFailed);
     var onDevice = s.offline && device && !s.warning;
     if (onDevice) word = 'On device';
-    var state = onDevice ? 'device' : failed ? 'partial' : idle ? 'saved' : pending || s.saving || !rows.every(function (row) { return row.ok; }) ? 'saving' : 'saved';
+    else if (checking) word = 'Checking…';
+    var state = onDevice ? 'device' : failed ? 'partial' : checking ? 'saving' : idle ? 'saved' : pending || s.saving || !rows.every(function (row) { return row.ok; }) ? 'saving' : 'saved';
     var missing = rows.filter(function (row) { return !row.ok; }).map(function (row) { return row.label + ': ' + row.detail; });
     if (s.warning) missing.push(s.warning);
     if (s.problem) missing.push(s.problem);
-    var label = state === 'device' ? 'Kept on this device. Waiting to sync when the connection returns.' : state === 'saving' ? (history && !shared ? 'Checking the shared backup. ' + rows[2].detail : 'Saving') : state === 'saved' ? (device ? 'Saved: all three copies confirmed' : 'Saved in the article’s history and on the shared server. This browser is writing its own copy.') : 'Save incomplete. ' + missing.join(' ');
+    var label = state === 'device' ? 'Kept on this device. Waiting to sync when the connection returns.' : checking ? ('Checking with the server. ' + (s.problem || '')).trim() : state === 'saving' ? (history && !shared ? 'Checking the shared backup. ' + rows[2].detail : 'Saving') : state === 'saved' ? (device ? 'Saved: all three copies confirmed' : 'Saved in the article’s history and on the shared server. This browser is writing its own copy.') : 'Save incomplete. ' + missing.join(' ');
     // Saved words that break a writing rule are safe; only publishing waits. Calm words, the same mark.
     var held = state === 'saved' && s.held ? s.held : '';
     if (held) { word = 'Saved as draft'; label = (device ? 'All three copies confirmed. ' : 'Saved in the article’s history and on the shared server. ') + held; }

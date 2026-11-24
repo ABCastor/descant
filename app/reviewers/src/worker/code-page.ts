@@ -4,7 +4,7 @@ export const CODE_MINUTES = 10;
 
 /** Seconds before "Send the code again" can be pressed: time for the first email to arrive. */
 export const RESEND_WAIT_S = 30;
-// The seconds left, one per line: the stylesheet steps through them (these pages run no script).
+// The seconds left, one per line: the stylesheet steps through them (no script counts on these pages).
 const COUNT = Array.from({ length: RESEND_WAIT_S }, (_, i) => RESEND_WAIT_S - i).join("<br>");
 
 // `email` is the address typed on the sign-in page, kept in the forms (never the database) so the

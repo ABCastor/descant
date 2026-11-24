@@ -2232,14 +2232,25 @@
   function saveDescription() {
     var evidence = saver.evidence || {};
     var text = editorSource();
+    // Nothing typed here, and the server could not yet be asked which version is on screen (it is
+    // restarting, or the sign-in is still being confirmed): the words are the server's own, so this
+    // is checking, never "Not saved". Typed words that cannot reach it keep their own word.
+    var unasked = !saver.typed && (saver.text === null || text === saver.text) &&
+      (saver.state === 'offline' || saver.state === 'locked' && PUBLIC_WRITER && !signedOut && !Castor.role.confirmed);
+    var deviceAt = Castor.keep && Castor.keep.receipt ? Castor.keep.receipt(saver.path, text) : 0;
+    // Words just typed while the server is away reach this device's journal within a moment
+    // (keep.js): until its receipt comes back they are being kept, not lost. A journal that could
+    // not write says "Not saved".
+    var keeping = saver.state === 'offline' && saver.typed && text !== saver.text && !deviceAt && journalKeeps();
     return Castor.saveStatus.describe({
+      checking: unasked,
       current: text === saver.text, offline: saver.state === 'offline', saving: !!saver.inflight || saver.state === 'saving',
       // Nothing typed here since the article opened: the server's own saved text is on screen.
       idle: !saver.typed && ['ready', 'saved'].indexOf(saver.state) >= 0 && text === saver.text,
-      deviceAt: Castor.keep && Castor.keep.receipt ? Castor.keep.receipt(saver.path, text) : 0,
+      deviceAt: deviceAt,
       history: evidence.history, shared: evidence.shared, warning: [commentWarning(), fileWarning()].filter(Boolean).join(' '),
       held: (['ready', 'saved'].indexOf(saver.state) >= 0 && heldRules() || {}).note || '',
-      problem: ['dirty', 'refused', 'conflict', 'stale', 'locked', 'offline'].indexOf(saver.state) >= 0 ? saver.detail || SAVE_WORDS[saver.state] : ''
+      problem: keeping ? '' : ['dirty', 'refused', 'conflict', 'stale', 'locked', 'offline'].indexOf(saver.state) >= 0 ? saver.detail || SAVE_WORDS[saver.state] : ''
     });
   }
   var savePoll = 0;
@@ -2617,6 +2628,7 @@
           who: saver.writerUnknown ? [] : saver.writer || whoList() } : null };
     }
     var attachment = ++saveAttachment;
+    if (path !== saver.path) reattachTries = 0;
     var checkpoint = Promise.resolve();
     clearTimeout(saver.timer);
     saver.timer = 0; saver.retries = 0; saver.base = ''; saver.text = null;
@@ -2672,6 +2684,7 @@
     return read
       .then(function (p) {
         if (saver.path !== path || attachment !== saveAttachment) return null;
+        reattachTries = 0;
         // Native composition can still live only in the editable DOM. Capture it
         // before comparing snapshots or mounting a newer server document.
         if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
@@ -2761,7 +2774,7 @@
         drainSoon(0);
         return { markdown: p.markdown, sha: latest.sha };
       }, function () {
-        if (saver.path === path && attachment === saveAttachment) setSave('offline', 'The page could not ask the server which version it is showing. What you type is kept on this device.');
+        if (saver.path === path && attachment === saveAttachment) reattachLater('The page could not ask the server which version it is showing. What you type is kept on this device.');
         return null;
       })
       .then(function (server) {
@@ -3354,6 +3367,31 @@
     return !!at && Castor.editor.revealSource(at.start, at.end);
   }
 
+  /* The server could not be asked which version is open (a release restarting it, or no network):
+     ask again, the wait doubling from RETRY_FIRST to RETRY_MAX, and at once on focus, a return to
+     the screen or the network (retryNow). Words typed meanwhile are journalled and sent once it answers. */
+  var reattachTries = 0;
+  function reattachLater(detail) {
+    reattachTries += 1;
+    var wait = Math.min(RETRY_MAX, RETRY_FIRST * Math.pow(2, reattachTries - 1)), path = saver.path, attachment = saveAttachment;
+    setSave('offline', detail + ' Trying again in ' + Math.max(1, Math.round(wait / 1000)) + ' s.');
+    clearTimeout(saver.timer);
+    saver.timer = setTimeout(function () {
+      saver.timer = 0;
+      if (saver.path === path && attachment === saveAttachment && saver.state === 'offline' && writableHere()) reattach();
+    }, wait);
+  }
+  /* A page that opened with no copy of the article (the server away and none kept here) reads it
+     whole once the server answers; a page that shows the article asks which version it is. */
+  function reattach() {
+    if (liveState && liveState.path && liveState.path === saver.path && displayedPath !== saver.path) {
+      return reloadLive().catch(function () {
+        if (saver.state === 'offline' && !saver.timer) reattachLater('The page could not read the article from the server. What you type is kept on this device.');
+      });
+    }
+    return attachSaver();
+  }
+
   /* Never gives up: the wait doubles from RETRY_FIRST to RETRY_MAX and stays there. */
   function retryLater(state, detail) {
     saver.retries += 1;
@@ -3366,7 +3404,7 @@
   function retryNow(evenRefused) {
     drainSoon(0);
     if (!saver.base) {
-      if (writableHere() && saver.state === 'offline') return attachSaver();
+      if (writableHere() && saver.state === 'offline') return reattach();
       return;
     }
     if (saver.inflight) return;
@@ -3483,9 +3521,11 @@
   });
   global.addEventListener('pagehide', function () { flushSave(true); });
   global.addEventListener('online', function () {
-    if (!saver.base && writableHere()) attachSaver();
+    if (!saver.base && writableHere()) reattach();
     else retryNow(false);
   });
+  // A tab brought back to the front asks a server it is waiting for at once.
+  global.addEventListener('focus', function () { if (saver.state === 'offline') retryNow(false); });
   global.addEventListener('beforeunload', function (e) {
     if (Castor.editor && Castor.editor.flush) Castor.editor.flush();
     if (!saver.typed || editorSource() === saver.text) return undefined;
