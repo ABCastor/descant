@@ -2215,9 +2215,16 @@
     return paths.length ? pendingComments[paths[0]] : Object.keys(pendingCommentKeys).some(keptElsewhere)
       ? 'A comment is kept on this device and is waiting to save.' : '';
   }
+  /* The article is on screen (this device's copy) and the server has not yet answered which
+     version it is: nothing is known about the save, so it is checking. Right after a release the
+     server can take seconds to answer; the word is never blank meanwhile. */
+  var ASK_GRACE = 400;
+  function firstAsk() {
+    return saver.state === 'none' && saver.asking === saveAttachment && !!saver.path;
+  }
   function saveWord() {
     if (!reviewing() && commentWarning()) return 'Not saved: comment';
-    if (Castor.saveStatus && ['ready', 'saved', 'restored', 'unsaved', 'saving', 'offline'].indexOf(saver.state) >= 0) {
+    if (Castor.saveStatus && (['ready', 'saved', 'restored', 'unsaved', 'saving', 'offline'].indexOf(saver.state) >= 0 || firstAsk())) {
       return saveDescription().word;
     }
     var kept = journalKeeps();
@@ -2236,7 +2243,7 @@
     // restarting, or the sign-in is still being confirmed): the words are the server's own, so this
     // is checking, never "Not saved". Typed words that cannot reach it keep their own word.
     var unasked = !saver.typed && (saver.text === null || text === saver.text) &&
-      (saver.state === 'offline' || saver.state === 'locked' && PUBLIC_WRITER && !signedOut && !Castor.role.confirmed);
+      (saver.state === 'offline' || saver.state === 'locked' && PUBLIC_WRITER && !signedOut && !Castor.role.confirmed || firstAsk());
     var deviceAt = Castor.keep && Castor.keep.receipt ? Castor.keep.receipt(saver.path, text) : 0;
     // Words just typed while the server is away reach this device's journal within a moment
     // (keep.js): until its receipt comes back they are being kept, not lost. A journal that could
@@ -2660,6 +2667,12 @@
       return Promise.resolve();
     }
     if (!servedOverHttp() || !WRITABLE.test(path) || !global.fetch) { setSave('none'); return Promise.resolve(); }
+    // A server that answers at once is not shown checking first: Saved is the first word then.
+    clearTimeout(saver.askTimer);
+    saver.askTimer = setTimeout(function () {
+      if (attachment !== saveAttachment || saver.state !== 'none') return;
+      saver.asking = attachment; renderSaveState();
+    }, ASK_GRACE);
     function freshPiece() { return fetchPiece(path, { priority: 'low' }); }
     var backgroundRead = afterPaint ? new Promise(function (resolve) {
       // Cached text gets its first frame before revalidation does any work.
@@ -2778,6 +2791,8 @@
         return null;
       })
       .then(function (server) {
+        if (attachment === saveAttachment) clearTimeout(saver.askTimer);
+        if (saver.asking === attachment) { saver.asking = 0; if (saver.state === 'none') renderSaveState(); }
         if (saver.path !== path || attachment !== saveAttachment) return null;
         if (Castor.saveStatus && saver.path === path) {
           refreshSaveEvidence();
