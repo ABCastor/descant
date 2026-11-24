@@ -3639,7 +3639,7 @@
      same article, version, text and writer, at the same size, on a page that can write it, on
      text, and before the writer touched the live page. Otherwise the tap is dropped and the page
      stays as it opened. It never changes a character. */
-  var touchedLive = false;
+  var touchedLive = false, tapPlaced = false;
   function pageShown() { return !!(els.frame && els.frame.hasAttribute && els.frame.hasAttribute('data-ready')); }
   // A touch on the hidden page under the picture is not a touch on the live page.
   ['pointerdown', 'touchstart'].forEach(function (name) {
@@ -3718,8 +3718,9 @@
       // picture showed them, moved by however far this page is scrolled from it.
       var at = ed.sourceOffsetAt(message.tap.x, message.tap.y + p.scroll - now.scroll);
       if (!Number.isSafeInteger(at) || at < 0 || ed.revealSource(at, at) !== true) return answer(false);
-      var range = ed.getSourceRange ? ed.getSourceRange() : null;
-      return answer(!!range && range.start === at && range.end === at);
+      var range = ed.getSourceRange ? ed.getSourceRange() : null, placed = !!range && range.start === at && range.end === at;
+      if (placed) tapPlaced = true;
+      return answer(placed);
     }
     if (touchedLive || !ed || !ed.sourceOffsetAt || !ed.revealSource) return Promise.resolve(answer(false));
     var text = editorSource(), shown = typeof text === 'string' ? digestNow(text) : null;
@@ -5167,12 +5168,15 @@
        recovery has settled. */
     Promise.resolve(live && live.device ? null : attached).then(function () {
       // The article opens where it was left: placed while the frame is still hidden, and
-      // placed again once fonts and margin notes settle, unless the writer has scrolled.
+      // placed again once fonts and margin notes settle, unless the writer has scrolled or put
+      // the caret in the text (a touch, or the launch picture's tap): its reveal moves the page
+      // then, and placing it again would stop that scroll and leave the line under the keyboard.
       var place = displayedPath && !linkedPlace() ? placeOf(displayedPath) : null, placedAt = null;
       if (goToPlace(place)) placedAt = els.scroll.scrollTop;
       function settledLayout() {
         queueKnot(false);
         if (Castor.footnotes && Castor.footnotes.layout) Castor.footnotes.layout();
+        if (touchedLive || tapPlaced) placedAt = null;
         if (placedAt !== null && els.scroll.scrollTop === placedAt && goToPlace(place)) placedAt = els.scroll.scrollTop;
       }
       function reveal() {

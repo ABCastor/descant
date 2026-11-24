@@ -1589,9 +1589,19 @@
     if (!host || !c) return;
     var scroll = page.closest && page.closest('.page-scroll');
     if (!scroll || !scroll.scrollBy) return;
+    var vv = global.visualViewport, zoomed = !!vv && (vv.scale || 1) > 1.01;
+    var touch = global.matchMedia && global.matchMedia('(pointer: coarse)').matches;
+    // As the keyboard rises, iOS pans the window to the caret for a moment and every box on the page is
+    // measured from there, until the app puts the window back. A line low on the screen then looks clear
+    // of the keyboard and is left under it, so the reveal waits for the window (a pinch zoom's pan aside).
+    if (touch && !zoomed && (vv && vv.offsetTop > 0.5 || (global.scrollY || 0) > 0.5)) {
+      revealCaret.waits = (revealCaret.waits || 0) + 1;
+      if (revealCaret.waits <= 10) { requestCaretReveal(false); return; }
+    }
+    revealCaret.waits = 0;
     var g = caretGeometry(host, c.start, true);
     if (!g) return;
-    var vv = global.visualViewport, box = scroll.getBoundingClientRect();
+    var box = scroll.getBoundingClientRect();
     var app = document.getElementById('app');
     var row = app && parseFloat(frameReads.style(app).getPropertyValue('--writing-row-bottom'));
     // A top writing row (iPad) and the phone's floating bar never show together.
@@ -1600,10 +1610,10 @@
       var topbar = document.querySelector('.topbar');
       row = topbar ? topbar.getBoundingClientRect().bottom : box.top;
     }
-    var touch = global.matchMedia && global.matchMedia('(pointer: coarse)').matches;
     var keyboard = touch && vv && vv.height < global.innerHeight - 120;
     var top = Math.max(box.top, row) + (touch ? 16 : 0);
-    var bottom = Math.min(box.bottom, vv ? vv.height + vv.offsetTop : global.innerHeight) - (keyboard ? 72 : touch ? 16 : 0);
+    // The app keeps its frame at the window's top: the visible bottom is the visible height.
+    var bottom = Math.min(box.bottom, vv ? vv.height + (zoomed ? vv.offsetTop : 0) : global.innerHeight) - (keyboard ? 72 : touch ? 16 : 0);
     if (bar) bottom = Math.min(bottom, bar - 16);
     var delta = g.lineTop < top ? g.lineTop - top : g.lineTop + g.lineHeight > bottom ? g.lineTop + g.lineHeight - bottom : 0;
     if (Math.abs(delta) > 0.5) scroll.scrollBy({ top: delta, behavior: 'smooth' });
@@ -6075,6 +6085,10 @@
         // A writer's own scroll wins: the typewriter line yields until the
         // caret moves again (setCaret clears the flag).
         if (global.visualViewport) {
+          // The view before any keyboard. iOS reports nothing before the keyboard rises, and its first
+          // report has innerHeight cut with the visible height: a tallest view first measured then
+          // would never see the keyboard open, and a keyboard rising after the tap's reveal would cover the line.
+          tallestView[global.innerWidth || 0] = Math.max(tallestView[global.innerWidth || 0] || 0, global.innerHeight || 0, global.visualViewport.height || 0);
           global.visualViewport.addEventListener('resize', keyboardMoved);
           global.visualViewport.addEventListener('scroll', keyboardMoved);
         }
