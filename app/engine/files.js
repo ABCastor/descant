@@ -628,7 +628,7 @@
     var row = event.target && event.target.closest && event.target.closest('.files-tree-item');
     if (!row) return;
     var rows = rowsIn(row.closest('[role="tree"]')), at = rows.indexOf(row), path = row.dataset.path;
-    var entry = (path === '' || path === '@other-pieces' || path.indexOf('@group-') === 0)
+    var entry = (path === '' || path.indexOf('@other-pieces') === 0 && !/\.md$/.test(path) || path.indexOf('@group-') === 0)
       ? { path: path, kind: 'folder' } : entryAt(path);
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
       event.preventDefault();
@@ -715,6 +715,8 @@
   function renderFiles(focusPath) {
     var body = S.filesBody;
     if (!body) return;
+    // An import in progress keeps the panel until its Back.
+    if (Castor.importer && Castor.importer.active && Castor.importer.active()) { Castor.importer.render(); return; }
     var active = DOC.activeElement;
     var hadFocus = body.contains(active);
     var activeRow = hadFocus && active.closest && active.closest('.files-tree-item');
@@ -763,15 +765,49 @@
       otherNode.appendChild(otherRow);
       if (!S.folded[otherEntry.path]) {
         var otherGroup = el('div', 'files-tree-group'); otherGroup.setAttribute('role', 'group');
-        otherChildren.forEach(function (entry) {
-          otherGroup.appendChild(fileRow(entry, 2, { readOnly: true, otherPiece: true, articlePath: entry.articlePath, openTarget: entry.otherName, label: entry.otherName }));
+        /* Articles that carry a group (an import keeps its Ulysses groups and vault folders)
+           sit under that group, in their order; the rest stay at the top. */
+        var groups = {}, groupOrder = [];
+        otherChildren.forEach(function (entry, i) {
+          var group = others[i].group || '';
+          if (!group) {
+            otherGroup.appendChild(fileRow(entry, 2, { readOnly: true, otherPiece: true, articlePath: entry.articlePath, openTarget: entry.otherName, label: entry.otherName }));
+            return;
+          }
+          if (!groups[group]) { groups[group] = []; groupOrder.push(group); }
+          groups[group].push(entry);
+        });
+        groupOrder.forEach(function (group) {
+          var groupEntry = { path: '@other-pieces/@group/' + group, kind: 'folder', type: 'folder', preview: 'folder' };
+          var node = el('div', 'files-node files-article-group');
+          var row = fileRow(groupEntry, 2, { readOnly: true, label: group });
+          row.classList.add('files-folder');
+          row.setAttribute('aria-expanded', String(!S.folded[groupEntry.path]));
+          node.appendChild(row);
+          if (!S.folded[groupEntry.path]) {
+            var inner = el('div', 'files-tree-group'); inner.setAttribute('role', 'group');
+            groups[group].forEach(function (entry) {
+              inner.appendChild(fileRow(entry, 3, { readOnly: true, otherPiece: true, articlePath: entry.articlePath, openTarget: entry.otherName, label: entry.otherName }));
+            });
+            node.appendChild(inner);
+          }
+          otherGroup.appendChild(node);
         });
         otherNode.appendChild(otherGroup);
       }
       tree.appendChild(otherNode);
     }
     body.appendChild(tree);
-    body.appendChild(renderNewFolder(''));
+    var area = renderNewFolder('');
+    if (served() && Castor.importer && Castor.importer.mount && !(Castor.role && (Castor.role.reviewer || Castor.role.reader))) {
+      var start = el('button', 'files-new-folder files-import', 'Import\u2026');
+      start.type = 'button';
+      start.addEventListener('click', function () {
+        Castor.importer.mount(body, function () { renderFiles(); });
+      });
+      area.insertBefore(start, area.firstChild.nextSibling);
+    }
+    body.appendChild(area);
 
     var note = el('p', 'files-mode-note', served()
       ? 'Changes happen in a sandbox copy of this piece.'

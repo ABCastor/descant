@@ -28,6 +28,7 @@ POST_ROUTES = {
     "/api/files/upload": "api_files_upload", "/api/files/move": "api_files_move",
     "/api/files/order": "api_files_order", "/api/agent/batch": "api_agent_batch",
     "/api/share/article": "api_share_article", "/api/pieces/new": "api_pieces_new",
+    "/api/import": "api_import",
 }
 STATIC = {"/": "index.html", "/sw.js": "@worker", "/manifest.webmanifest": "manifest.webmanifest",
           "/favicon.ico": "favicon.ico", "/favicon.svg": "favicon.svg",

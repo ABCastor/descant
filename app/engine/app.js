@@ -3635,6 +3635,19 @@
   Castor.pieces = {
     open: openPiece,
     list: function () { return pieces.slice(); },
+    /* The catalogue again, after articles were added (an import): the strip and Files. */
+    refresh: function () {
+      return global.fetch(Castor.endpoints.api('pieces'), { cache: 'no-store' }).then(function (r) {
+        return r.ok ? r.json() : null;
+      }).then(function (list) {
+        if (!Array.isArray(list)) return false;
+        var kept = pieces.filter(function (p) { return !list.some(function (q) { return q.path === p.path; }) && p.path === openArticle(); });
+        pieces = kept.concat(list);
+        renderTabs();
+        if (Castor.files && Castor.files.render) Castor.files.render();
+        return true;
+      }).catch(function () { return false; });
+    },
     /* No article is open on the empty page, though the editor still holds the last
        one (piecePath keeps naming it, so its saves and comments stay bound to it). */
     current: function () { return emptied ? '' : openArticle(); }

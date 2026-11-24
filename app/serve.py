@@ -71,6 +71,7 @@ sys.path.insert(0, str(APP_DIR))
 import publication
 import space_config
 REPO_ROOT = APP_DIR.parents[1]                     # the repository root
+IMPORT_RECORD = ".import.json"                      # importer.RECORD: what an import remembers, hidden from Files
 REVIEWS = APP_DIR / "reviews"
 REVIEW_ASSETS = REVIEWS / "assets"
 
@@ -574,8 +575,12 @@ def sandbox_path(root, relative, allow_root=False):
     return target if target != resolved_root and resolved_root in target.parents else None
 
 
-def commit_files(changes, subject, people=None, trailers=None, move=None):
-    """Commit exact bounded bytes, including an unchanged candidate retained by a crash."""
+def commit_files(changes, subject, people=None, trailers=None, move=None, writing_save=None):
+    """Commit exact bounded bytes, including an unchanged candidate retained by a crash.
+
+    `writing_save` names the article.md among the changes that holds a writer's words: the
+    check then reads it as it reads a typed save, so a writing rule (an em dash) holds the
+    article back from publishing instead of refusing the words."""
     if getattr(READ_ONLY_CAPTURE, 'active', False):
         raise ValueError('offline-read-only')
     relative = [target.relative_to(REPO_ROOT).as_posix() for target in changes]
@@ -651,10 +656,12 @@ def commit_files(changes, subject, people=None, trailers=None, move=None):
             added = git("add", "--", *staging)
             if added.returncode:
                 raise ValueError("Git could not stage this save: " + added.stderr.strip())
-        gate = subprocess.run([str(REPO_ROOT / "check.sh")], cwd=REPO_ROOT,
-                              capture_output=True, text=True, timeout=60)
+        gate = subprocess.run([str(REPO_ROOT / "check.sh"), *(["--writing-save", writing_save] if writing_save else [])],
+                              cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
         if gate.returncode:
-            raise ValueError("the repository gate refused this save: " + (gate.stdout + gate.stderr)[-600:])
+            held, refused = gate_failures(gate.stdout + "\n" + gate.stderr) if writing_save else ([], [""])
+            if refused or not held:
+                raise ValueError("the repository gate refused this save: " + (gate.stdout + gate.stderr)[-600:])
         if staged_paths() != expected_staging or blobs(":") != desired or any(
                 (target.read_bytes() if target.is_file() else None) != data for target, data in changes.items()):
             raise ValueError("the save candidate changed before commit; its files are retained")
@@ -856,7 +863,7 @@ def sandbox_files(piece):
         relative = target.relative_to(root).as_posix()
         if relative == "drafts" or relative.startswith("drafts/"):
             continue
-        if sandbox_path(root, relative) is None or target.name in (".order", ".gitkeep", ".files-migrated.json"):
+        if sandbox_path(root, relative) is None or target.name in (".order", ".gitkeep", ".files-migrated.json", IMPORT_RECORD):
             continue
         if target.is_dir():
             entries.append({"path": relative, "name": target.name, "kind": "folder"})
@@ -2862,7 +2869,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         route = urlparse(self.path or "").path
-        if route in ("/api/piece", "/api/comments", "/api/comments/action", "/api/drafts", "/api/agent/comment", "/api/agent/batch", "/api/mentions/read", "/api/pieces/new") or route.startswith("/api/files/"):
+        if route in ("/api/piece", "/api/comments", "/api/comments/action", "/api/drafts", "/api/agent/comment", "/api/agent/batch", "/api/mentions/read", "/api/pieces/new", "/api/import") or route.startswith("/api/files/"):
             sync_pull(force=True)
         if route == "/api/publication/publish":
             return self.api_publication_publish()
@@ -2892,6 +2899,9 @@ class Handler(SimpleHTTPRequestHandler):
         if route == "/api/pieces/new":
             if self.cross_site_refused(): return None
             return self.api_pieces_new()
+        if route == "/api/import":
+            if self.cross_site_refused(): return None
+            return self.api_import()
         if route == "/api/files/mkdir":
             return self.api_files_mkdir()
         if route == "/api/files/upload":
@@ -3259,6 +3269,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "status": head.get("status", ""),
                 "phase": head.get("phase", ""),
                 "owner": head.get("owner", ""),
+                **({"group": head["group"]} if head.get("group") else {}),
                 "locked": self.piece_locked(path),
                 "live": bool(self.article_live_record(path)),
             })
@@ -4262,6 +4273,34 @@ class Handler(SimpleHTTPRequestHandler):
         path = target.relative_to(REPO_ROOT).as_posix()
         return self.reply(200, {"saved": True, "path": path, "folder": "articles/" + folder, "sha": sha,
                                 "title": article_title(body.get("title"))})
+
+    def api_import(self):
+        """POST {who, mode: plan | write | attach}: a Ulysses or Obsidian import (importer.py)."""
+        import importer  # only here, so the server still starts from its own files alone
+        body, why = self.json_body()
+        if why:
+            return self.reply(400, {"ok": False, "error": why})
+        if not isinstance(body, dict) or body.get("mode") not in ("plan", "write", "attach"):
+            return self.reply(400, {"ok": False, "error": "the body must name a mode: plan, write or attach"})
+        try:
+            if body["mode"] == "plan":
+                with FILES_LOCK:
+                    return self.reply(200, {"ok": True, "items": importer.plan(body.get("items"), _agent_app())})
+            session = writing_session(body.get("who"))
+            who = next(kind for kind, _ in session if kind in FOUNDERS)
+            app = _agent_app()
+            with FILES_LOCK:
+                if body["mode"] == "attach":
+                    done = importer.attach(body.get("key"), body.get("material"), who, app, session)
+                else:
+                    done = importer.write(importer.check_item(body.get("item"), app), who, app, session)
+        except ValueError as error:
+            return self.reply(400, {"ok": False, "error": str(error)[:600]})
+        except OSError as error:
+            return self.reply(500, {"ok": False, "error": "the import could not be written: " + str(error)[:200]})
+        if done.get("state") in ("created", "updated", "kept"):
+            print("  import %s %s" % (done["state"], done.get("folder") or done.get("path")))
+        return self.reply(200, dict(done, ok=True))
 
     @file_errors
     def api_files_mkdir(self):
