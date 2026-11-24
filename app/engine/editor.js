@@ -6325,6 +6325,27 @@
       }
       return null;
     },
+    // The offset of getSource() a tap at this point of the window would put the caret at, or null
+    // when the point is on no text of the article: a margin, the bar, a control, a footnote number,
+    // the subtitle or the front matter. Reads the page; changes nothing.
+    sourceOffsetAt: function (x, y) {
+      if (!page || !document.elementFromPoint) return null;
+      var hit = document.elementFromPoint(x, y), el = hit && hit.closest ? hit.closest('.cw-block') : null;
+      if (!el || !page.contains(el) || hit.closest('[data-castor-ui],.cw-subtitle,.footnote-ref,.cw-fnref')) return null;
+      var id = el.getAttribute('data-block-id'), b = blockOf(id);
+      if (!b || b.type === 'frontmatter' || !visible(b)) return null;
+      var at = tappedSourceOffset(el, x, y);
+      if (at == null) return null;
+      var offset = 0;
+      for (var i = 0; i < blocks.length; i++) {
+        var block = blocks[i];
+        if (block.empty && !block.source) continue;
+        offset += (typeof block.sep === 'string' ? block.sep : (i === 0 ? '' : '\n\n')).length;
+        if (block.id === id) return offset + Math.max(0, Math.min(block.source.length, at));
+        offset += block.source.length;
+      }
+      return null;
+    },
     // The caret on a range of getSource(), say the words a save check refused, in typing mode, with
     // the line brought into view as a tap brings it. A range in the front matter shows its block.
     revealSource: function (start, end) {

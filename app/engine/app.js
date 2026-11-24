@@ -2802,10 +2802,14 @@
       saver.path && WRITABLE.test(saver.path) && servedOverHttp() && !reviewing()));
   }
   /* Within keep.js's SOON of this call, the editor's text is on this device. */
+  /* Whose words the journal keeps them as: the writer they are bound to, or the session's. */
+  function journalWho() {
+    return saver.writerUnknown ? [] : saver.writer && saver.writer.length ? saver.writer.slice() : whoList();
+  }
   function journal() {
     if (!keepOn()) return;
     var path = saver.path;
-    var who = saver.writerUnknown ? [] : saver.writer && saver.writer.length ? saver.writer.slice() : whoList();
+    var who = journalWho();
     Castor.keep.note(path, function () {
       if (saver.path !== path) return null;
       // The sheet's fetched version is known before attachment's second read returns.
@@ -3621,6 +3625,108 @@
         })
       ]).then(function (receipt) { clearTimeout(timer); return receipt; }, function (e) { clearTimeout(timer); throw e; });
     };
+    global.DescantNative.picture = function () { return pictureOfPage().catch(function () { return null; }); };
+    global.DescantNative.tap = function (message) { return placeTap(message).catch(function () { return null; }); };
+  }
+
+  /* --- the first tap ---------------------------------------------------------- */
+
+  /* The app shell opens on a picture of the editor's last screen while this page loads, and
+     remembers where that picture was tapped. picture() describes what the screen showed when the
+     shell keeps it, and no word of the article: the article, the version open, a digest of the
+     exact text, the journal's writer, the caret, the article's area, the scroll and the size.
+     tap() then puts the caret where the picture was tapped, once this page is live, only on that
+     same article, version, text and writer, at the same size, on a page that can write it, on
+     text, and before the writer touched the live page. Otherwise the tap is dropped and the page
+     stays as it opened. It never changes a character. */
+  var touchedLive = false;
+  function pageShown() { return !!(els.frame && els.frame.hasAttribute && els.frame.hasAttribute('data-ready')); }
+  // A touch on the hidden page under the picture is not a touch on the live page.
+  ['pointerdown', 'touchstart'].forEach(function (name) {
+    document.addEventListener(name, function () { if (pageShown()) touchedLive = true; }, { capture: true, passive: true });
+  });
+  function openVersion() { return saver.base || (opened && opened.path === saver.path ? opened.sha : ''); }
+  /* The digest at once, from import.js's SHA-256 (loaded before this file on the writing page),
+     or null. tap() needs it: WebKit raises the keyboard for a focus only while the shell's
+     script is running, so the caret must be placed before tap() returns, not after an await. */
+  function digestNow(text) {
+    var sha256 = Castor.importer && Castor.importer.sha256;
+    if (typeof sha256 !== 'function') return null;
+    try { var hex = sha256(text); return typeof hex === 'string' && /^[0-9a-f]{64}$/.test(hex) ? hex : null; } catch (e) { return null; }
+  }
+  function digestOf(text) {
+    var now = digestNow(text);
+    if (now) return Promise.resolve(now);
+    var subtle = global.crypto && global.crypto.subtle;
+    if (!subtle || !global.TextEncoder) return Promise.resolve(null);
+    return Promise.resolve(subtle.digest('SHA-256', new global.TextEncoder().encode(text))).then(function (buffer) {
+      return Array.prototype.map.call(new Uint8Array(buffer), function (b) { return (b < 16 ? '0' : '') + b.toString(16); }).join('');
+    });
+  }
+  function pagePoints(v) { return Math.round((Number(v) || 0) * 100) / 100; }
+  function boxOf(el) { return el && el.getBoundingClientRect ? el.getBoundingClientRect() : null; }
+  /* The article's text on screen: its column, inside the scroller, below the bar. */
+  function textArea() {
+    var box = boxOf(els.article), view = boxOf(els.scroll), bar = boxOf(els.topbar);
+    if (!box) return { x: 0, y: 0, width: 0, height: 0 };
+    var top = Math.max(box.top, view ? view.top : 0, bar && bar.height ? bar.bottom : 0);
+    var bottom = Math.min(box.bottom, view ? view.bottom : box.bottom), left = Math.max(box.left, view ? view.left : box.left);
+    var right = Math.min(box.right, view ? view.right : box.right);
+    return { x: pagePoints(left), y: pagePoints(top), width: pagePoints(Math.max(0, right - left)), height: pagePoints(Math.max(0, bottom - top)) };
+  }
+  /* What the screen shows now, given the digest of its text; null when the page cannot be written here. */
+  function pageNow(text, shown) {
+    var ed = Castor.editor, path = saver.path;
+    if (!shown || !pageShown() || reviewing() || emptied || !path || path !== openArticle() || !writableHere() || !ed ||
+        (ed.isReadOnly && ed.isReadOnly()) || saver.state === 'locked' || editorSource() !== text) return null;
+    var base = openVersion(), who = journalWho(), writer = typeof who[0] === 'string' ? who[0] : '';
+    if (!base || !writer) return null;
+    var range = ed.getSourceRange ? ed.getSourceRange() : null;
+    var caret = range && Number.isSafeInteger(range.start) && Number.isSafeInteger(range.end) ? { start: range.start, end: range.end } : null;
+    return { version: 1, path: path, base: base, shown: shown, writer: writer, caret: caret, area: textArea(),
+      scroll: pagePoints(els.scroll ? els.scroll.scrollTop : 0), width: pagePoints(global.innerWidth), height: pagePoints(global.innerHeight) };
+  }
+  function pictureOfPage() {
+    var text = editorSource();
+    if (typeof text !== 'string' || !pageShown()) return Promise.resolve(null);
+    return digestOf(text).then(function (shown) { return pageNow(text, shown); });
+  }
+  function exactKeys(o, keys) {
+    return !!o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).sort().join() === keys.slice().sort().join();
+  }
+  function finite(v) { return typeof v === 'number' && isFinite(v); }
+  var PICTURE_KEYS = ['version', 'path', 'base', 'shown', 'writer', 'caret', 'area', 'scroll', 'width', 'height'];
+  function validPicture(p) {
+    if (!exactKeys(p, PICTURE_KEYS) || p.version !== 1 || typeof p.path !== 'string' || !WRITABLE.test(p.path) ||
+        typeof p.base !== 'string' || !/^[0-9a-f]{7,64}$/.test(p.base) || typeof p.shown !== 'string' || !/^[0-9a-f]{64}$/.test(p.shown) ||
+        typeof p.writer !== 'string' || !p.writer || p.writer.length > 64 || !finite(p.scroll) || !finite(p.width) || !finite(p.height)) return false;
+    if (p.caret !== null && !(exactKeys(p.caret, ['start', 'end']) && Number.isSafeInteger(p.caret.start) && Number.isSafeInteger(p.caret.end))) return false;
+    return exactKeys(p.area, ['x', 'y', 'width', 'height']) && ['x', 'y', 'width', 'height'].every(function (k) { return finite(p.area[k]); });
+  }
+  function validTap(m) {
+    return exactKeys(m, ['version', 'picture', 'tap']) && m.version === 1 && validPicture(m.picture) &&
+      exactKeys(m.tap, ['x', 'y']) && finite(m.tap.x) && finite(m.tap.y) && m.tap.x >= 0 && m.tap.y >= 0;
+  }
+  function placeTap(message) {
+    if (!validTap(message) || !pageShown()) return Promise.resolve(null);
+    var p = message.picture, ed = Castor.editor;
+    function answer(placed) { return { version: 1, placed: placed }; }
+    function place(now) {
+      if (!now || touchedLive || now.path !== p.path || now.base !== p.base || now.shown !== p.shown || now.writer !== p.writer ||
+          Math.abs(now.width - p.width) > 0.5 || Math.abs(now.height - p.height) > 0.5) return answer(false);
+      // The same text at the same size lies out the same: the tapped words are where the
+      // picture showed them, moved by however far this page is scrolled from it.
+      var at = ed.sourceOffsetAt(message.tap.x, message.tap.y + p.scroll - now.scroll);
+      if (!Number.isSafeInteger(at) || at < 0 || ed.revealSource(at, at) !== true) return answer(false);
+      var range = ed.getSourceRange ? ed.getSourceRange() : null;
+      return answer(!!range && range.start === at && range.end === at);
+    }
+    if (touchedLive || !ed || !ed.sourceOffsetAt || !ed.revealSource) return Promise.resolve(answer(false));
+    var text = editorSource(), shown = typeof text === 'string' ? digestNow(text) : null;
+    // With the digest at once, the caret is placed inside this call; otherwise a moment later,
+    // where the shell's script has ended and the keyboard waits for the writer's tap.
+    if (shown) return Promise.resolve(place(pageNow(text, shown)));
+    return pictureOfPage().then(place);
   }
 
   Castor.saver = {
