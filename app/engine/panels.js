@@ -975,6 +975,7 @@
     var dock = swipe.dock;
     swipe = null;
     if (shut) {
+      if (Castor.motion) Castor.motion.haptic('snap');
       var side = dock === els.left ? 'left' : 'right';
       openIds(side).forEach(function (id) { delete state.open[id]; });
       sync();

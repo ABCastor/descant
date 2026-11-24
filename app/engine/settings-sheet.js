@@ -226,7 +226,11 @@
     if (!panel || wired) return;
     wired = true;
     var done = doc.getElementById('settings-done'), back = doc.getElementById('settings-back');
-    if (done) done.addEventListener('click', function () { if (panel.hidePopover) panel.hidePopover(); });
+    if (done) done.addEventListener('click', function () {
+      if (!panel.hidePopover) return;
+      if (Castor.motion) Castor.motion.leave(panel, function () { panel.hidePopover(); });
+      else panel.hidePopover();
+    });
     if (back) back.addEventListener('click', function () {
       if (panel.hidePopover) panel.hidePopover();
       // After this tap has finished, or the Menu's own outside-tap rule would close it again.

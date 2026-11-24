@@ -121,7 +121,6 @@ body {
   top: var(--viewport-top, 0px);
   left: 0;
   right: 0;
-  transition: width var(--dur, 220ms) var(--ease, cubic-bezier(.2, .8, .2, 1));
 }
 #frame[data-size="ipad"]  { --frame-w: 834px; }
 #frame[data-size="phone"] { --frame-w: 390px; }
@@ -1259,9 +1258,11 @@ body {
   border: 0;
   padding: 0;
   cursor: pointer;
-  transition: width 120ms linear, background 120ms linear;
+  /* grows from its centre on transform: a width change would lay the rail out again every frame */
+  transition: transform 120ms linear, background 120ms linear;
 }
-.saves-rail .tick:hover { width: 14px; }
+.saves-rail .tick:hover { transform: scaleX(1.4); }
+.saves-rail .tick[data-base="1"]:hover { transform: none; }
 .saves-rail .tick[data-base="1"] { height: 2px; width: 14px; background: var(--accent, #8a6a45); }
 
 /* --- thread card shell (comments.js) --------------------------------------- */
@@ -2480,10 +2481,6 @@ html[data-keys="off"] .shortcut-hint { display: none; }
   border-radius: var(--radius-card, 8px);
   box-shadow: 0 0 0 9999px var(--scrim, rgba(0, 0, 0, .18));
   pointer-events: none;
-  transition: left var(--dur, 220ms) var(--ease, cubic-bezier(.2, .8, .2, 1)),
-              top var(--dur, 220ms) var(--ease, cubic-bezier(.2, .8, .2, 1)),
-              width var(--dur, 220ms) var(--ease, cubic-bezier(.2, .8, .2, 1)),
-              height var(--dur, 220ms) var(--ease, cubic-bezier(.2, .8, .2, 1));
 }
 .walkthrough-card {
   position: fixed;
@@ -2571,9 +2568,10 @@ html[data-keys="off"] .shortcut-hint { display: none; }
 .walkthrough-spotlight {
   transition: opacity 140ms var(--ease, cubic-bezier(.2, .8, .2, 1));
 }
+/* A new place is reached by a glide on transform (walkthrough.js, Castor.motion.glide), never by
+   animating left and top. */
 .walkthrough-card {
-  transition: left 220ms cubic-bezier(.16, 1, .3, 1), top 220ms cubic-bezier(.16, 1, .3, 1),
-              opacity 140ms var(--ease, cubic-bezier(.2, .8, .2, 1));
+  transition: opacity 140ms var(--ease, cubic-bezier(.2, .8, .2, 1));
 }
 .walkthrough[data-dragging="1"] .walkthrough-card { transition: none; }
 .walkthrough[data-settling="1"] .walkthrough-spotlight,

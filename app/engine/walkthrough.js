@@ -550,6 +550,8 @@
       if (writing && !(writing.width || writing.height)) writing = null;
     }
     var fits = true;
+    // Where the card stood, so a new place is reached by a glide on transform, not by moving left and top.
+    var was = S.card.hidden || S.drag ? null : { left: parseFloat(S.card.style.left), top: parseFloat(S.card.style.top) };
 
     if (phone()) {
       S.root.dataset.phone = '1';
@@ -590,6 +592,9 @@
       fits = true;
     }
     S.card.hidden = !fits;
+    if (was && fits && isFinite(was.left) && isFinite(was.top) && Castor.motion) {
+      Castor.motion.glide(S.card, was.left - (parseFloat(S.card.style.left) || 0), was.top - (parseFloat(S.card.style.top) || 0), 'menu');
+    }
     S.reopen.hidden = fits;
     if (!fits) ring = null;
     S.root.dataset.covered = ring && covering(ring) ? '1' : '0';

@@ -732,7 +732,7 @@
     sheetMotion = els.article.animate([
       { opacity: .72, transform: 'translate(' + direction * 8 + 'px, 4px)' },
       { opacity: 1, transform: 'translate(0, 0)' }
-    ], { duration: 200, easing: 'cubic-bezier(.16,1,.3,1)' });
+    ], { duration: Castor.motion ? Castor.motion.ms('menu') : 280, easing: 'cubic-bezier(.32,.72,0,1)' });
   }
 
   /* The article the page holds, whether or not a tab shows it. */
@@ -2501,6 +2501,16 @@
     renderSaveState();
     bus.emit('save:state', { state: state });
   }
+
+  // One haptic when a save is first refused, not again at every pause until a save goes through.
+  var refusalFelt = false;
+  function feelSaveState(e) {
+    if (e.state === 'refused') {
+      if (!refusalFelt && Castor.motion) Castor.motion.haptic('refused');
+      refusalFelt = true;
+    } else if (e.state === 'saved') refusalFelt = false;
+  }
+  bus.on('save:state', feelSaveState);
 
   var KEPT_WAIT = 1500;              // opening never waits longer than this on the journal
   var opened = null, lastTypedCopy = null;

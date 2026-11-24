@@ -4220,10 +4220,11 @@
     note.setAttribute('role', 'status');
     note.appendChild(el('span', 'castor-posted-word', 'Posted'));
     host.appendChild(note); S.postedNote = note;
+    if (Castor.motion) Castor.motion.haptic('posted');
     global.clearTimeout(S.postedTimer);
     S.postedTimer = global.setTimeout(function () {
       note.classList.add('is-leaving');
-      global.setTimeout(function () { if (note.remove) note.remove(); if (S.postedNote === note) S.postedNote = null; }, 240);
+      global.setTimeout(function () { if (note.remove) note.remove(); if (S.postedNote === note) S.postedNote = null; }, Castor.motion ? Castor.motion.ms('out') + 40 : 240);
     }, 2400);
   }
 

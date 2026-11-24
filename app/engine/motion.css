@@ -1,0 +1,173 @@
+/* ============================================================================
+   Motion and touch: the one kit every moving or pressable thing uses.
+
+   Timing follows a native reading app's measured rhythm: a menu or a note 280 ms,
+   the writing bar 290 ms with no overshoot, a sheet 410 ms in and 120 ms out, a
+   side page 500 ms on a critically damped spring, every exit 120 ms. Only
+   transform, translate, scale and opacity move, from CSS (never a script loop: in
+   an app's web view script-driven animation runs at 60 fps even on a 120 Hz
+   screen). A finger down shows the press on the first frame, with no grey flash
+   and no double-tap wait. Reduce Motion keeps every change as a short fade in
+   place, with nothing sliding or scaling.
+
+   This file loads last, so its rules win over the older ones they replace at
+   equal strength.
+   ========================================================================== */
+
+:root {
+  --motion-menu: 280ms;      /* menus, the page's menu for selected words, notes, a new comment card, Search */
+  --motion-bar: 290ms;       /* the phone's writing bar: up, tucked, back */
+  --motion-sheet-in: 410ms;  /* a sheet rising */
+  --motion-sheet-out: 120ms; /* a sheet leaving */
+  --motion-panel: 500ms;     /* a page pushed in from the side (Settings) */
+  --motion-out: 120ms;       /* anything else leaving */
+  --motion-fade: 150ms;      /* fades: a sheet's content, a scrim, and every change under Reduce Motion */
+  /* Arrive: fast, then settling with no overshoot. Leave: gathering speed. */
+  --ease-arrive: cubic-bezier(.32, .72, 0, 1);
+  --ease-leave: cubic-bezier(.4, 0, 1, 1);
+  /* A critically damped spring, x = 1 - (1 + u)e^-u, settled within its duration. */
+  --ease-settle: linear(0, .036 4%, .119 8%, .223 12%, .332 16%, .435 20%, .552 25%, .65 30%, .731 35%, .795 40%, .884 50%, .936 60%, .965 70%, .981 80%, 1);
+}
+
+/* ---- touch --------------------------------------------------------------- */
+
+html { -webkit-tap-highlight-color: transparent; }
+/* Important, to hold through controls drawn from `all: unset`; the two that are dragged keep their own. */
+:where(button, [role="button"], a[href], summary, label, select, input[type="checkbox"], input[type="radio"]):not(.walkthrough-move, .castor-tab) { touch-action: manipulation !important; }
+/* The press: --wash and ink at once (DESIGN.md, Pressed state). It holds over any
+   resting background a control draws, and never reaches the words of the article. */
+:where(button, [role="button"], summary):active:not(:disabled, [aria-disabled="true"], .cw-editor-page *) {
+  background-color: var(--wash, rgba(127, 127, 127, .14)) !important;
+  color: var(--ink, #23231f) !important;
+}
+/* ...and nothing eases into it: the first frame under the finger is the pressed one. */
+:where(button, [role="button"], a[href], summary):active,
+:where(button, [role="button"], a[href], summary):active :where(*),
+:where(button, [role="button"], a[href], summary):active::before,
+:where(button, [role="button"], a[href], summary):active::after {
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
+/* ---- the phone's sheets (Files, Comments, Outline, Versions...) ----------- */
+
+@container castorapp (max-width: 700px) {
+  .dock { transition: transform var(--motion-sheet-out) var(--ease-leave); }
+  .dock[data-open="1"] { transition: transform var(--motion-sheet-in) var(--ease-arrive); }
+  .dock[data-swiping="1"] { transition: none; }
+  .dock .dock-inner { transition: opacity var(--motion-out) linear; }
+  .dock[data-open="1"] .dock-inner { transition: opacity var(--motion-fade) linear; }
+}
+/* The iPad's upright sheet is the same sheet. */
+@container castorapp (min-width: 700.01px) and (max-width: 1100px) {
+  #app[data-mode="tablet"] #dock-left, #app[data-mode="tablet"] #dock-right { transition: transform var(--motion-sheet-out) var(--ease-leave); }
+  #app[data-mode="tablet"] :is(#dock-left, #dock-right)[data-open="1"] { transition: transform var(--motion-sheet-in) var(--ease-arrive); }
+  #app[data-mode="tablet"] :is(#dock-left, #dock-right)[data-swiping="1"] { transition: none; }
+}
+
+/* ---- Menu (the phone's sheet of everything else) ---------------------------- */
+
+#app #topbar.mast #more-sheet {
+  transition: opacity var(--motion-menu) var(--ease-arrive), translate var(--motion-menu) var(--ease-arrive);
+}
+@starting-style {
+  #app #topbar.mast #more-sheet { opacity: 0; translate: 0 -8px; }
+}
+#app #topbar.mast #more-sheet[hidden]:not([data-under-push]) {
+  opacity: 0; translate: 0 -8px;
+  transition: opacity var(--motion-out) var(--ease-leave), translate var(--motion-out) var(--ease-leave), display var(--motion-out) allow-discrete;
+}
+
+/* ---- Settings: a page pushed in from the side, and its own pages ----------- */
+
+.castor-settings[data-sheet][data-pushed]:popover-open { animation-duration: var(--motion-panel); animation-timing-function: var(--ease-settle); }
+#app[data-mode="phone"] #topbar.mast #more-sheet[data-under-push] { animation-duration: var(--motion-panel); animation-timing-function: var(--ease-settle); }
+/* Opened by itself (not pushed from the Menu), Settings rises like a menu. Leaving is motion.js's
+   (Done): WebKit cannot animate a popover after it is hidden. */
+.castor-settings[data-sheet]:popover-open:not([data-pushed]) {
+  transition: opacity var(--motion-menu) var(--ease-arrive), translate var(--motion-menu) var(--ease-arrive);
+}
+@starting-style { .castor-settings[data-sheet]:popover-open:not([data-pushed]) { opacity: 0; translate: 0 8px; } }
+.castor-settings[data-sheet] .settings-sub { transition: transform var(--motion-out) var(--ease-leave); }
+.castor-settings[data-sheet] .settings-sub[data-open] { transition: transform var(--motion-panel) var(--ease-settle); }
+
+/* ---- Search ----------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  .find-panel:popover-open { clip-path: none; transition: opacity var(--motion-menu) var(--ease-arrive), translate var(--motion-menu) var(--ease-arrive); }
+  @starting-style { .find-panel:popover-open { opacity: 0; translate: 0 -8px; } }
+}
+
+/* ---- the page's menu for selected words (Copy, Comment, Share) ---------------- */
+
+.selection-menu {
+  translate: 0 4px; transform: none;
+  transition: opacity var(--motion-out) var(--ease-leave), translate var(--motion-out) var(--ease-leave), display var(--motion-out) allow-discrete;
+}
+.selection-menu[data-open="1"] {
+  translate: 0 0;
+  transition: opacity var(--motion-menu) var(--ease-arrive), translate var(--motion-menu) var(--ease-arrive);
+}
+@starting-style { .selection-menu[data-open="1"] { opacity: 0; translate: 0 4px; } }
+
+/* ---- a new comment card, and the note that one was posted ------------------- */
+
+/* The card fades in where it stands: its field carries the editor's caret, which would chase a moving card frame by frame. */
+.castor-thread-slot.is-floating { animation: motion-fade-in var(--motion-menu) var(--ease-arrive); }
+.castor-posted { animation: motion-drop var(--motion-menu) var(--ease-arrive); }
+.castor-posted.is-leaving { opacity: 0; transition: opacity var(--motion-out) var(--ease-leave); }
+@keyframes motion-drop { from { opacity: 0; translate: 0 -6px; } }
+@keyframes motion-fade-in { from { opacity: 0; } }
+
+/* ---- the phone's floating writing bar ---------------------------------------
+   Up with the keyboard and back from its tucked end in 290 ms, no overshoot;
+   tucking into the round end takes the same 290 ms; the end's button fades. */
+#app[data-mode="phone"] .command-island[data-arrangement="writing"] {
+  transition: transform var(--motion-bar) var(--ease-arrive), opacity var(--motion-fade) ease-out;
+}
+#app[data-mode="phone"][data-bar-tucked] .command-island[data-arrangement="writing"] {
+  transition: transform var(--motion-bar) var(--ease-arrive), opacity var(--motion-out) ease-in;
+}
+#app[data-mode="phone"][data-keyboard="up"] .command-island-tuck {
+  transition: transform var(--motion-out) var(--ease-leave), opacity var(--motion-out) ease-in;
+}
+#app[data-mode="phone"][data-keyboard="up"][data-bar-tucked] .command-island-tuck {
+  transition: transform var(--motion-bar) var(--ease-arrive), opacity var(--motion-fade) ease-out;
+}
+
+/* ---- nothing animates a layout size ------------------------------------------
+   The engine's dock widths are registered lengths that ease (engine.css, note 1). In this world
+   the docks are cards over the page, so those lengths move nothing on screen and would only
+   restyle the whole app every frame: they change at once. */
+#app, #app[data-tabs-moving] { transition: none; }
+
+/* ---- Reduce Motion: every change is a short fade in place ----------------------
+   Nothing slides or scales; what appears or leaves fades over 150 ms where it
+   rests. Replaces the old rule that cut every transition to 1 ms. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+  /* The surfaces that come and go fade where they rest. */
+  .dock, .dock .dock-inner, #app #topbar.mast #more-sheet, .castor-settings[data-sheet], .castor-settings[data-sheet] .settings-sub,
+  .find-panel, .selection-menu, .castor-posted, .command-island, .command-island-tuck, .walkthrough-card {
+    transform: none !important; translate: none !important; scale: none !important;
+    transition-property: opacity, visibility, display, overlay !important;
+    transition-duration: var(--motion-fade) !important;
+    transition-timing-function: ease-out !important;
+    transition-behavior: allow-discrete !important;
+  }
+  @container castorapp (max-width: 1100px) {
+    #app:not([data-mode="desktop"]) .dock:not([data-open="1"]) { opacity: 0; visibility: hidden; pointer-events: none; }
+  }
+  .castor-settings[data-sheet] .settings-sub:not([data-open]) { opacity: 0; visibility: hidden; }
+  @starting-style { .find-panel:popover-open, .castor-settings[data-sheet]:popover-open:not([data-pushed]) { opacity: 0; } }
+  .castor-thread-slot.is-floating, .castor-posted, .castor-settings[data-sheet][data-pushed]:popover-open {
+    animation: motion-fade-in var(--motion-fade) ease-out !important;
+  }
+  #app[data-mode="phone"] #topbar.mast #more-sheet[data-under-push] { animation: none !important; display: none !important; }
+}
