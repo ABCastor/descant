@@ -2811,6 +2811,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.api_piece()
         if route == "/api/piece/live":
             return self.api_piece_live()
+        if route == "/api/piece/day":
+            return self.api_piece_day()
         if route == "/api/site-tags":
             return self.api_site_tags()
         if route == "/api/pieces":
@@ -3409,6 +3411,38 @@ class Handler(SimpleHTTPRequestHandler):
         if hashlib.sha256(shown.stdout).hexdigest() != record["article_sha256"]:
             return self.reply(409, {"error": "The publication record does not match its saved version."})
         return self.reply(200, {"path": path, "commit": commit, "markdown": point_media(shown.stdout.decode("utf-8"), served_media(piece_folder(path)))})
+
+    def api_piece_day(self):
+        """The article as its last save before a moment (the writer's midnight, in ms since the
+        epoch): where today's words start counting. No save before it means the article began
+        later, and it answers with no commit and no words. Follows the article across a move."""
+        path = article_path((self.query().get("path") or [""])[0])
+        if not path or not self.may_read(path) or hasattr(self, "reviewer"):
+            return self.reply(403, {"error": "Only founders can read an article's history."})
+        before = (self.query().get("before") or [""])[0]
+        if not re.fullmatch(r"\d{1,15}", before):
+            return self.reply(400, {"error": "before is a moment in milliseconds."})
+        seconds = max(0, int(before) // 1000 - 1)
+        found = git("log", "-1", "--before=@%d" % seconds, "--format=%H", "--", path)
+        if found.returncode != 0:
+            return self.reply(500, {"error": "git could not read the article's history."})
+        commit, named = found.stdout.strip(), path
+        if not commit:
+            # Nothing under this name before then: it began later, or it was moved since. Only
+            # following the name through the move tells (a date limit hides the move itself).
+            moved = git("log", "--follow", "--format=%x1e%H %ct", "--name-only", "--", path)
+            for record in moved.stdout.split("\x1e") if moved.returncode == 0 else []:
+                rows = [row.strip() for row in record.splitlines() if row.strip()]
+                head = rows[0].split() if rows else []
+                if len(head) == 2 and head[1].isdigit() and int(head[1]) <= seconds:
+                    commit, named = head[0], rows[1] if len(rows) > 1 else path
+                    break
+        if not commit:
+            return self.reply(200, {"path": path, "commit": None, "markdown": ""})
+        shown = git_blob(named, commit=commit)
+        if shown.returncode:
+            return self.reply(200, {"path": path, "commit": None, "markdown": ""})
+        return self.reply(200, {"path": path, "commit": commit, "markdown": shown.stdout.decode("utf-8", "replace")})
 
 
 

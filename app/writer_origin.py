@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 GET_ROUTES = {
     "/api/pieces": "api_pieces", "/api/piece": "api_piece", "/api/piece/live": "api_piece_live",
+    "/api/piece/day": "api_piece_day",
     "/api/drafts": "api_drafts_get", "/api/comments": "api_comments",
     "/api/site-tags": "api_site_tags",
     "/api/search": "api_search", "/api/mentions": "api_mentions",

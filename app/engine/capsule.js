@@ -177,6 +177,9 @@
         if (Castor.panels.isOpen) button.setAttribute('aria-pressed', String(Castor.panels.isOpen(id)));
       }
     });
+    // The phone has no bar to carry the word count: its Menu does, as the article's last row,
+    // with a goal's ring as its icon. It opens the same goal sheet as the count on the bar.
+    if (groups && Castor.goals) Castor.goals.paintMenuRow(proxy(groups.article, 'menu-goal', 'Words', null, function () { Castor.goals.open(); }, 'goal'));
     // The live state and the Publish pill stay on the dock; the phone's Publish row opens the same sheet.
     var pub = publishButton(), live = doc.querySelector('.descant-live-marker');
     move(live, meta); move(pub, meta);

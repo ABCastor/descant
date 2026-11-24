@@ -8,7 +8,7 @@ import { json, redirect, secure } from "./web.ts";
 const MAX_BODY = 5 * 1024 * 1024;
 const MAX_RESPONSE = 24 * 1024 * 1024;
 const TIMEOUT_MS = 25_000;
-const READ = new Set(["whoami", "pieces", "piece", "piece/live", "site-tags", "drafts", "comments", "search", "mentions", "graph", "canvas", "files/content", "publication", "sync", "save-status", "offline"]);
+const READ = new Set(["whoami", "pieces", "piece", "piece/live", "piece/day", "site-tags", "drafts", "comments", "search", "mentions", "graph", "canvas", "files/content", "publication", "sync", "save-status", "offline"]);
 const WRITE = new Set(["piece", "pieces/new", "import", "drafts", "comments", "comments/action", "mentions/read", "files/mkdir", "files/upload", "files/move", "files/order", "share/admin-link", "share/article", "agent/batch"]);
 const STATIC: Record<string, string> = {
   "/write/": "text/html; charset=utf-8",

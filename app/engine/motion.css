@@ -119,6 +119,15 @@ html { -webkit-tap-highlight-color: transparent; }
 @keyframes motion-drop { from { opacity: 0; translate: 0 -6px; } }
 @keyframes motion-fade-in { from { opacity: 0; } }
 
+/* ---- a writing goal: its sheet and its tick ------------------------------------
+   The sheet rises 8 px into place like a menu (on the phone it drops from under the top row,
+   as the Menu does); leaving is goals.js's 120 ms exit. A reached goal draws its tick in. */
+#app .castor-goal:popover-open { transition: opacity var(--motion-menu) var(--ease-arrive), translate var(--motion-menu) var(--ease-arrive); }
+@starting-style { #app .castor-goal:popover-open { opacity: 0; translate: 0 8px; } }
+@starting-style { #app[data-mode="phone"] .castor-goal:popover-open { opacity: 0; translate: 0 -8px; } }
+.goal-mark .goal-tick { transform-box: fill-box; transform-origin: center; scale: .6; transition: opacity var(--motion-fade) ease-out, scale var(--motion-menu) var(--ease-arrive); }
+.goal-mark[data-state="reached"] .goal-tick { scale: 1; }
+
 /* ---- the phone's floating writing bar ---------------------------------------
    Up with the keyboard and back from its tucked end in 290 ms, no overshoot;
    tucking into the round end takes the same 290 ms; the end's button fades. */
@@ -154,7 +163,7 @@ html { -webkit-tap-highlight-color: transparent; }
   }
   /* The surfaces that come and go fade where they rest. */
   .dock, .dock .dock-inner, #app #topbar.mast #more-sheet, .castor-settings[data-sheet], .castor-settings[data-sheet] .settings-sub,
-  .find-panel, .selection-menu, .castor-posted, .command-island, .command-island-tuck, .walkthrough-card {
+  .find-panel, .selection-menu, .castor-posted, .command-island, .command-island-tuck, .walkthrough-card, #app .castor-goal, .goal-mark .goal-tick {
     transform: none !important; translate: none !important; scale: none !important;
     transition-property: opacity, visibility, display, overlay !important;
     transition-duration: var(--motion-fade) !important;
@@ -165,7 +174,7 @@ html { -webkit-tap-highlight-color: transparent; }
     #app:not([data-mode="desktop"]) .dock:not([data-open="1"]) { opacity: 0; visibility: hidden; pointer-events: none; }
   }
   .castor-settings[data-sheet] .settings-sub:not([data-open]) { opacity: 0; visibility: hidden; }
-  @starting-style { .find-panel:popover-open, .castor-settings[data-sheet]:popover-open:not([data-pushed]) { opacity: 0; } }
+  @starting-style { .find-panel:popover-open, .castor-settings[data-sheet]:popover-open:not([data-pushed]), #app .castor-goal:popover-open, #app[data-mode="phone"] .castor-goal:popover-open { opacity: 0; } }
   .castor-thread-slot.is-floating, .castor-posted, .castor-settings[data-sheet][data-pushed]:popover-open {
     animation: motion-fade-in var(--motion-fade) ease-out !important;
   }

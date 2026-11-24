@@ -3940,11 +3940,11 @@
     var install = Castor.app && Castor.app.data && Castor.app.data.install;
     var personal = !!(install && install.kind === 'personal');
     if (personal && typeof registerPublishSetup === 'function') registerPublishSetup();
-    ['subtitle', 'language', 'files', 'drafts', 'footnotes', 'outline', 'mentions', 'links', 'changes', 'commands', 'fonts', 'island', 'readerShell', 'walkthrough', 'publication', 'publishState', 'checking', 'offline', 'touchLayout'].forEach(function (name) {
+    ['subtitle', 'goals', 'language', 'files', 'drafts', 'footnotes', 'outline', 'mentions', 'links', 'changes', 'commands', 'fonts', 'island', 'readerShell', 'walkthrough', 'publication', 'publishState', 'checking', 'offline', 'touchLayout'].forEach(function (name) {
       var mod = Castor[name];
       if (!mod || typeof mod.mount !== 'function') return;
       if (personal && ['publication', 'publishState', 'offline'].indexOf(name) >= 0) return;
-      if (reader && ['files', 'drafts', 'changes', 'island', 'publication', 'publishState', 'checking', 'offline', 'touchLayout'].indexOf(name) >= 0) return;
+      if (reader && ['goals', 'files', 'drafts', 'changes', 'island', 'publication', 'publishState', 'checking', 'offline', 'touchLayout'].indexOf(name) >= 0) return;
       try { mod.mount(ctx()); } catch (e) { console.error('[castor] ' + name, e); }
     });
     if (reader) {
@@ -4655,30 +4655,16 @@
     });
   }
 
-  /* The article's words as a reader counts them: no frontmatter, no writer notes,
-     no link targets, no Markdown marks. */
-  function countWords(markdown) {
-    var text = String(markdown || '')
-      .replace(/^---\n[\s\S]*?\n---\n?/, '')
-      .replace(/%%[\s\S]*?%%/g, ' ')
-      .replace(/<!--[\s\S]*?-->/g, ' ')
-      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g, function (m, target, label) { return label || target; })
-      .replace(/\[\^[^\]]+\]:?/g, ' ');
-    var words = text.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu);
-    return words ? words.length : 0;
-  }
-  Castor.countWords = countWords;
-
   function wireFootline() {
     /* Counted when the writing pauses, never on each key. */
     var count = document.getElementById('castor-words');
     if (count) {
       var timer = 0;
+      // The count, with a goal's quiet ring beside it when the article carries one. goals.js
+      // owns the count, so the bar, a goal's progress and today's words all count alike.
       var paintCount = function () {
         timer = 0;
-        var n = countWords((Castor.editor && Castor.editor.getSource) ? Castor.editor.getSource() : source);
-        count.textContent = n.toLocaleString('en') + (n === 1 ? ' word' : ' words');
+        if (Castor.goals) Castor.goals.paintCount(count, (Castor.editor && Castor.editor.getSource) ? Castor.editor.getSource() : source);
       };
       bus.on('doc:change', function () { clearTimeout(timer); timer = setTimeout(paintCount, 600); });
       bus.on('live:reload', paintCount);
