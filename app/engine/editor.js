@@ -2072,6 +2072,17 @@
     return out.join('');
   }
 
+  // A space at a paragraph's end, or after another space, is not painted (white-space: normal), and
+  // WebKit reports a caret after it as the caret before it. The phone keyboard follows that report:
+  // before it inserts a suggestion it moves the caret back there. Where the caret last placed in this
+  // same text is after those spaces, that is the writer's caret, as in a plain text box.
+  function caretPastSpaces(placed, live) {
+    var b = focusId && blockOf(focusId);
+    if (!b || !placed || !live || placed.blockId !== focusId || placed.source !== b.source) return null;
+    if (placed.start !== placed.end || live.start !== live.end || live.start >= placed.start) return null;
+    return /^[ \t]+$/.test(b.source.slice(live.start, placed.start)) ? { start: placed.start, end: placed.end } : null;
+  }
+
   function syncNativeInput(intent, restoreOffset) {
     var host = focusId && editOf(focusId), b = focusId && blockOf(focusId);
     if (!host || !b) return;
@@ -5042,6 +5053,8 @@
     }
     if (composing) return;
     if (handledBackspace && t === 'deleteContentBackward') { e.preventDefault(); return; }
+    // Read before caretSource() records the live range over it.
+    var placedCaret = typeof lastNativeCaret !== 'undefined' ? lastNativeCaret : null;
     var liveInputCaret = caretSource(), visibleCaret = liveInputCaret;
     // Noncollapsed replacement targets are authoritative. A collapsed typing
     // target cannot override the live Selection, including a selected final
@@ -5054,7 +5067,20 @@
         visibleCaret = { start: Math.min(targetStart, targetEnd), end: Math.max(targetStart, targetEnd) };
       }
     }
-    if (opts.showMarks && sourceInput(e, t, visibleCaret, liveInputCaret)) return;
+    // The writer's caret after spaces WebKit does not paint (see caretPastSpaces): a suggestion goes
+    // there. A one-character deletion WebKit aims across such spaces (the keyboard's smart space:
+    // Backspace after a kept word, Delete of a doubled space after a suggestion) takes the space
+    // beside the caret, as in a plain text box.
+    var writerCaret = typeof caretPastSpaces === 'function' && caretPastSpaces(placedCaret, liveInputCaret) || liveInputCaret;
+    if (writerCaret !== liveInputCaret && /^(insertText|insertReplacementText)$/.test(t || '') && visibleCaret && visibleCaret.start === visibleCaret.end) visibleCaret = writerCaret;
+    if (opts.showMarks && sourceInput(e, t, visibleCaret, writerCaret)) return;
+    if (/^deleteContent(?:Backward|Forward)$/.test(t || '') && e.cancelable !== false && writerCaret && writerCaret.start === writerCaret.end && visibleCaret) {
+      var back = t === 'deleteContentBackward', at = writerCaret.start, aimed = blockOf(focusId).source.slice(back ? visibleCaret.end : at, back ? at : visibleCaret.start);
+      if ((back ? visibleCaret.end < at : visibleCaret.start > at) && /^[ \t]+$/.test(aimed)) {
+        e.preventDefault(); replaceVisible(focusId, back ? at - 1 : at, back ? at : at + 1, '', 'delete');
+        finishInput(global.performance && performance.now ? performance.now() : Date.now()); return;
+      }
+    }
     // Only spaces, typed before a line's first character: nothing to type (replaceVisible
     // drops them on every route); refused here, they leave no step in the history either.
     if (t === 'insertText' && /^[ \t]+$/.test(e.data || '') && e.cancelable !== false && visibleCaret &&
