@@ -1,13 +1,13 @@
 /* Versions. A is the article, the only text that publishes; other
-   versions are whole texts kept beside it in drafts/<writer>/, or a saved point
-   from history. Versions are read side by side in aligned rows, and a paragraph
+   versions are whole texts kept beside it in drafts/<writer>/, a saved point
+   from history, or an edition: the text as it went live, by number. Versions are read side by side in aligned rows, and a paragraph
    taken from one is an ordinary save of the article. Finish puts unused
    versions away: a commit removes the file and its text stays in history. */
 (function (global) {
   'use strict';
   var Castor = global.Castor || (global.Castor = {}), D = global.document;
   var MAX = 3, STALE = 14 * 864e5, LETTERS = 'ABC';
-  var P = { body: null, entries: [], away: [], chosen: null, busy: false, message: '', request: 0, mounted: false };
+  var P = { body: null, entries: [], away: [], chosen: null, busy: false, message: '', request: 0, mounted: false, editionText: {} };
   var V = null, screen = null, banner = null, inertNodes = [];
   var names = Castor.people ? Castor.people.names() : {};
   function path() { return Castor.piecePath ? Castor.piecePath() : ''; }
@@ -90,7 +90,20 @@
     return { key: 'away:' + entry.path + '@' + entry.sha, title: entry.title, by: byLine(entry),
       when: entry.removed, markdown: entry.markdown, origin: entry.path + '@' + entry.sha, agent: agentish(entry.by), history: true, away: entry };
   }
-  function candidates() { return P.entries.map(fileVersion).concat(saves(), P.away.map(awayVersion)); }
+  /* Each live publication is an edition. A record from before editions is Edition 1. Its text is
+     read from the server when it is first compared, checked against the hash in the record. */
+  function editions() {
+    var live = (data().piece || {}).live;
+    if (!live) return [];
+    var list = Array.isArray(live.editions) ? live.editions : [Object.assign({}, live, { edition: 1 })];
+    return list.filter(function (e) { return e && typeof e.edition === 'number'; }).slice().reverse().map(function (e) {
+      var known = P.editionText[e.edition];
+      return { key: 'edition:' + e.edition, title: 'Edition ' + e.edition, by: e.site || live.site || '', when: e.published_at,
+        markdown: known && known.commit === e.commit ? known.markdown : null, origin: articlePath() + '@' + e.commit,
+        history: true, edition: e.edition, recorded: !!(e.article_sha256 && e.commit), commit: e.commit };
+    });
+  }
+  function candidates() { return P.entries.map(fileVersion).concat(saves(), P.away.map(awayVersion), editions()); }
   function chosen() {
     if (!P.chosen) return [];
     var known = candidates().map(function (c) { return c.key; });
@@ -131,14 +144,15 @@
   function versionRow(c, letter, on) {
     var row = node('div', null, 'versions-row'), pick = node('button', null, 'versions-pick');
     pick.type = 'button'; pick.setAttribute('role', 'checkbox'); pick.setAttribute('aria-checked', String(on));
-    var full = !on && chosen().length >= MAX - 1;
-    pick.disabled = P.busy || !c || full;
+    var full = !on && chosen().length >= MAX - 1, unrecorded = !!(c && c.edition && !c.recorded);
+    pick.disabled = P.busy || !c || full || unrecorded;
     if (!c) pick.setAttribute('aria-disabled', 'true');
     pick.appendChild(node('span', letter || '', 'versions-chip' + (c && c.agent ? ' is-agent' : '')));
     var words = node('span', null, 'versions-words');
     words.appendChild(node('b', c ? c.title : 'This article'));
     words.appendChild(node('span', c ? [c.by, day(c.when)].filter(Boolean).join(' · ') : 'The text that publishes'));
     pick.appendChild(words);
+    if (unrecorded) row.appendChild(node('span', 'Text not recorded', 'versions-note'));
     if (c) pick.addEventListener('click', function () {
       var list = chosen(), at = list.indexOf(c.key);
       if (at >= 0) list.splice(at, 1); else if (list.length < MAX - 1) list.push(c.key);
@@ -223,6 +237,9 @@
       }
       append(row);
     });
+    var published = editions();
+    if (published.length) append(node('h3', 'Published', 'versions-group'));
+    published.forEach(function (c) { append(versionRow(c, letter(c.key), list.indexOf(c.key) >= 0)); });
     var go = button(list.length ? 'Compare ' + (list.length + 1) + ' versions' : 'Choose a version to compare', function () { compare(); }, 'versions-go');
     go.disabled = P.busy || !list.length || path() !== articlePath();
     append(go);
@@ -267,11 +284,20 @@
     if (path() !== articlePath() || !Castor.diff || !Castor.diff.align) return;
     var pool = candidates(), list = chosen().map(function (k) { return pool.filter(function (c) { return c.key === k; })[0]; }).filter(Boolean);
     if (!list.length) return;
-    return saved().then(function () {
+    return editionTexts(list).then(saved).then(function () {
       V = Object.assign({ other: 0, saving: false }, build(list.map(function (c, i) { return Object.assign({ letter: LETTERS[i + 1], blocks: blocksOf(c.markdown) }, c); })));
       if (Castor.panels && Castor.panels.close) Castor.panels.close('drafts');
       show();
     }).catch(function (e) { P.message = e.message; render(); });
+  }
+  // The text of each chosen edition, as published: read once, kept by its commit.
+  function editionTexts(list) {
+    return Promise.all(list.filter(function (c) { return c.edition && c.markdown == null; }).map(function (c) {
+      return call(Castor.endpoints.api('piece/live?path=') + encodeURIComponent(articlePath()) + '&edition=' + c.edition).then(function (got) {
+        if (got.commit !== c.commit || typeof got.markdown !== 'string') throw new Error('Edition ' + c.edition + ' changed while loading. Try again.');
+        P.editionText[c.edition] = { commit: got.commit, markdown: got.markdown }; c.markdown = got.markdown;
+      });
+    }));
   }
   // Rows from the article as it is saved now. Invisible blocks (link definitions) get no row.
   function build(versions) {

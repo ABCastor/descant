@@ -1130,6 +1130,58 @@ def piece_versions(path, media):
     return versions
 
 
+# ------------------------------------------------- the server's own publisher
+#
+# Publish without the Mac: the server hands a publication to its own publisher, a separate
+# loopback service (design/app/tools/descant-publish serve) with its own memory and its own
+# deploy credential. DESCANT_PUBLISHER_URL names it; unset, the app offers the Mac helper.
+
+def publisher_url():
+    value = (os.environ.get("DESCANT_PUBLISHER_URL") or "").strip().rstrip("/")
+    return value if re.fullmatch(r"http://(?:127\.0\.0\.1|localhost):[0-9]{1,5}", value) else None
+
+
+def publisher_call(method, route, body=None):
+    """(status, JSON answer) from the publisher. Only short calls: a publication runs there as
+    a job, so no request here waits for a build or a deploy."""
+    base = publisher_url()
+    if not base:
+        return 503, {"ok": False, "message": "Publishing from the server is not set up."}
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(base + route, data=data, method=method,
+                                     headers={"Content-Type": "application/json", "Host": urlparse(base).netloc})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as answer:
+            return answer.status, json.loads(answer.read(1_000_000) or b"{}")
+    except urllib.error.HTTPError as error:
+        try:
+            return error.code, json.loads(error.read(1_000_000) or b"{}")
+        except ValueError:
+            return error.code, {"ok": False, "message": "The server publisher refused the request."}
+    except (OSError, ValueError):
+        return 502, {"ok": False, "message": "The server publisher is not answering."}
+
+
+def site_publishers(name):
+    """The writer keys a site lets publish to it, or None for every founder."""
+    entry = space_config.site(name)
+    listed = entry.get("publishers") if entry else None
+    return [key for key in listed if isinstance(key, str)] if isinstance(listed, list) else None
+
+
+EDITION_KEYS = ("edition", "site", "url", "published_at", "article_sha256", "commit")
+
+
+def live_editions(record):
+    """A record's numbered editions, keeping only their public fields. A record written before
+    editions existed is Edition 1, from its own fields."""
+    found = record.get("editions")
+    if isinstance(found, list):
+        return [{key: entry.get(key) for key in EDITION_KEYS} for entry in found
+                if isinstance(entry, dict) and type(entry.get("edition")) is int and entry["edition"] >= 1]
+    return [dict({key: record.get(key) for key in EDITION_KEYS}, edition=1)]
+
+
 def article_path(value):
     """The one writable source shape, after the reader's existing path guard."""
     path = safe_path(value)
@@ -2813,6 +2865,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self.api_piece_live()
         if route == "/api/piece/day":
             return self.api_piece_day()
+        if route == "/api/publish/health":
+            return self.api_publish_health()
+        if route == "/api/publish/job":
+            return self.api_publish_job()
         if route == "/api/site-tags":
             return self.api_site_tags()
         if route == "/api/pieces":
@@ -2875,6 +2931,8 @@ class Handler(SimpleHTTPRequestHandler):
             sync_pull(force=True)
         if route == "/api/publication/publish":
             return self.api_publication_publish()
+        if route == "/api/publish/start":
+            return self.api_publish_start()
         if route == "/api/publication/prepare":
             return self.api_publication_prepare()
         if route == "/api/publication/approve":
@@ -3385,13 +3443,18 @@ class Handler(SimpleHTTPRequestHandler):
             return None
         target = (REPO_ROOT / path).parent / "live.json"
         try:
-            if target.is_symlink() or target.stat().st_size > 16384:
+            if target.is_symlink() or target.stat().st_size > 262144:
                 return None
             record = json.loads(target.read_text("utf-8"))
             if not isinstance(record, dict) or not space_config.site(record.get("site")):
                 return None
             # Receipts contain only the public deployment fields, never arbitrary data.
-            return {key: record.get(key) for key in ("site", "url", "slug", "title", "published_at", "article_sha256", "commit")}
+            shown = {key: record.get(key) for key in ("site", "url", "slug", "title", "published_at", "article_sha256", "commit")}
+            if "editions" in record:
+                shown["editions"] = live_editions(record)
+                shown["edition"] = record.get("edition") if type(record.get("edition")) is int else \
+                    (shown["editions"][-1]["edition"] if shown["editions"] else None)
+            return shown
         except (OSError, ValueError):
             return None
 
@@ -3400,6 +3463,16 @@ class Handler(SimpleHTTPRequestHandler):
         if not path or not self.may_read(path) or hasattr(self, "reviewer"):
             return self.reply(403, {"error": "Only founders can read the published version."})
         record = self.article_live_record(path)
+        wanted = (self.query().get("edition") or [""])[0]
+        edition = None
+        if record and wanted:
+            if not re.fullmatch(r"[1-9][0-9]{0,5}", wanted):
+                return self.reply(400, {"error": "Name an edition by its number."})
+            listed = record.get("editions") or live_editions(record)
+            edition = next((entry for entry in listed if entry.get("edition") == int(wanted)), None)
+            if edition is None:
+                return self.reply(404, {"error": "This article has no such edition."})
+            record = dict(record, commit=edition.get("commit"), article_sha256=edition.get("article_sha256"))
         commit = record.get("commit") if record else None
         if not record or record.get("article_sha256") is None:
             return self.reply(404, {"error": "The published version is unknown."})
@@ -3410,7 +3483,79 @@ class Handler(SimpleHTTPRequestHandler):
             return self.reply(404, {"error": "The published version is not in this clone yet."})
         if hashlib.sha256(shown.stdout).hexdigest() != record["article_sha256"]:
             return self.reply(409, {"error": "The publication record does not match its saved version."})
-        return self.reply(200, {"path": path, "commit": commit, "markdown": point_media(shown.stdout.decode("utf-8"), served_media(piece_folder(path)))})
+        number = edition["edition"] if edition else (record.get("edition") if type(record.get("edition")) is int else 1)
+        return self.reply(200, {"path": path, "commit": commit, "edition": number,
+                                "markdown": point_media(shown.stdout.decode("utf-8"), served_media(piece_folder(path)))})
+
+    def api_publish_health(self):
+        """Whether this server publishes by itself, and how ready each site is there."""
+        if hasattr(self, "reviewer"):
+            return self.reply(403, {"error": "Only founders publish."})
+        if not publisher_url():
+            return self.reply(200, {"configured": False})
+        code, answer = publisher_call("GET", "/health")
+        sites = answer.get("sites") if code == 200 and isinstance(answer, dict) else None
+        if not isinstance(sites, dict):
+            return self.reply(200, {"configured": True, "reachable": False,
+                                    "message": "The server publisher is not answering."})
+        return self.reply(200, {"configured": True, "reachable": True,
+                                "sites": {str(k): str(v) for k, v in sites.items() if space_config.site(str(k))}})
+
+    def api_publish_start(self):
+        """POST {who, path, site, article_sha256}: publish the saved article live from this server."""
+        if hasattr(self, "reviewer"):
+            return self.reply(403, {"error": "Only founders publish."})
+        if (self.headers.get("Content-Type") or "").split(";", 1)[0] != "application/json":
+            return self.reply(415, {"error": "Publishing uses JSON."})
+        if (self.headers.get("Sec-Fetch-Site") or "same-origin") not in ("same-origin", "none"):
+            return self.reply(403, {"error": "Open publishing from Descant."})
+        body, problem = self.json_body()
+        if not isinstance(body, dict):
+            return self.reply(400, {"error": problem or "Publishing needs one JSON object."})
+        try:
+            who = writing_session(body.get("who"))[0][0]
+        except (ValueError, TypeError, IndexError):
+            who = None
+        if who not in FOUNDERS:
+            return self.reply(403, {"error": "Only a founder can publish this article."})
+        path, site = article_path(body.get("path")), body.get("site")
+        digest = body.get("article_sha256")
+        if not path or path != body.get("path") or not isinstance(site, str) or not space_config.site(site) \
+                or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            return self.reply(400, {"error": "Name a saved article, a site and its saved version."})
+        if self.piece_locked(path):
+            return self.reply(403, {"error": "This article cannot be published here."})
+        allowed = site_publishers(site)
+        if allowed is not None and who not in allowed:
+            names = " and ".join((AUTHORS.get(key) or key).split("<", 1)[0].strip().split(" ", 1)[0] or key
+                                 for key in allowed) or "nobody"
+            return self.reply(403, {"error": "Only %s publishes to %s." % (names, site)})
+        try:
+            saved = (REPO_ROOT / path).read_bytes()
+        except OSError:
+            return self.reply(404, {"error": "The article is not saved here."})
+        if hashlib.sha256(saved).hexdigest() != digest:
+            return self.reply(409, {"error": "The saved article changed; reload it before publishing."})
+        code, answer = publisher_call("POST", "/start", {"article": path, "site": site, "live": True,
+                                                        "article_sha256": digest, "principal": who})
+        job = answer.get("id") if isinstance(answer, dict) else None
+        if code != 202 or not isinstance(job, str) or not re.fullmatch(r"[0-9a-f]{32}", job):
+            message = answer.get("message") if isinstance(answer, dict) and isinstance(answer.get("message"), str) else ""
+            return self.reply(409 if code == 409 else 502, {"error": message or "The server publisher did not start."})
+        return self.reply(200, {"ok": True, "id": job})
+
+    def api_publish_job(self):
+        """GET ?id=: the events of one publication so far, and its result once it has one."""
+        if hasattr(self, "reviewer"):
+            return self.reply(403, {"error": "Only founders publish."})
+        job = (self.query().get("id") or [""])[0]
+        if not re.fullmatch(r"[0-9a-f]{32}", job):
+            return self.reply(400, {"error": "Name a publication."})
+        code, answer = publisher_call("GET", "/job?id=" + job)
+        if code != 200 or not isinstance(answer, dict):
+            return self.reply(404 if code == 404 else 502, {"error": "This publication is not known to the server publisher."})
+        return self.reply(200, {"id": job, "events": answer.get("events") if isinstance(answer.get("events"), list) else [],
+                                "result": answer.get("result") if isinstance(answer.get("result"), dict) else None})
 
     def api_piece_day(self):
         """The article as its last save before a moment (the writer's midnight, in ms since the

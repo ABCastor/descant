@@ -21,6 +21,7 @@ GET_ROUTES = {
     "/api/graph": "api_graph",
     "/api/canvas": "api_canvas_get", "/api/files/content": "api_files_content",
     "/api/publication": "api_publication", "/api/offline": "api_offline",
+    "/api/publish/health": "api_publish_health", "/api/publish/job": "api_publish_job",
 }
 POST_ROUTES = {
     "/api/piece": "api_piece_write", "/api/drafts": "api_drafts_write",
@@ -29,7 +30,7 @@ POST_ROUTES = {
     "/api/files/upload": "api_files_upload", "/api/files/move": "api_files_move",
     "/api/files/order": "api_files_order", "/api/agent/batch": "api_agent_batch",
     "/api/share/article": "api_share_article", "/api/pieces/new": "api_pieces_new",
-    "/api/import": "api_import",
+    "/api/import": "api_import", "/api/publish/start": "api_publish_start",
 }
 STATIC = {"/": "index.html", "/sw.js": "@worker", "/manifest.webmanifest": "manifest.webmanifest",
           "/favicon.ico": "favicon.ico", "/favicon.svg": "favicon.svg",

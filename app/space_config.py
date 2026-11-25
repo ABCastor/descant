@@ -19,6 +19,7 @@ folder holds:
                            "tagsRequired": true,            Publish waits for one tag
                            "chip": true,                    articles with a chip: default here
                            "default": true,                 every other article defaults here
+                           "publishers": ["writer-key"],    only these writers publish here (default: all)
                            "receiver": {"kind": "receive-script", "repo": "~/site-checkout",
                                         "remotePath": "/you/site.git"}  or
                                        {"kind": "personal-repo", "path": "~/site-checkout"}}]
@@ -180,9 +181,14 @@ def _site(entry):
             and tags.get("format") in ("html", "rss")):
         tags = None
     receiver = entry.get("receiver") if isinstance(entry.get("receiver"), dict) else {}
-    return {"name": entry["name"], "liveBase": base, "tagsFrom": tags,
-            "tagsRequired": entry.get("tagsRequired") is True, "chip": entry.get("chip") is True,
-            "default": entry.get("default") is True, "receiver": dict(receiver)}
+    found = {"name": entry["name"], "liveBase": base, "tagsFrom": tags,
+             "tagsRequired": entry.get("tagsRequired") is True, "chip": entry.get("chip") is True,
+             "default": entry.get("default") is True, "receiver": dict(receiver)}
+    # Who may publish to it: writer keys. Absent, every founder may.
+    listed = entry.get("publishers")
+    if isinstance(listed, list) and all(isinstance(key, str) and is_writer_key(key) for key in listed):
+        found["publishers"] = list(listed)
+    return found
 
 
 def sites():
@@ -226,5 +232,6 @@ def server_site():
 
 def client_sites():
     """What the Publish sheet needs to know about each site, and nothing about where it lives."""
-    return [{"name": entry["name"], "tagsRequired": entry["tagsRequired"], "chip": entry["chip"],
-             "default": entry["default"]} for entry in sites()]
+    return [dict({"name": entry["name"], "tagsRequired": entry["tagsRequired"], "chip": entry["chip"],
+                  "default": entry["default"]}, **({"publishers": entry["publishers"]} if "publishers" in entry else {}))
+            for entry in sites()]

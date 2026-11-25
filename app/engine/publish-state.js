@@ -1,4 +1,5 @@
-/* Public-version evidence and the founder's Mac publishing action. */
+/* Public-version evidence, numbered editions, and the founder's publishing action: on the
+   shared server when it publishes by itself, otherwise through the Mac helper. */
 (function (global) {
   'use strict';
   var C = global.Castor || (global.Castor = {}), D = global.document;
@@ -197,20 +198,42 @@
       && /^[a-f0-9]{64}$/.test(p.article_sha256_now || '');
   }
   function clean() { return !!(C.saver && C.saver.snapshot && C.saver.snapshot().clean && ['ready', 'saved'].indexOf(C.saver.state()) >= 0); }
+  // Each live publication is the next edition. A record from before editions is Edition 1.
+  function edition() {
+    var live = piece().live;
+    if (!live) return null;
+    return typeof live.edition === 'number' && live.edition >= 1 ? live.edition : 1;
+  }
+  function matches() { var p = piece(); return p.article_sha256_now === p.live.article_sha256 && source() === p.savedMarkdown; }
   function state() {
     var p = piece(), live = p.live;
     if (!live) return 'Not published';
     var prefix = 'Live on ' + live.site;
     if (!canDiff()) return prefix + '. Descant has no record of which version. Update the live version to record it.';
-    if (p.article_sha256_now === live.article_sha256 && source() === p.savedMarkdown) return prefix + ', matches what you are reading';
-    return prefix + ', changed since ' + date(live.published_at);
+    if (matches()) return prefix + ', Edition ' + edition() + ', matches what you are reading';
+    return prefix + ', changed since Edition ' + edition() + ' (' + date(live.published_at) + ')';
   }
   function date(value) { var d = new Date(value); return isNaN(d.getTime()) ? 'publication' : d.toLocaleDateString(); }
   function statusWords() {
-    var p = piece(), live = p.live;
+    var live = piece().live;
     if (!live) return 'Not published';
     if (!canDiff()) return 'Live, version not recorded';
-    return p.article_sha256_now === live.article_sha256 && source() === p.savedMarkdown ? 'Matches website' : 'Unpublished changes';
+    return matches() ? 'Edition ' + edition() : 'Changed since Edition ' + edition();
+  }
+  // none, unknown, match or changed: what the marker's dot shows.
+  function stateCode() {
+    var live = piece().live;
+    return !live ? 'none' : !canDiff() ? 'unknown' : matches() ? 'match' : 'changed';
+  }
+  function publisherNames(site) {
+    var listed = siteRule(site).publishers, names = C.people && C.people.names ? C.people.names() : {};
+    return Array.isArray(listed) ? listed.map(function (key) { return names[key] || key; }).join(' and ') : '';
+  }
+  // A site may name who publishes to it; everyone else sees why the button waits.
+  function siteRefusal(site) {
+    var listed = siteRule(site).publishers;
+    if (!Array.isArray(listed) || listed.indexOf(founder()) >= 0) return '';
+    return 'Only ' + (publisherNames(site) || 'its owner') + ' publishes to ' + site + '.';
   }
   /* A personal installation (someone's own Descant) has no Castor sites to publish to. */
   function personal() { var install = C.app && C.app.data && C.app.data.install; return !!(install && install.kind === 'personal'); }
@@ -248,6 +271,12 @@
     return global.fetch(url, options || {cache:'no-store'}).then(function (r) {
       return r.json().then(function (data) { if (!r.ok) throw Error(data.error || 'The request failed.'); return data; });
     });
+  }
+  // The shared server's publisher, when it has one that answers: its health, else null.
+  function serverHealth() {
+    return request(C.endpoints.api('publish/health')).then(function (data) {
+      return data && data.configured === true && data.reachable === true && data.sites ? data : null;
+    }, function () { return null; });
   }
   function refresh() {
     var captured = epoch, article = path, who = founder(), p = piece(), text = source();
@@ -306,8 +335,8 @@
     var live = piece().live, words = statusWords();
     // One dot, like the green dot that marks where you are in the article tabs:
     // green = the live version is what you are reading, amber = changed since, grey = not live.
-    var code = !live ? 'none' : !canDiff() ? 'unknown' : words === 'Matches website' ? 'match' : 'changed';
-    var shortWords = code === 'none' ? 'Not live' : code === 'changed' ? 'Changed' : 'Live';
+    var code = !live ? 'none' : !canDiff() ? 'unknown' : matches() ? 'match' : 'changed';
+    var shortWords = code === 'none' ? 'Not live' : code === 'changed' ? 'Changed' : code === 'match' ? 'Edition ' + edition() : 'Live';
     // It repaints on every keystroke: the marker is written only when what it says changed,
     // and the panel is built while it is open (popovers.bind builds it as it opens).
     setAttr(marker, 'data-state', code);
@@ -331,7 +360,7 @@
       if (url && url.protocol === 'https:' && (url.hostname === live.site || url.hostname === 'www.' + live.site)) {
         var link = el('a', 'Open live article'); link.href = live.url; link.target = '_blank'; link.rel = 'noopener'; panel.appendChild(link);
       }
-      panel.appendChild(el('p', 'Published ' + date(live.published_at)));
+      panel.appendChild(el('p', 'Edition ' + edition() + ', published ' + date(live.published_at)));
       panel.appendChild(el('p', state()));
       if (canDiff()) panel.appendChild(button('See changes', showDiff));
     }
@@ -364,27 +393,72 @@
     function describe() { metadata.textContent = siteRule(site.value).chip ? 'Chip: ' + (fields.chip || '(missing)') : ''; }
     function tagsRequired() { return siteRule(site.value).tagsRequired === true && !picker.tags().length; }
     site.addEventListener('change', function () { describe(); if (syncSheet) syncSheet(); }); describe();
-    var health = null, healthFailed = false, checking = true;
+    var health = null, healthFailed = false, checking = true, hub = null;
     var availability = el('p', 'Checking the publishing connection.'); availability.setAttribute('role', 'status'); box.appendChild(availability);
-    // Configuration belongs to the helper, not to the article's optional site field.
-    // Reading /health never publishes or changes article metadata.
-    request(helper + '/health').then(function (data) {
+    // Configuration belongs to the publisher, not to the article's optional site field.
+    // Reading /health never publishes or changes article metadata. A site the shared server
+    // publishes by itself goes there; any other site still goes through the Mac helper.
+    function hubReady(name) { return !!(hub && hub.sites && hub.sites[name] === 'ready'); }
+    serverHealth().then(function (data) {
+      hub = data;
+      // A server that publishes every site never needs the Mac asked.
+      if (hub && sites().length && sites().every(function (entry) { return hubReady(entry.name); })) return;
+      return request(helper + '/health').then(function (mac) { health = mac; }, function () { healthFailed = true; });
+    }).then(function () {
       if (sheet !== box || captured !== epoch) return;
-      health = data; checking = false; if (syncSheet) syncSheet();
-    }).catch(function () {
-      if (sheet !== box || captured !== epoch) return;
-      healthFailed = true; checking = false;
-      var command = el('input'); command.value = startCommand; command.readOnly = true; command.setAttribute('aria-label', 'Start publishing helper');
-      command.addEventListener('click', function () { command.select(); }); box.insertBefore(command, availability);
+      checking = false;
+      // The Mac command only helps where the server cannot publish at all.
+      if (healthFailed && !hub) {
+        var command = el('input'); command.value = startCommand; command.readOnly = true; command.setAttribute('aria-label', 'Start publishing helper');
+        command.addEventListener('click', function () { command.select(); }); box.insertBefore(command, availability);
+      }
       if (syncSheet) syncSheet();
     });
+    // The shared server publishes by itself: start the job, then read its steps until it ends.
+    // The phone may sleep meanwhile; the publication goes on there and its record arrives anyway.
+    function serverPublish(selected) {
+      var shown = 0;
+      return request(C.endpoints.api('piece?path=') + encodeURIComponent(article)).then(function (saved) {
+        if (captured !== epoch || !clean() || source() !== original || saved.markdown !== original) throw Error('Save first');
+        if (!saved.save || !saved.save.shared || saved.save.shared.ok !== true) throw Error('The save has not reached the shared copy yet. Try again after it syncs.');
+        return request(C.endpoints.api('publish/start'), {method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({who:who, path:article, site:selected, article_sha256:saved.article_sha256_now})});
+      }).then(async function (started) {
+        var job = started && started.id, result = null, missed = 0;
+        if (!/^[0-9a-f]{32}$/.test(job || '')) throw Error('The server did not start publishing.');
+        for (var poll = 0; poll < 1800 && !result; poll++) {
+          await new Promise(function (resolve) { global.setTimeout(resolve, 1000); });
+          // A missed read (the phone slept, the network blinked) is not a failure: the server goes on.
+          var state = await request(C.endpoints.api('publish/job?id=') + job).then(function (data) { missed = 0; return data; }, function () { missed++; return null; });
+          if (!state) {
+            if (missed >= 60) throw Error('Lost touch with the server. It goes on publishing; reopen the article later to see the new edition.');
+            continue;
+          }
+          (state.events || []).slice(shown).forEach(function (data) {
+            if (sheet === box) steps.appendChild(el('p', [data.step, data.status, data.message].filter(Boolean).join(': ')));
+          });
+          shown = Math.max(shown, (state.events || []).length); result = state.result;
+        }
+        if (!result) throw Error('The server is still publishing. Reopen the article later to see the new edition.');
+        if (!result.ok) throw Error(result.message || 'Publishing did not finish.');
+        if (!result.live_record || !result.live_record.article_sha256 || !result.verification || !result.verification.ok) throw Error('The server did not return a verified published version.');
+        if (sheet === box) steps.appendChild(el('p', 'Published Edition ' + (result.live_record.edition || 1) + '. HTTP 200, title found.'));
+        if (captured === epoch) {
+          var received = await waitForRecord(result.live_record, captured);
+          if (!received && captured === epoch) throw Error('The article is live, but Descant has not received the record yet. Reopen it after it syncs.');
+          if (captured === epoch && clean() && source() === original && C.app.reload) await C.app.reload();
+        }
+      }).catch(function (error) { if (sheet === box) steps.appendChild(el('p', error.message)); });
+    }
     var steps = el('div'); steps.className = 'descant-publish-steps'; steps.setAttribute('role', 'status'); steps.setAttribute('aria-live', 'polite'); box.appendChild(steps);
     var go = button('Publish', function () {
       if (captured !== epoch || who !== founder() || article !== path) return;
       if (!clean() || source() !== original) { steps.replaceChildren(el('p', 'Save first')); return; }
       if (!site.value || picker.pending() || tagsRequired()) { syncSheet(); return; }
+      if (siteRefusal(site.value)) { syncSheet(); return; }
       busy = true; pendingButton(true, 'Publishing…'); go.disabled = true; site.disabled = true; picker.lock(); paint();
       var selected = site.value, success = null;
+      if (hubReady(selected)) return serverPublish(selected).finally(function () { busy = false; go.disabled = false; site.disabled = false; picker.lock(); if (syncSheet) syncSheet(); paint(); });
       return request(helper + '/health').catch(function () {
         steps.appendChild(el('p', 'Publishing runs from your Mac. Start it with:'));
         var command = el('input'); command.value = startCommand; command.readOnly = true; command.setAttribute('aria-label', 'Start publishing helper');
@@ -437,12 +511,15 @@
     syncSheet = function () {
       if (sheet !== box || busy) return;
       var waiting = !clean() || source() !== original, required = tagsRequired();
-      var configured = health && health.sites && health.sites[site.value] === 'ready';
+      var onServer = hubReady(site.value), configured = onServer || !!(health && health.sites && health.sites[site.value] === 'ready');
       var savingTags = waiting && tagsChanged && ['ready', 'saved', 'unsaved', 'saving'].indexOf(C.saver.state()) >= 0;
       pendingButton(savingTags, 'Saving tags…');
-      go.disabled = !site.value || waiting || required || picker.pending() || checking || healthFailed || !configured;
-      availability.textContent = checking ? 'Checking the publishing connection.' : healthFailed ? 'The publishing helper is not running on this Mac. Ask your agent to start it with the command above.'
-        : !site.value ? '' : !configured ? 'Publishing is not set up for ' + site.value + '. Ask your agent to connect this site.' : '';
+      var refusal = site.value ? siteRefusal(site.value) : '';
+      go.disabled = !site.value || waiting || required || picker.pending() || checking || !configured || !!refusal;
+      availability.textContent = checking ? 'Checking the publishing connection.' : refusal ? refusal : onServer || !site.value ? ''
+        : hub && healthFailed ? 'Publishing to ' + site.value + ' is not set up on the server yet, and the Mac publishing helper is not running.'
+        : healthFailed ? 'The publishing helper is not running on this Mac. Ask your agent to start it with the command above.'
+        : !configured ? 'Publishing is not set up for ' + site.value + '. Ask your agent to connect this site.' : '';
       saveStatus.textContent = waiting ? (tagsChanged ? (['error', 'conflict', 'offline', 'refused', 'dirty'].indexOf(C.saver.state()) >= 0 ? words.saveFailed : words.saving) : 'Save first')
         : required ? words.required + site.value + '.' : picker.pending() ? words.pending : tagsChanged ? words.saved : '';
     };
@@ -465,7 +542,7 @@
     if (C.popovers) C.popovers.bind(marker, panel, paint);
     else { panel.hidden = true; marker.addEventListener('click', function () { panel.hidden = !panel.hidden; }); }
     marker.addEventListener('click', function (event) {
-      if (statusWords() !== 'Unpublished changes' || !C.changes || !C.changes.open) return;
+      if (stateCode() !== 'changed' || !C.changes || !C.changes.open) return;
       event.preventDefault(); event.stopImmediatePropagation();
       C.changes.open('website');
     }, true);
@@ -482,5 +559,5 @@
     }
     paint(); if (!loadedEvidence()) refresh();
   }
-  C.publishState = { suggestTags: suggestTags, withTagsSource: withTagsSource, normalizeTag: normalizeTag, mount: mount, state: state, statusWords: statusWords, reason: reason, open: function () { if (personal()) { if (C.commands && C.commands.run) C.commands.run('publish.setup'); return; } return confirm(); }, comparison: comparison, refresh: refresh };
+  C.publishState = { suggestTags: suggestTags, withTagsSource: withTagsSource, normalizeTag: normalizeTag, mount: mount, state: state, statusWords: statusWords, code: stateCode, edition: edition, reason: reason, open: function () { if (personal()) { if (C.commands && C.commands.run) C.commands.run('publish.setup'); return; } return confirm(); }, comparison: comparison, refresh: refresh };
 })(typeof window !== 'undefined' ? window : globalThis);
