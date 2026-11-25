@@ -1,7 +1,7 @@
 /* A writing goal on the piece, kept quietly.
 
    The goal lives in the article's front matter, in the four keys the Ulysses import already
-   writes: `goal` (the count), `goal-type` (at-least, about or at-most), `goal-unit` (words or
+   writes: `goal` (the count), `goal-type` (at-least, about, at-most or daily), `goal-unit` (words or
    characters) and `goal-due` (an optional YYYY-MM-DD). One article, one goal: article.md is the
    one file both writers share, and a version beside it is never what the count measures.
    Setting or removing it goes through the editor's front matter edit, so it saves, undoes and
@@ -14,9 +14,9 @@
   'use strict';
   var C = global.Castor || (global.Castor = {});
 
-  var KINDS = ['at-least', 'about', 'at-most'];
+  var KIND_WORDS = { 'at-least': 'At least', about: 'About', 'at-most': 'At most', daily: 'A day' };
+  var KINDS = Object.keys(KIND_WORDS);
   var UNITS = ['words', 'characters'];
-  var KIND_WORDS = { 'at-least': 'At least', about: 'About', 'at-most': 'At most' };
   var UNIT_WORDS = { words: ['word', 'words'], characters: ['character', 'characters'], sentences: ['sentence', 'sentences'],
     paragraphs: ['paragraph', 'paragraphs'], pages: ['page', 'pages'], 'reading-time': ['minute of reading', 'minutes of reading'] };
   var ABOUT = 0.1;              // "about" is there within a tenth either side
@@ -30,8 +30,8 @@
   }
   function text(value) { return value == null ? '' : String(value).trim(); }
 
-  /* The goal the front matter holds, or null. A kind or unit Descant does not count (a
-     Ulysses daily goal, pages) is read as it is, with supported: false. */
+  /* The goal the front matter holds, or null. A kind or unit Descant does not count
+     (such as pages) is read as it is, with supported: false. */
   function read(frontmatter) {
     var fm = frontmatter || {}, raw = fm.goal;
     var count = typeof raw === 'number' ? raw : /^\d+$/.test(text(raw)) ? Number(text(raw)) : NaN;
@@ -49,7 +49,7 @@
     var lines = [];
     if (goal) {
       if (!(goal.count >= 1 && goal.count <= MOST && Math.floor(goal.count) === goal.count)) throw Error('A goal is a whole number from 1 to 10,000,000.');
-      if (KINDS.indexOf(goal.kind) < 0) throw Error('Choose the kind of goal: at least, about or at most.');
+      if (KINDS.indexOf(goal.kind) < 0) throw Error('Choose a kind of goal.');
       if (UNITS.indexOf(goal.unit) < 0) throw Error('A goal counts words or characters.');
       if (goal.due && !realDate(goal.due)) throw Error('A deadline is a date.');
       lines = ['goal: ' + goal.count, 'goal-type: ' + goal.kind, 'goal-unit: ' + goal.unit];
@@ -96,7 +96,7 @@
   /* Where a count stands against its goal: the ring's fraction, and short, reached, under
      (an "at most" still within it) or over, with what is left or over. */
   function progress(goal, n) {
-    if (!goal || KINDS.indexOf(goal.kind) < 0 || UNITS.indexOf(goal.unit) < 0) return null;
+    if (!goal || n == null || KINDS.indexOf(goal.kind) < 0 || UNITS.indexOf(goal.unit) < 0) return null;
     var c = goal.count, f = Math.max(0, Math.min(1, n / c));
     if (goal.kind === 'at-most') return n > c ? { fraction: 1, state: 'over', left: 0, over: n - c } : { fraction: f, state: 'under', left: c - n, over: 0 };
     if (goal.kind === 'about') {
@@ -128,42 +128,51 @@
      midnight, read from the article's history on the server (every save is a commit there,
      from any device). The start of the day is kept on this device, so a reload, or a page
      with no server, counts from the same start; the next day asks again. */
+  function midnight(ms, next) { var d = new Date(ms); d.setHours(next ? 24 : 0, 0, 0, 0); return d.getTime(); }
+  function dayOf(ms) {
+    var d = new Date(ms);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
   function createDay(options) {
     var fetcher = options.fetch, storage = options.storage, now = options.now || Date.now, api = options.api;
-    function midnight(ms) { var d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); }
-    function dayOf(ms) {
-      var d = new Date(ms);
-      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-    }
+    var starts = new Map(), loading = new Map();
     function key(path) { return 'castor.goalDay.' + path; }
     function start(path) {
+      var at = midnight(now()), v = starts.get(path);
+      if (v && v.before === at) return v;
       try {
-        var v = storage && JSON.parse(storage.getItem(key(path)) || 'null');
-        return v && v.day === dayOf(now()) && typeof v.words === 'number' && typeof v.characters === 'number' ? v : null;
-      } catch (e) { return null; }
+        v = storage && JSON.parse(storage.getItem(key(path)) || 'null');
+        if (v && (v.before == null ? v.day === dayOf(at) : v.before === at) && Number.isFinite(v.words) && Number.isFinite(v.characters)) return v;
+      } catch (e) { /* storage may be blocked */ }
+      return null;
     }
-    function today(path, markdown, unit) {
+    function delta(path, total, unit) {
       var s = path && start(path);
-      if (!s) return null;
-      return measure(markdown, unit) - (unit === 'characters' ? s.characters : s.words);
+      return s ? total - (unit === 'characters' ? s.characters : s.words) : null;
     }
+    function today(path, markdown, unit) { return delta(path, measure(markdown, unit), unit); }
     function load(path) {
       if (!path) return Promise.resolve(null);
       var known = start(path);
       if (known) return Promise.resolve(known);
-      var at = midnight(now());
-      return Promise.resolve()
+      var at = midnight(now()), request = path + ':' + at;
+      if (loading.has(request)) return loading.get(request);
+      var wait = Promise.resolve()
         .then(function () { return fetcher(api('piece/day?path=' + encodeURIComponent(path) + '&before=' + at)); })
         .then(function (r) { return r && r.ok ? r.json() : null; })
         .then(function (body) {
-          if (!body || typeof body.markdown !== 'string') return null;
-          var v = { day: dayOf(at), words: words(body.markdown), characters: characters(body.markdown), commit: body.commit || null };
+          if (!body || typeof body.markdown !== 'string' || at !== midnight(now())) return null;
+          var v = { day: dayOf(at), before: at, words: words(body.markdown), characters: characters(body.markdown), commit: body.commit || null };
+          starts.set(path, v);
           try { if (storage) storage.setItem(key(path), JSON.stringify(v)); } catch (e) { /* counted for this page only */ }
           return v;
         })
-        .catch(function () { return null; });
+        .catch(function () { return null; })
+        .finally(function () { loading.delete(request); });
+      loading.set(request, wait);
+      return wait;
     }
-    return { today: today, load: load, start: start };
+    return { today: today, delta: delta, load: load, start: start };
   }
 
   var api = { read: read, withGoal: withGoal, words: words, characters: characters, measure: measure,
@@ -176,7 +185,7 @@
   var D = global.document;
   if (!D || !D.createElement) return;
   var SVG = 'http://www.w3.org/2000/svg';
-  var ui = { ctx: null, bound: false, count: null, panel: null, day: null, askedInside: 0, pointerAt: 0 };
+  var ui = { ctx: null, bound: false, count: null, panel: null, day: null, dayWatch: null, dayTimer: 0, askedInside: 0, pointerAt: 0 };
 
   function isWriter(id) { return !!(C.people && C.people.isWriter(id)); }
   function founder() {
@@ -206,6 +215,43 @@
     return ui.day;
   }
 
+  function snapshot(src, path) {
+    var goal = path ? goalOf(src) : null, unit = goal && goal.supported ? goal.unit : 'words';
+    var total = measure(src, unit), daily = !!(goal && goal.supported && goal.kind === 'daily');
+    return { goal: goal, unit: unit, total: total, daily: daily, n: daily ? day().delta(path, total, unit) : total };
+  }
+  function todayText(n) { return n == null ? '—' : (n < 0 ? '−' : '') + figure(Math.abs(n)); }
+  function todaySuffix(n) { return '· ' + todayText(n) + ' today'; }
+  function uncounted(path) {
+    var w = ui.dayWatch;
+    if (!path) return 'Not for this file';
+    return w && w.path === path && w.at === midnight(Date.now()) && !w.pending ? 'Today’s count is unavailable' : 'Counting…';
+  }
+
+  // Only a visible goal sheet or an active daily goal needs history. A writing pause can
+  // repaint many times without re-asking; midnight, reopening the sheet and reconnect can retry.
+  function watchDay(path, retry) {
+    var w = ui.dayWatch;
+    if (!path) {
+      global.clearTimeout(ui.dayTimer); ui.dayTimer = 0; ui.dayWatch = null;
+      return;
+    }
+    var now = Date.now(), at = midnight(now);
+    var same = w && w.path === path && w.at === at;
+    if (!same || retry) {
+      global.clearTimeout(ui.dayTimer);
+      ui.dayTimer = global.setTimeout(function () { paintNow(true); }, midnight(now, true) - now);
+    }
+    if (!same) w = ui.dayWatch = { path: path, at: at, pending: false };
+    if (day().start(path) || w.pending || (same && !retry)) return;
+    w.pending = true;
+    day().load(path).then(function () {
+      if (ui.dayWatch !== w) return;
+      w.pending = false;
+      paintNow();
+    });
+  }
+
   /* The mark: a hairline ring and, inside it, the count so far as a pie from twelve o'clock (a
      pie reads as progress, never as the save state's turning arc). Reached, the pie is whole and
      a tick is drawn into it. Colour never says anything here: ink only. */
@@ -223,7 +269,7 @@
     return holder;
   }
   function setMark(holder, goal, n) {
-    var p = progress(goal, n), state = !goal ? 'none' : !p ? 'kept' : p.state;
+    var p = progress(goal, n), state = !goal ? 'none' : p ? p.state : goal.supported ? 'pending' : 'kept';
     if (holder.getAttribute('data-state') !== state) holder.setAttribute('data-state', state);
     var arc = holder.querySelector('.goal-arc'), offset = String(Math.round((1 - (p ? p.fraction : 0)) * 1000) / 10);
     if (arc && arc.getAttribute('stroke-dashoffset') !== offset) arc.setAttribute('stroke-dashoffset', offset);
@@ -232,12 +278,13 @@
 
   /* The bar's count: the ring, then "1,240 words", then for a count over its limit a quiet
      "· 40 over". Called by the bar when the writing pauses. */
-  function paintCount(el, src) {
+  function paintCount(el, src, retry) {
     if (!el) return;
     ui.count = el;
     // Only a writer, and only on an article (not a version beside it), has a goal to see and set.
-    var mine = founder() && !!articlePath();
-    var goal = mine ? goalOf(src) : null, unit = goal && goal.supported ? goal.unit : 'words', n = measure(src, unit);
+    var path = founder() ? articlePath() : '', view = snapshot(src, path);
+    var goal = view.goal, unit = view.unit, n = view.n;
+    watchDay(view.daily || isOpen() ? path : '', retry);
     var ring = el.querySelector && el.querySelector(':scope > .goal-mark'), label = el.querySelector && el.querySelector(':scope > .foot-count-label');
     var over = el.querySelector && el.querySelector(':scope > .goal-over');
     if (!label) {
@@ -247,10 +294,11 @@
       el.appendChild(ring); el.appendChild(label); el.appendChild(over);
     }
     setMark(ring, goal, n);
-    setText(label, figure(n) + ' ' + unitWord(unit, n));
+    var articleTotal = figure(view.total) + ' ' + unitWord(unit, view.total);
+    setText(label, articleTotal);
     var p = progress(goal, n);
-    setText(over, p && p.state === 'over' ? '· ' + figure(p.over) + ' over' : '');
-    if (mine) {
+    setText(over, view.daily ? todaySuffix(n) : p && p.state === 'over' ? '· ' + figure(p.over) + ' over' : '');
+    if (path) {
       if (!el._goalBound) {
         el._goalBound = true;
         el.addEventListener('click', function () { open(); });
@@ -260,28 +308,42 @@
       }
       if (el.getAttribute('role') !== 'button') { el.setAttribute('role', 'button'); el.setAttribute('tabindex', '0'); }
       bindPanel(el);
-      var spoken = figure(n) + ' ' + unitWord(unit, n) + '. ' + (goal ? (goal.supported ? describe(goal) + ', ' + note(goal, n).toLowerCase() : 'Goal kept from the import') + '. Goal' : 'Set a goal');
+      var spoken = articleTotal + '. ' + goalLabel(view, path);
       if (el.getAttribute('aria-label') !== spoken) el.setAttribute('aria-label', spoken);
     } else if (el.getAttribute('role') === 'button') {
       el.removeAttribute('role'); el.removeAttribute('tabindex'); el.removeAttribute('aria-label');
     }
-    if (ui.panel && isOpen()) paintSheet();
+    if (isOpen()) paintSheet(view, path);
   }
-  function paintNow() { var el = D.getElementById('castor-words'); if (el) paintCount(el, source()); paintMenuRow(); }
+  function goalLabel(view, path) {
+    var goal = view.goal;
+    if (!goal) return 'Set a goal';
+    if (!goal.supported) return 'Goal kept from the import. Goal';
+    var status = view.daily ? (view.n == null ? uncounted(path) : todayText(view.n) + ' today, ' + note(goal, view.n).toLowerCase())
+      : note(goal, view.n).toLowerCase();
+    return describe(goal) + ', ' + status + '. Goal';
+  }
+  function paintNow(retry) {
+    paintCount(D.getElementById('castor-words'), source(), retry === true);
+    paintMenuRow();
+  }
 
   /* The phone has no bar: its Menu carries the count as a row, the ring as its icon. */
   function paintMenuRow(row) {
     row = row || D.getElementById('menu-goal');
     if (!row) return;
-    var mine = founder() && !!articlePath(), src = source(), goal = mine ? goalOf(src) : null, unit = goal && goal.supported ? goal.unit : 'words', n = measure(src, unit);
+    var path = founder() ? articlePath() : '', view = snapshot(source(), path);
+    var goal = view.goal, unit = view.unit, n = view.n;
     var ring = row.querySelector(':scope > .goal-mark');
     if (!ring) { ring = mark(18); ring.classList.add('goal-mark-row'); row.insertBefore(ring, row.firstChild); }
     setMark(ring, goal, n);
     setText(row.querySelector('.word-label'), unit === 'characters' ? 'Characters' : 'Words');
     var value = row.querySelector('.menu-value');
     if (!value) { value = D.createElement('span'); value.className = 'menu-value'; row.appendChild(value); }
-    setText(value, goal && goal.supported ? figure(n) + ' of ' + figure(goal.count) : figure(n));
-    row.hidden = !mine;
+    setText(value, view.daily ? figure(view.total) + ' ' + todaySuffix(n) : goal && goal.supported ? figure(n) + ' of ' + figure(goal.count) : figure(view.total));
+    if (view.daily) row.setAttribute('aria-label', figure(view.total) + ' ' + unitWord(unit, view.total) + '. ' + goalLabel(view, path));
+    else row.removeAttribute('aria-label');
+    row.hidden = !path;
   }
 
   /* ---- the sheet ---------------------------------------------------------------- */
@@ -323,7 +385,7 @@
     panel.appendChild(el('p', 'goal-today-note', 'From the last save before midnight, on any device.'));
 
     var form = el('form', 'goal-form'); form.noValidate = true;
-    form.appendChild(segment('goal-kind', 'Kind', [['at-least', 'At least'], ['about', 'About'], ['at-most', 'At most']]));
+    form.appendChild(segment('goal-kind', 'Kind', KINDS.map(function (kind) { return [kind, KIND_WORDS[kind]]; })));
     var amount = el('div', 'goal-amount'), countLabel = el('label', 'goal-field goal-count'), number = el('input');
     number.type = 'number'; number.name = 'goal-count'; number.min = '1'; number.max = String(MOST); number.step = '1';
     number.inputMode = 'numeric'; number.placeholder = '2000'; number.setAttribute('aria-label', 'Count');
@@ -385,24 +447,28 @@
     form.querySelector('.goal-set').textContent = goal ? 'Change goal' : 'Set goal';
     form.querySelector('.goal-remove').hidden = !goal;
     panel._sync();
-    paintSheet();
-    var path = articlePath();
-    if (path) day().load(path).then(function () { if (isOpen()) paintSheet(); });
+    var path = articlePath(), view = snapshot(source(), path);
+    // The beforetoggle hook fills the sheet before :popover-open matches.
+    watchDay(path, true);
+    paintSheet(view, path);
   }
-  function paintSheet() {
-    var panel = ui.panel;
-    if (!panel) return;
-    var src = source(), goal = goalOf(src), unit = goal && goal.supported ? goal.unit : 'words', n = measure(src, unit);
+  function paintSheet(view, path) {
+    var panel = ui.panel, goal = view.goal, unit = view.unit, n = view.n;
     setMark(panel.querySelector('.goal-summary .goal-mark'), goal, n);
-    var figureText = goal && goal.supported ? figure(n) + ' of ' + figure(goal.count) + ' ' + unitWord(unit, goal.count) : figure(n) + ' ' + unitWord(unit, n);
+    var figureText = view.daily && n == null ? describe(goal)
+      : goal && goal.supported ? todayText(n) + ' of ' + figure(goal.count) + ' ' + unitWord(unit, goal.count) + (view.daily ? ' today' : '')
+      : figure(view.total) + ' ' + unitWord(unit, view.total);
     setText(panel.querySelector('.goal-figure'), figureText);
     var line = !goal ? 'No goal yet.'
-      : !goal.supported ? 'From the import: ' + describe(goal) + '. Descant counts at least, about or at most a number of words or characters.'
-      : note(goal, n) + dueWords(goal.due);
+      : !goal.supported ? 'From the import: ' + describe(goal) + '. Descant counts words and characters.'
+      : (n == null ? uncounted(path) : note(goal, n)) + dueWords(goal.due);
     setText(panel.querySelector('.goal-line'), line);
-    var path = articlePath(), today = path ? day().today(path, src, unit) : null;
-    setText(panel.querySelector('.goal-today-count'), today == null ? (path ? 'Counting…' : 'Not for this file')
-      : (today > 0 ? '+' : today < 0 ? '−' : '') + figure(Math.abs(today)) + ' ' + unitWord(unit, Math.abs(today)));
+    panel.querySelector('.goal-today').hidden = view.daily;
+    if (!view.daily) {
+      var today = day().delta(path, view.total, unit);
+      setText(panel.querySelector('.goal-today-count'), today == null ? uncounted(path)
+        : (today > 0 ? '+' : '') + todayText(today) + ' ' + unitWord(unit, Math.abs(today)));
+    }
   }
   function dueWords(due) {
     if (!due) return '';
@@ -450,7 +516,9 @@
     });
     // Closed by a finger or a mouse, the count it returns to takes no focus ring; from the keys it does.
     panel.addEventListener('toggle', function (event) {
-      if (event.newState !== 'closed' || !ui.pointerAt || Date.now() - ui.pointerAt > 1500) return;
+      if (event.newState !== 'closed') return;
+      paintNow();
+      if (!ui.pointerAt || Date.now() - ui.pointerAt > 1500) return;
       global.setTimeout(function () { if (ui.count && D.activeElement === ui.count) ui.count.blur(); }, 0);
     });
     global.addEventListener('pointerdown', function () { ui.pointerAt = Date.now(); }, true);
@@ -484,10 +552,14 @@
       ui.bound = true;
       context.bus.on('who:set', paintNow);
       context.bus.on('piece:opened', paintNow);
+      var resume = function () { if (!D.hidden) paintNow(true); };
+      global.addEventListener('online', resume);
+      global.addEventListener('focus', resume);
+      D.addEventListener('visibilitychange', resume);
       // The phone's Menu is painted as it opens, never on each pause: the chrome's own layout
       // runs on every change inside it.
       D.addEventListener('click', function (e) {
-        if (e.target && e.target.closest && e.target.closest('#more-word')) paintMenuRow();
+        if (e.target && e.target.closest && e.target.closest('#more-word')) paintNow(true);
       }, true);
     }
     paintMenuRow();

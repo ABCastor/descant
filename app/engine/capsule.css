@@ -1053,7 +1053,7 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
   padding: var(--s1) var(--s4) var(--s4); font-size: 16px;
 }
 #app[data-mode="phone"] .castor-goal :is(.goal-done, .goal-remove, .goal-due-clear, .goal-set) { min-height: 44px; font-size: 16px; }
-#app[data-mode="phone"] .castor-goal .goal-seg-option span { min-height: 40px; font-size: 15px; }
+#app[data-mode="phone"] .castor-goal .goal-seg-option span { min-height: 44px; font-size: 15px; padding-inline: var(--s1); }
 #app[data-mode="phone"] .castor-goal .goal-field input { min-height: 44px; font-size: 16px; }
 #app[data-mode="phone"] .castor-goal .goal-today { min-height: 44px; }
 #app[data-mode="phone"] .castor-goal .goal-line { font-size: 14px; }
