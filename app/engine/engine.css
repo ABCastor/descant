@@ -3705,5 +3705,13 @@ html[data-keyhint="on"] .castor-tab-item:has(.word-key) .castor-tab-close { visi
 }
 .castor-posted::before { content: ""; width: 9px; height: 5px; margin-top: -3px; border-left: 2px solid var(--between, #667D2F); border-bottom: 2px solid var(--between, #667D2F); transform: rotate(-45deg); }
 .castor-posted.is-leaving { opacity: 0; transition: opacity .24s ease-out; }
+/* Sending: a quiet ring. Kept here: the save word's device mark, in the secondary ink. The tick is the server's. */
+.castor-posted { width: max-content; max-width: calc(100vw - 32px); }
+.castor-posted[data-state="sending"]::before { width: 6px; height: 6px; margin-top: 0; border: 1.5px solid var(--ink-3, #86867f); border-radius: 50%; transform: none; }
+.castor-posted[data-state="kept"]::before {
+  width: 16px; height: 16px; margin-top: 0; border: 0; transform: none; flex: none; background: var(--ink-2, #676761);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4h14v12H3z M7 13h6'/%3E%3C/svg%3E") center / 16px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4h14v12H3z M7 13h6'/%3E%3C/svg%3E") center / 16px no-repeat;
+}
 @keyframes castor-posted-in { from { opacity: 0; transform: translate(-50%, -6px); } to { opacity: 1; transform: translateX(-50%); } }
 @media (prefers-reduced-motion: reduce) { .castor-posted { animation: none; } .castor-posted.is-leaving { transition: none; } }

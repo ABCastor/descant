@@ -713,6 +713,17 @@
     return '<div class="cw-editor-stack"><div class="cw-mirror cw-read">' + html + '</div></div>';
   }
 
+  /* The phone keyboard's own help: corrections, suggestions and a capital at a sentence's start.
+     The host holds the Markdown with its marks hidden (display: none), so the keyboard reads and
+     replaces only the words on the page; a correction arrives as an ordinary replacement of those
+     words (onBeforeInput) and never reaches a mark. The grey word a keyboard predicts inline would
+     be drawn in the transparent host, unseen, so that one stays off. Off: the host asks for none. */
+  function typingHelpOn(edit, on) {
+    edit.setAttribute('autocorrect', on ? 'on' : 'off');
+    edit.setAttribute('autocapitalize', on ? 'sentences' : 'off');
+    edit.setAttribute('writingsuggestions', 'false');
+  }
+
   function focusedContents(wrap, b) {
     var stack = document.createElement('div');
     stack.className = 'cw-editor-stack';
@@ -725,11 +736,7 @@
     edit.setAttribute('role', 'textbox');
     edit.setAttribute('aria-multiline', 'true');
     edit.setAttribute('aria-label', 'Writing block');
-    // The visible text is the mirror; the host's own text is transparent, so a
-    // spell underline would be drawn under characters nobody can see, and an
-    // autocorrect would rewrite Markdown markers behind the writer's back.
-    edit.setAttribute('autocorrect', 'off');
-    edit.setAttribute('autocapitalize', 'off');
+    typingHelpOn(edit, !!opts.typingHelp);
     edit.setAttribute('autocomplete', 'off');
     edit.setAttribute('data-enable-grammarly', 'false');
     edit.spellcheck = !!opts.spellcheck;
@@ -6186,6 +6193,10 @@
     setSpellcheck: function (on) {
       opts.spellcheck = !!on;
       if (page) page.querySelectorAll('.cw-edit').forEach(function (edit) { edit.spellcheck = !!on; });
+    },
+    setTypingHelp: function (on) {
+      opts.typingHelp = !!on;
+      if (page) page.querySelectorAll('.cw-edit').forEach(function (edit) { typingHelpOn(edit, !!on); });
     },
 
     updateFootnote: function (key, text) {

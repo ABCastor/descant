@@ -215,6 +215,7 @@
 #app #more-sheet .foot-by:hover { color: var(--ink); }
 #app #more-sheet [data-icon="share"] { --icon: var(--icon-share); }
 #app #more-sheet [data-icon="article"] { --icon: var(--icon-files); }
+#app #more-sheet [data-icon="new"] { --icon: var(--icon-new); }
 #app #more-sheet [data-icon="search"] { --icon: var(--icon-search); }
 #app #more-sheet [data-icon="settings"] { --icon: var(--icon-settings); }
 #app #more-sheet [data-icon="shortcuts"] { --icon: var(--icon-keyboard); }
@@ -308,6 +309,7 @@
   --icon-outline: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 6h15M8.5 12h11M8.5 18h11'/%3E%3Cpath d='M4.5 12h.01M4.5 18h.01' stroke-width='2.4'/%3E%3C/svg%3E");
   --icon-comment: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v9.5a1.5 1.5 0 0 1-1.5 1.5h-7.5L7 20.5V17H5a1.5 1.5 0 0 1-1.5-1.5V6A1.5 1.5 0 0 1 5 4.5Z'/%3E%3C/svg%3E");
   --icon-changes: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 12a8 8 0 1 0 2.4-5.7L4 8.6'/%3E%3Cpath d='M4 4v4.6h4.6M12 8v4.2l2.8 1.8'/%3E%3C/svg%3E");
+  --icon-new: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.5 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8.5Z'/%3E%3Cpath d='M13.5 3.5v5h5M12 11.5v6M9 14.5h6'/%3E%3C/svg%3E");
   --icon-files: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6.5A1.5 1.5 0 0 1 5.5 5H10l2 2h6.5A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5Z'/%3E%3C/svg%3E");
   --icon-drafts: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6.5V5a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 20 5v11a1.5 1.5 0 0 1-1.5 1.5H17'/%3E%3Crect x='4' y='6.5' width='13' height='14' rx='1.5'/%3E%3C/svg%3E");
   --icon-back: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 5l-7 7 7 7'/%3E%3C/svg%3E");
@@ -894,6 +896,46 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
 
 /* Import (import.js): the Files panel's own view, from the choice to the receipt. */
 #app .files-new-area .files-import { margin-left: var(--s4); }
+/* Files: New article leads the library (files.js), one row with its page-and-plus mark. */
+#app .files-new-article {
+  all: unset; box-sizing: border-box; display: flex; align-items: center; gap: var(--s2, 8px); width: 100%;
+  min-height: 36px; margin: 0 0 var(--s2, 8px); padding: 0 var(--s2, 8px) 0 2px; border-radius: var(--radius-sm, 6px);
+  color: var(--ink); font: 500 14px/1.2 var(--font-ui); cursor: pointer; touch-action: manipulation;
+}
+#app .files-new-article::before {
+  content: ""; flex: none; width: 20px; height: 20px; background: currentColor;
+  -webkit-mask: var(--icon-new) center / 20px no-repeat; mask: var(--icon-new) center / 20px no-repeat;
+}
+#app .files-new-article:active { background: var(--wash); }
+@media (hover: hover) { #app .files-new-article:hover { background: var(--wash); } }
+#app .files-new-article:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: -2px; }
+/* A touch screen: every row and action in Files is a 44 px target; a desktop keeps its tighter list. */
+@media (any-pointer: coarse) {
+  #app .files-new-article, #app .files-row.files-tree-item { min-height: 44px; }
+  #app :is(.files-new-folder, .files-new-create, .files-new-cancel) {
+    display: inline-flex; align-items: center; box-sizing: border-box; min-height: 44px; padding: 0 var(--s2, 8px);
+  }
+  #app .files-new-area .files-import { margin-left: var(--s2, 8px); }
+  #app .files-new-input { box-sizing: border-box; min-height: 44px; }
+}
+
+/* New article started on its own (Files, Menu, Search): the title field is the page's title, at the
+   top, with Create beside the keyboard's Return; the list of articles is the + tab's, not this. */
+#app .castor-chooser[data-start] { margin-top: var(--s5, 24px); padding-inline: 0; }
+#app .castor-chooser[data-start] :is(.castor-chooser-heading, .castor-chooser-search, .castor-chooser-list, .castor-chooser-new) { display: none; }
+#app .castor-chooser[data-start] .castor-chooser-form { gap: var(--s2, 8px); }
+#app .castor-chooser[data-start] .castor-chooser-title {
+  min-height: 52px; padding: 6px 0; border: 0; border-bottom: 1px solid var(--rule); border-radius: 0; background: transparent;
+  font: 600 calc(var(--reading-size, 20px) * 1.9)/1.2 var(--font-reading); color: var(--ink);
+}
+/* The same size as the article's own title on each screen (engine.css: an h1 is 1.9em of the text). */
+#app:is([data-mode="phone"], [data-mode="tablet"]) .castor-chooser[data-start] .castor-chooser-title { font-size: calc(var(--reading-size-narrow, 18px) * 1.9); }
+#app .castor-chooser[data-start] .castor-chooser-title:focus { outline: none; border-bottom-color: var(--ink-2); }
+#app .castor-chooser[data-start] .castor-chooser-title::placeholder { color: var(--ink-3); opacity: 1; }
+#app .castor-chooser[data-start] .castor-chooser-create { background: var(--ink); color: var(--paper); border-color: var(--ink); padding-inline: 16px; font-weight: 600; }
+#app .castor-chooser[data-start] .castor-chooser-cancel { border-color: transparent; color: var(--ink-2); }
+/* Leaving: the new article is laid out under it while the title field keeps the focus. */
+#app .castor-chooser[data-leaving] { position: absolute; opacity: 0; pointer-events: none; }
 #app .import-view { font: 400 14px/1.45 var(--font-ui); color: var(--ink); overflow-wrap: anywhere; }
 #app .import-top { display: flex; margin: 0 0 var(--s2) calc(-1 * var(--s2)); }
 #app .import-back {

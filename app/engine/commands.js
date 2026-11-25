@@ -299,6 +299,7 @@
       keys: APP_KEYS[cmd.id] ? appKeyLabel(APP_KEYS[cmd.id]) : (cmd.keys || ''),
       section: cmd.section || 'Actions',
       hint: cmd.hint || '',
+      words: cmd.words || '',
       when: cmd.when || null,
       listed: cmd.listed || null,
       run: cmd.run
@@ -1422,11 +1423,16 @@
   /* The commands the search box lists for a query: ranked as the palette ranks
      them, only those this page offers, each with whether it can run now. */
   function matching(q, limit) {
-    var found = rank(String(q || '').trim(), registry.filter(listed), function (c) {
-      return c.title + ' ' + c.section + ' ' + c.id;
-    });
+    // A command's `words` are the ones a writer would type for it ("new", "write" for New article):
+    // each is matched on its own, so "write" finds New article as well as it finds its own word.
+    var query = String(q || '').trim();
+    var found = registry.filter(listed).map(function (c) {
+      var best = score(query, c.title + ' ' + c.section + ' ' + c.id);
+      String(c.words || '').split(/\s+/).filter(Boolean).forEach(function (w) { best = Math.max(best, score(query, w + ' ' + c.title)); });
+      return { c: c, s: best };
+    }).filter(function (r) { return r.s > 0; }).sort(function (a, b) { return b.s - a.s; }).map(function (r) { return r.c; });
     return found.slice(0, limit || 12).map(function (c) {
-      return { id: c.id, title: c.title, section: c.section, hint: c.hint, keys: keyLabel(c.keys), available: available(c) };
+      return { id: c.id, title: c.title, section: c.section, hint: c.hint, words: c.words, keys: keyLabel(c.keys), available: available(c) };
     });
   }
 

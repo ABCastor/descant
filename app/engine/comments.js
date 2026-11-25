@@ -211,6 +211,7 @@
   var S = {
     page: null, panelEl: null, world: 'sample',
     threads: [], people: [], filter: 'open', authorFilter: '',
+    posting: null, keptNotes: {},     // the phone's note on a comment just posted (postedNote)
     commentActions: null, actionScope: '', actionJournal: {}, actionReceipts: {}, actionErrors: {}, actionSending: {}, actionEditor: null, actionProjection: {}, actionProjectionActors: {},
     loadedPath: Castor.piecePath ? Castor.piecePath() : '',
     active: null,            // thread id lifted right now
@@ -882,6 +883,10 @@
     switchScope();
     var storageKey = key();
     var threads;
+    /* The comment just posted on the phone, if this save carries it: told whether the server took
+       it (postedNote), never before. */
+    var watch = S.posting; S.posting = null;
+    function told(outcome, why) { if (watch) { var w = watch; watch = null; w(outcome, why || ''); } }
     try {
       S.threads = reconciledThreads(S.threads.map(normalise), storageKey);
       // Persist before the shared bucket's first read, including a read that
@@ -892,7 +897,7 @@
     } catch (e) { return false; }
     S.threads = threads;
     var path = storablePath();
-    if (!path) return true;
+    if (!path) { told('kept'); return true; }
     var reviewer = reviewing();
     var readerAccount = reviewer && roleConfirmed() ? reviewerIdentity(Castor.role) : null;
     var writerAccount = !reviewer && Castor.role.publicWriter ? Castor.role.id : '';
@@ -902,6 +907,7 @@
         JSON.stringify(threads.map(headForWire)) === JSON.stringify(canonical.map(headForWire))) {
       if (Castor.comments) Castor.comments.durable = !actionPending();
       try { global.localStorage.removeItem(storageKey + '.unsaved'); } catch (e) { /* a later load confirms it */ }
+      told('posted');
       return true;
     }
     if (Castor.comments) Castor.comments.durable = false;
@@ -916,16 +922,16 @@
     function keptAfterAll() {
       try { if (global.localStorage.getItem(markKey) === token && token !== markId) { token = markId; global.localStorage.setItem(markKey, markId); } } catch (e) { /* the thread copy remains */ }
     }
-    function keep(result) { mark(false); return result; }
+    function keep(result) { mark(false); told('kept'); return result; }
     /* A comment that stays here says it is waiting on this device; one sent below is saving.
        A path that names its own reason (comments:unsaved) needs neither. */
-    function kept() { mark(false); if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:pending', { path: path }); return true; }
+    function kept() { mark(false); told('kept'); if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:pending', { path: path }); return true; }
     if (driven()) return kept();
     var who = (Castor.who && Castor.who.get) ? Castor.who.get() : '';
     /* A reviewer is not asked and sends no name: the server records their
        comments under the name they signed in with, whatever the page says. */
     if (!roleConfirmed()) {
-      mark(false);
+      mark(false); told('kept');
       if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unsaved', { path: path, reason: 'Checking your sign-in. Your words stay on this device and are sent once you are confirmed.' });
       if (!reviewer && Castor.reconfirm) Castor.reconfirm();
       return true;
@@ -937,7 +943,7 @@
       return kept();
     }
     if (!reviewer && !pendingIdentityKnown(pendingMessages(threads, storageKey), false, null)) {
-      mark(false);
+      mark(false); told('kept');
       if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unsaved', { path: path, reason: 'The original writer of these pending words is unknown or unavailable. Your words remain on this device.' });
       return true;
     }
@@ -953,7 +959,7 @@
         });
       });
       if (principals.length > 1) {
-        mark(false);
+        mark(false); told('kept');
         if (Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unsaved', { path: path, reason: 'Pending comments have different writers. Their words remain on this device.' });
         return true;
       }
@@ -1068,6 +1074,10 @@
           }
         });
         settleSubmitted(confirmed, storageKey);
+        // Only a comment the server gave a number to is posted; one it held stays kept here.
+        var postedNow = Object.keys(sent);
+        if (watch) told(watch.thread && sent[watch.thread] ? 'posted' : 'kept');
+        postedNow.forEach(function (id) { if (S.keptNotes[id]) { delete S.keptNotes[id]; postedNote('posted'); } });
         var merged = mergeServer(confirmed, sent, local, storageKey, outgoing, held);
         var updated = merged.threads;
         try {
@@ -1099,6 +1109,7 @@
     }).catch(function (error) {
       keptAfterAll();
       var transient = !error.status || error.status >= 500 || error.status === 429 || error.reason === 'busy' || error.reason === 'concurrent-save';
+      told('kept', !error.status ? 'offline' : transient ? 'server' : '');
       if (transient) deferCommentRetry(storageKey);
       else delete S.retryReads[storageKey];
       if (available() && key() === storageKey && Castor.comments) Castor.comments.durable = false;
@@ -4194,14 +4205,26 @@
       pending: true
     }, S.threads.length);
     S.threads.push(thread);
-    if (!save()) { S.threads = S.threads.filter(function (t) { return t.id !== thread.id; }); return null; }
-    S.filter = 'open';
-    layout();
     /* Quiet reading puts the thread somewhere the writer is not looking, so the
        panel opens on the first comment. Without it, pressing Enter makes the
-       composer vanish and produces nothing visible except a tinted word. */
+       composer vanish and produces nothing visible except a tinted word. On the phone a
+       note says where the comment is: sending, then posted once the server has it, or kept
+       on this device until it can be sent. */
     var phone = !!(Castor.panels && Castor.panels.state && (Castor.panels.state() || {}).mode === 'phone');
-    if (phone && who === 'human') postedNote();
+    var told = null;
+    if (phone && who === 'human') {
+      S.posting = function (outcome, why) {
+        told = outcome;
+        if (outcome === 'kept') S.keptNotes[thread.id] = true;
+        postedNote(outcome, why);
+      };
+      S.posting.thread = thread.id;
+    }
+    if (!save()) { S.posting = null; S.threads = S.threads.filter(function (t) { return t.id !== thread.id; }); return null; }
+    S.posting = null;
+    S.filter = 'open';
+    layout();
+    if (phone && who === 'human') { if (!told) postedNote('sending'); }
     else if (quiet() && Castor.panels && Castor.panels.open && !Castor.panels.isOpen('comments')) {
       Castor.panels.open('comments', 'right');
     }
@@ -4211,21 +4234,41 @@
   }
 
   /* On the phone a posted comment leaves the writer on the text: the sheet would cover the
-     words just commented on. A short note says it went, and goes by itself. */
-  function postedNote() {
+     words just commented on. A short note says where the comment is, and goes by itself.
+     "Posted" and its haptic only once the server has given the comment its number. */
+  var POSTED_WORDS = {
+    sending: 'Posting…', posted: 'Posted',
+    offline: 'Kept on this device, will post when online',
+    server: 'Kept on this device, will post when the server answers',
+    kept: 'Kept on this device, not posted yet'
+  };
+  function postedNote(outcome, why) {
+    outcome = outcome || 'posted';
+    var offline = global.navigator && global.navigator.onLine === false;
+    var words = outcome === 'kept' ? POSTED_WORDS[offline ? 'offline' : why] || POSTED_WORDS.kept : POSTED_WORDS[outcome];
     var host = (DOC.getElementById && DOC.getElementById('app')) || DOC.body;
     var old = host.querySelector ? host.querySelector('.castor-posted') : S.postedNote;
-    if (old && old.remove) old.remove();
-    var note = el('div', 'castor-posted');
-    note.setAttribute('role', 'status');
-    note.appendChild(el('span', 'castor-posted-word', 'Posted'));
-    host.appendChild(note); S.postedNote = note;
-    if (Castor.motion) Castor.motion.haptic('posted');
+    var note = old && old.parentNode && !(old.classList && old.classList.contains('is-leaving')) ? old : null;
+    if (!note) {
+      if (old && old.remove) old.remove();
+      note = el('div', 'castor-posted');
+      note.setAttribute('role', 'status');
+      note.appendChild(el('span', 'castor-posted-word', words));
+      host.appendChild(note);
+    } else {
+      var word = note.querySelector && note.querySelector('.castor-posted-word');
+      if (word) word.textContent = words;
+    }
+    note.setAttribute('data-state', outcome);
+    S.postedNote = note;
+    if (outcome === 'posted' && Castor.motion) Castor.motion.haptic('posted');
     global.clearTimeout(S.postedTimer);
+    // Sending stays until the answer; a kept comment's longer words stay longer.
+    if (outcome === 'sending') { S.postedTimer = 0; return; }
     S.postedTimer = global.setTimeout(function () {
       note.classList.add('is-leaving');
       global.setTimeout(function () { if (note.remove) note.remove(); if (S.postedNote === note) S.postedNote = null; }, Castor.motion ? Castor.motion.ms('out') + 40 : 240);
-    }, 2400);
+    }, outcome === 'kept' ? 4000 : 2400);
   }
 
   /* A quick pass finds exact words only. A comment whose words were since edited

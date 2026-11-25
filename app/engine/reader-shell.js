@@ -61,7 +61,7 @@
     if (!reviewing()) return;
     var doc = global.document;
     // A reader keeps Zen and the page's look; the writing tools are the writer's.
-    ['set-dim', 'set-marks', 'set-spell', 'set-language', 'set-touch-format', 'set-agent-tray', 'set-preset'].forEach(function (id) {
+    ['set-dim', 'set-marks', 'set-spell', 'set-typing-help', 'set-language', 'set-touch-format', 'set-agent-tray', 'set-preset'].forEach(function (id) {
       var el = doc.getElementById(id), row = el && el.closest ? el.closest('.set-row') : el && el.parentNode;
       if (row) row.hidden = true;
     });

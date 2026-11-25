@@ -161,6 +161,11 @@
       articles: group(sheet, 'menu-articles', 'Open articles')
     };
     var groupOf = { outline: 'article', changes: 'article', drafts: 'article', links: 'article', workspace: 'article', files: 'library', 'for-you': 'library' };
+    // The library starts with New article (app.js newArticle): one tap, the caret in its title.
+    if (groups && Castor.pieces && Castor.pieces.create) {
+      var fresh = proxy(groups.library, 'menu-new-article', 'New article', null, function () { Castor.pieces.create(); }, 'new');
+      fresh.hidden = !!(Castor.role && Castor.role.reviewer);
+    }
     ['outline', 'comments', 'changes', 'drafts', 'links', 'workspace', 'files', 'for-you'].forEach(function (id) {
       var button = id === 'comments' && commentControl || doc.querySelector('.topwords [data-panel="' + id + '"], #more-sheet [data-panel="' + id + '"]');
       if (id === 'comments' && button) {

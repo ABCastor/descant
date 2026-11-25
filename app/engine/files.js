@@ -723,6 +723,20 @@
     var wantedPath = focusPath || (activeRow && activeRow.dataset.path);
     body.textContent = '';
 
+    /* New article leads the library, where a writer looks for it first: one tap and the new
+       article's title has the caret (app.js newArticle). On a phone the sheet goes first, inside
+       the same tap, so the keyboard rises for the title. */
+    if (served() && Castor.pieces && Castor.pieces.create && !(Castor.role && (Castor.role.reviewer || Castor.role.reader))) {
+      var fresh = el('button', 'files-new-article', 'New article');
+      fresh.type = 'button';
+      fresh.addEventListener('click', function () {
+        var app = DOC.getElementById('app');
+        if (app && app.dataset.mode === 'phone' && Castor.panels && Castor.panels.close) Castor.panels.close('files');
+        Castor.pieces.create();
+      });
+      body.appendChild(fresh);
+    }
+
     var tree = el('div', 'files-tree');
     tree.setAttribute('role', 'tree');
     tree.setAttribute('aria-label', 'Piece files');

@@ -234,7 +234,14 @@
       if (list.length >= SHOWN[h.kind]) { capped = true; return; }
       list.push({ kind: h.kind, hit: h });
     });
-    GROUPS.forEach(function (g) {
+    // A search that names a command in so many words ("new", "write" for New article) is looking
+    // for that command: its group comes first, above any article that holds the word.
+    var asked = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    var named = asked.length && byKind.command.some(function (row) {
+      var words = (row.cmd.title + ' ' + (row.cmd.words || '')).toLowerCase().split(/[^a-z0-9]+/);
+      return asked.every(function (a) { return words.some(function (w) { return w.indexOf(a) === 0; }); });
+    });
+    (named ? [GROUPS[3], GROUPS[0], GROUPS[1], GROUPS[2]] : GROUPS).forEach(function (g) {
       var list = byKind[g[0]];
       if (!list.length) return;
       var section = el('section', 'search-group');

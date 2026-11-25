@@ -1348,9 +1348,9 @@
     });
     if (!found.length) chooser.list.appendChild(line('p', 'castor-chooser-none', 'No article has that in its title.'));
   }
-  function openChooser() {
+  function openChooser(starting) {
     if (reviewing() || !liveState || !liveState.path) return;
-    if (chooser) { chooser.search.focus(); return; }
+    if (chooser) { if (starting) startForm(); else chooser.search.focus(); return; }
     var box = line('section', 'castor-chooser');
     box.id = 'castor-chooser';
     box.setAttribute('role', 'region');
@@ -1386,7 +1386,17 @@
     els.article.setAttribute('inert', '');
     els.app.setAttribute('data-chooser', 'on');
     renderTabs();
-    search.focus();
+    if (starting) { box.setAttribute('data-start', ''); startForm(); }
+    else search.focus();
+  }
+  /* NEW ARTICLE, from Files, the phone's Menu or Search: one tap and the title of the new
+     article has the caret, with the keyboard up (the focus is given inside the tap). Return
+     creates it in Git, from its title, and the article opens with the caret at the end of
+     that title, so a second Return starts its first paragraph. */
+  function newArticle() {
+    if (reviewing() || !liveState || !liveState.path) return false;
+    openChooser(true);
+    return !!chooser;
   }
   function startForm() {
     if (!chooser || chooser.form) return;
@@ -1396,11 +1406,17 @@
     title.setAttribute('aria-label', 'Title of the new article');
     var create = line('button', 'castor-chooser-create', 'Create'); create.type = 'submit';
     var cancel = line('button', 'castor-chooser-cancel', 'Cancel'); cancel.type = 'button';
+    title.setAttribute('enterkeyhint', 'go');
     form.appendChild(title); form.appendChild(create); form.appendChild(cancel);
     chooser.start.hidden = true;
-    chooser.box.insertBefore(form, chooser.status);
+    var starting = chooser.box.hasAttribute('data-start');
+    chooser.box.insertBefore(form, starting ? chooser.search : chooser.status);
     chooser.form = form;
-    cancel.addEventListener('click', function () { form.remove(); chooser.form = null; chooser.start.hidden = false; chooser.start.focus(); });
+    cancel.addEventListener('click', function () {
+      // Started on its own (Files, Menu, Search), Cancel goes back to the article that was open.
+      if (chooser && chooser.box.hasAttribute('data-start')) { closeChooser(false); return; }
+      form.remove(); chooser.form = null; chooser.start.hidden = false; chooser.start.focus();
+    });
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       var name = String(title.value || '').trim();
@@ -1409,7 +1425,7 @@
       chooser.status.textContent = 'Creating the article in Git.';
       createArticle(name).then(function (made) {
         if (!pieces.some(function (p) { return p.path === made.path; })) pieces = pieces.concat([{ path: made.path, folder: made.folder, title: made.title || name }]);
-        return chooseArticle(made.path);
+        return openCreated(made.path);
       }).catch(function (error) {
         create.disabled = false;
         if (chooser) chooser.status.textContent = (error && error.message) || 'The article could not be created.';
@@ -1426,6 +1442,29 @@
         return payload;
       });
     });
+  }
+  /* The new article opens under the title field, which keeps the focus (and so the phone keeps
+     its keyboard) until the caret is in the article's own title: the focus moves from one to the
+     other, never through nothing. */
+  function openCreated(path) {
+    if (!chooser) return openPiece(path);
+    var box = chooser.box;
+    chooser.holding = true;
+    box.setAttribute('data-leaving', '');
+    return openPiece(path).then(function (ok) {
+      if (ok) caretAtTitle();
+      if (chooser && chooser.box === box) closeChooser(false);
+      return ok;
+    }, function (error) {
+      if (chooser && chooser.box === box) { chooser.holding = false; box.removeAttribute('data-leaving'); }
+      throw error;
+    });
+  }
+  function caretAtTitle() {
+    var text = editorSource(), m = /^# .*$/m.exec(text.replace(/^---\n[\s\S]*?\n---\n/, function (front) { return front.replace(/[^\n]/g, ' '); }));
+    if (!m || !Castor.editor || !Castor.editor.revealSource) return false;
+    var end = m.index + m[0].length;
+    return Castor.editor.revealSource(end, end);
   }
   function closeChooser(refocus) {
     if (!chooser) return;
@@ -1452,7 +1491,8 @@
   var openingTabs = {};
   bus.on('piece:opening', function (e) {
     if (e) openingTabs[e.path] = !visiblePieces().some(function (p) { return p.path === e.path; });
-    if (chooser) closeChooser(false);
+    if (chooser && chooser.holding) { els.article.hidden = false; els.article.removeAttribute('inert'); }
+    else if (chooser) closeChooser(false);
     if (emptied) leaveEmpty();
   });
   bus.on('piece:opened', function (e) {
@@ -1538,7 +1578,10 @@
       run: function () { C.openList({ title: 'Open beside', items: pieces.map(function (p) { return { id: p.path, label: p.title }; }),
         onPick: function (item) { var p = pieces.find(function (p) { return p.path === item.id; }); if (p) Castor.files.openArticle(p.path, p.title); } }); } });
     C.register({ id: 'tabs.new', title: 'Open or start an article', hint: 'a new tab', section: 'Go to',
-      when: function () { return !reviewing() && !!(liveState && liveState.path); }, run: openChooser });
+      when: function () { return !reviewing() && !!(liveState && liveState.path); }, run: function () { openChooser(); } });
+    C.register({ id: 'article.new', title: 'New article', hint: 'start one from its title', section: 'Go to',
+      words: 'new create start write blank piece draft',
+      when: function () { return !reviewing() && !!(liveState && liveState.path); }, run: newArticle });
     C.register({ id: 'tabs.close', title: 'Close this article', hint: 'hides its tab, deletes nothing', section: 'Go to',
       keys: mac ? '⌃⇧W' : '⌥⇧W', when: canCloseHere, run: function () { closeTab(openArticle()); } });
     [-1, 1].forEach(function (direction) {
@@ -1590,7 +1633,7 @@
     b.setAttribute('aria-keyshortcuts', mac ? 'Meta+Alt+P' : 'Control+Alt+P');
     b.title = 'Open or start an article (' + (mac ? '⌘⌥P' : 'Ctrl+Alt+P') + ')';
     b.textContent = '+';
-    b.addEventListener('click', openChooser);
+    b.addEventListener('click', function () { openChooser(); });
     return b;
   }
 
@@ -3126,11 +3169,16 @@
         return;
       }
       saver.restored = false;
-      setSave('unsaved');
+      // The browser knows it has no network: the words wait on this device, and the save word says
+      // so once the journal holds them (a moment), not after the save pause and a failed send.
+      // The pause still sends them, and the network's return sends them at once (retryNow).
+      if (global.navigator && global.navigator.onLine === false && journalKeeps()) setSave('offline', OFFLINE_KEPT);
+      else setSave('unsaved');
     }
     clearTimeout(saver.timer);
     saver.timer = setTimeout(function () { saver.timer = 0; saveNow(false); }, SAVE_PAUSE);
   }
+  var OFFLINE_KEPT = 'This device has no network. Your text is kept on this device and is sent when the connection returns.';
 
   /* One POST, bounded by SAVE_TIMEOUT. Always resolves: {status, body, error}. */
   function post(path, base, text, who, keepalive) {
@@ -3338,9 +3386,13 @@
     var r = gateRefusal(lines.join('\n'));
     if (!r) return null;
     var text = editorSource(), more = lines.length > 1 ? ' One more rule waits after it.' : '';
+    // With the keyboard's help on, two typed hyphens become an em dash (the phone's Smart
+    // Punctuation): the writer is told where the dash came from and how to keep hyphens.
+    var keyboard = r.at === '\u2014' && typingHelpOn() && !!(global.matchMedia && global.matchMedia('(any-pointer: coarse)').matches)
+      ? ' The keyboard turns two hyphens into an em dash; Smart Punctuation in Settings, General, Keyboard turns that off.' : '';
     return {
       rule: r.rule, line: r.line, refusal: r,
-      note: refusalMessage(r, text, 'Saved as a draft. Before it can be published: ', '') + more,
+      note: refusalMessage(r, text, 'Saved as a draft. Before it can be published: ', '') + more + keyboard,
       publish: refusalMessage(r, text, 'Fix this before publishing: ', '') + more,
       show: function () { return showRefusal(r); }
     };
@@ -3756,6 +3808,7 @@
 
   Castor.pieces = {
     open: openPiece,
+    create: newArticle,
     list: function () { return pieces.slice(); },
     /* The catalogue again, after articles were added (an import): the strip and Files. */
     refresh: function () {
@@ -4032,6 +4085,7 @@
          fired every listener twice. */
       onSelect: null,
       spellcheck: recall('spellcheck') !== '0',
+      typingHelp: typingHelpOn(),
       showWriterNotes: writerNotes,
       showMarks: marksOn(),
       onComment: function (anchor) {
@@ -4507,6 +4561,13 @@
     return applyDim();
   }
 
+  /* The keyboard's corrections and capitals (Settings, Writing): on by default on a touch screen,
+     where the writer expects the phone's keyboard to help; a desktop keeps them off, as it always had. */
+  function typingHelpOn() {
+    var v = recall('typingHelp');
+    if (v === '1' || v === '0') return v === '1';
+    return !!(global.matchMedia && global.matchMedia('(any-pointer: coarse)').matches);
+  }
   function writingPreference(name, allowed, fallback) {
     var value = recall(name); return allowed.indexOf(value) >= 0 ? value : fallback;
   }
@@ -4517,6 +4578,7 @@
     els.app.style.setProperty('--reading-size', size + 'px');
     els.app.style.setProperty('--reading-size-narrow', Math.max(16, Number(size) - 2) + 'px');
     if (Castor.editor && Castor.editor.setSpellcheck) Castor.editor.setSpellcheck(recall('spellcheck') !== '0');
+    if (Castor.editor && Castor.editor.setTypingHelp) Castor.editor.setTypingHelp(typingHelpOn());
     if (Castor.island) Castor.island.setTouchEnabled(recall('touchFormat') !== '0');
   }
   function defaultPanels() {
@@ -4552,6 +4614,7 @@
     var focus = document.getElementById('set-focus'); if (focus) focus.checked = Castor.panels.isFocus();
     applyDim();
     var spell = document.getElementById('set-spell'); if (spell) spell.checked = recall('spellcheck') !== '0';
+    var help = document.getElementById('set-typing-help'); if (help) help.checked = typingHelpOn();
     var marks = document.getElementById('set-marks'); if (marks) marks.checked = marksOn();
     var width = document.getElementById('set-width'); if (width) width.value = writingPreference('textWidth', ['60', '68', '74'], '60');
     var size = document.getElementById('set-size'); if (size) size.value = writingPreference('textSize', ['18', '20', '22'], '20');
@@ -4829,7 +4892,7 @@
       var control = document.getElementById(pair[0]);
       if (control) control.addEventListener('change', function () { pair[1](control.checked); });
     });
-    [['set-spell', 'spellcheck'], ['set-touch-format', 'touchFormat'], ['set-width', 'textWidth'], ['set-size', 'textSize']].forEach(function (pair) {
+    [['set-spell', 'spellcheck'], ['set-typing-help', 'typingHelp'], ['set-touch-format', 'touchFormat'], ['set-width', 'textWidth'], ['set-size', 'textSize']].forEach(function (pair) {
       var control = document.getElementById(pair[0]);
       if (control) control.addEventListener('change', function () {
         store(pair[1], control.type === 'checkbox' ? (control.checked ? '1' : '0') : control.value);
