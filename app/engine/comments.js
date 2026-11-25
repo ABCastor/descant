@@ -1120,7 +1120,8 @@
          sent again on the next change, but the writer is told, never left to
          believe it is shared. */
       if (Castor.bus && Castor.bus.emit) {
-        Castor.bus.emit('comments:unsaved', { path: path, held: error.reason === 'legacy-reconciliation-required', reason: String((error && error.message) || error).slice(0, 300) });
+        // `offline`: no answer came (the note says "will post when online"); the save word agrees.
+        Castor.bus.emit('comments:unsaved', { path: path, held: error.reason === 'legacy-reconciliation-required', offline: !error.status, reason: String((error && error.message) || error).slice(0, 300) });
       }
     });
     if (Castor.saveStatus) save.pending = Castor.saveStatus.track(save.pending);

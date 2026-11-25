@@ -2208,7 +2208,9 @@
   }
   /* The journal holds what is typed here; false when its last write reached no store. */
   function journalKeeps() { return !!(Castor.keep && Castor.keep.healthy()); }
-  var pendingComments = {}, pendingFiles = {};
+  /* Each comment kept here, and why: `offline` (its send got no answer), `held` (the writer must
+     choose), `refused` (the server answered no) or `kept` (waiting, no reason given). */
+  var pendingComments = {}, pendingFiles = {}, commentKept = {};
   function fileWarning() { return Object.keys(pendingFiles).map(function (name) { return pendingFiles[name]; }).join(' '); }
   bus.on('files:error', function (info) {
     if (info) pendingFiles[info.name] = info.name + ': ' + info.error;
@@ -2239,7 +2241,7 @@
     else delete pendingCommentKeys[event.key];
     var path = pendingCommentPath(event.key);
     if (!path) return;
-    if (!event.newValue) delete pendingComments[path];
+    if (!event.newValue) { delete pendingComments[path]; delete commentKept[path]; }
     renderSaveState();
   });
   /* Another tab's comment on its way (its mark says sending, comments.js) is not kept here: it
@@ -2252,6 +2254,15 @@
       return false;
     }
     return !!pendingCommentPath(key);
+  }
+  function browserOffline() { return !!(global.navigator && global.navigator.onLine === false); }
+  /* Every comment kept here waits only for a connection, as its note says ("Kept on this device,
+     will post when online"): it is on this device, never "Not saved". One the writer must decide
+     on, or the server refused, is still not saved. */
+  function commentsOnDevice() {
+    var paths = Object.keys(pendingComments);
+    if (!paths.length) return browserOffline() && !!commentWarning();
+    return paths.every(function (path) { return commentKept[path] === 'offline' || commentKept[path] === 'kept' && browserOffline(); });
   }
   function commentWarning() {
     var paths = Object.keys(pendingComments);
@@ -2292,13 +2303,15 @@
     // (keep.js): until its receipt comes back they are being kept, not lost. A journal that could
     // not write says "Not saved".
     var keeping = saver.state === 'offline' && saver.typed && text !== saver.text && !deviceAt && journalKeeps();
+    var comment = commentWarning(), commentHere = !!comment && commentsOnDevice();
     return Castor.saveStatus.describe({
       checking: unasked,
       current: text === saver.text, offline: saver.state === 'offline', saving: !!saver.inflight || saver.state === 'saving',
       // Nothing typed here since the article opened: the server's own saved text is on screen.
       idle: !saver.typed && ['ready', 'saved'].indexOf(saver.state) >= 0 && text === saver.text,
       deviceAt: deviceAt,
-      history: evidence.history, shared: evidence.shared, warning: [commentWarning(), fileWarning()].filter(Boolean).join(' '),
+      history: evidence.history, shared: evidence.shared, warning: [commentHere ? '' : comment, fileWarning()].filter(Boolean).join(' '),
+      kept: commentHere ? comment : '',
       held: (['ready', 'saved'].indexOf(saver.state) >= 0 && heldRules() || {}).note || '',
       problem: keeping ? '' : ['dirty', 'refused', 'conflict', 'stale', 'locked', 'offline'].indexOf(saver.state) >= 0 ? saver.detail || SAVE_WORDS[saver.state] : ''
     });
@@ -2517,7 +2530,8 @@
   /* A comment that did not reach the repository says so where a save would. One on its way
      (`sending`) is saving: the save word shows it while the request runs, never as unsaved. */
   bus.on('comments:pending', function (info) {
-    if (!(info && info.sending)) pendingComments[(info && info.path) || saver.path] = 'A comment is kept on this device and is waiting to save.';
+    var path = (info && info.path) || saver.path;
+    if (!(info && info.sending)) { pendingComments[path] = 'A comment is kept on this device and is waiting to save.'; commentKept[path] = 'kept'; }
     renderSaveState();
   });
   bus.on('comments:unsaved', function (info) {
@@ -2538,14 +2552,18 @@
       showNotice(info.held ? 'Compare your comment with the saved copy' : 'Your comment was not saved', detail, saver.words, true);
       return;
     }
-    pendingComments[(info && info.path) || saver.path] = info && info.held
+    var path = (info && info.path) || saver.path;
+    commentKept[path] = info && info.held ? 'held' : info && info.offline ? 'offline' : 'refused';
+    pendingComments[path] = info && info.held
       ? 'Your comment is kept on this device. Open Comments to compare it with the saved copy and choose which to keep.'
+      : info && info.offline ? 'A comment is kept on this device and is posted when the connection returns.'
       : 'A comment was not saved to the shared history: ' + ((info && info.reason) || 'the server refused it') +
         ' It is kept in this browser and sent again when the connection returns or with your next comment.';
     renderSaveState();
   });
   bus.on('comments:saved', function (info) {
     delete pendingComments[(info && info.path) || saver.path];
+    delete commentKept[(info && info.path) || saver.path];
     Object.keys(pendingCommentKeys).forEach(function (key) {
       try { if (!global.localStorage.getItem(key)) delete pendingCommentKeys[key]; } catch (e) { /* keep the warning until confirmed */ }
     });
