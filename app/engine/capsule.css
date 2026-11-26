@@ -1130,8 +1130,12 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
   /* iPad held sideways has the computer's bottom bar: its words are as tall as the tablet's. */
   #app #footline :is(.descant-live-marker, .castor-save, .capsule-publish) { min-height: 44px; }
   #app .castor-goal :is(.goal-done, .goal-remove, .goal-due-clear, .goal-set) { min-height: 44px; }
+  /* iOS sizes a natively drawn date field itself (content box, its own height) and ignores min-height:
+     drawn by the page, it takes the 44 px like the Count field beside it. */
   #app .castor-goal .goal-field input { min-height: 44px; }
+  #app .castor-goal .goal-field input[type="date"] { -webkit-appearance: none; appearance: none; }
   .castor-who-pick { min-height: 44px; }
+  .search-field input { min-height: 44px; }
   /* WebKit draws a native menu at its own height and ignores min-height. */
   .descant-publish-sheet select { box-sizing: border-box; height: 44px; }
 }
