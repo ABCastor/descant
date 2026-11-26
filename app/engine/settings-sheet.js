@@ -11,7 +11,7 @@
   var panel, sub = null, fromMenu = false, wired = false, pushTimer = 0;
   // A choice the sheet shows as one line, and the select or picker that holds it.
   var CHOICES = [
-    { id: 'theme', label: 'Theme', section: 'settings-page', first: true },
+    { id: 'set-appearance', label: 'Appearance' },
     { id: 'set-size', label: 'Text size' },
     { id: 'set-width', label: 'Text width' },
     { id: 'set-language', label: 'Language of this article' },
@@ -30,23 +30,19 @@
 
   /* --- one line per choice ------------------------------------------------- */
   function options(choice) {
-    if (choice.id === 'theme') return Castor.prefs && Castor.prefs.themes ? Castor.prefs.themes : [];
     var select = doc.getElementById(choice.id);
     return select ? Array.prototype.map.call(select.options, function (o) { return { value: o.value, label: o.textContent }; }) : [];
   }
   function current(choice) {
-    if (choice.id === 'theme') return Castor.prefs && Castor.prefs.theme ? Castor.prefs.theme() : 'system';
     var select = doc.getElementById(choice.id); return select ? select.value : '';
   }
   function choose(choice, value) {
-    if (choice.id === 'theme') { if (Castor.prefs && Castor.prefs.setTheme) Castor.prefs.setTheme(value); return; }
     var select = doc.getElementById(choice.id);
     if (!select || select.value === value) return;
     select.value = value;
     select.dispatchEvent(new global.Event('change', { bubbles: true }));
   }
   function home(choice) {
-    if (choice.id === 'theme') return null;
     var select = doc.getElementById(choice.id);
     return select && select.closest ? select.closest('.set-row') : null;
   }

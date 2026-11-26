@@ -1,8 +1,9 @@
 /* The theme before the first paint. build.py inlines this into <head>, so a page whose
    stored choice differs from the system's never shows the system's colours first.
-   The choice is the one app.js stores (castor.<world>.theme: light, dark or system);
-   with none stored the page follows the system. app.js's setTheme repaints the same
-   four attributes once it boots and owns them from then on. */
+   The choice is the one app.js stores (castor.<world>.theme: light, dark or system,
+   with themeChosen beside it); with none the page follows the system. An older theme
+   without themeChosen was not a choice: only its Dark is kept (app.js drops the rest).
+   app.js's setTheme repaints the same four attributes once it boots and owns them. */
 (function () {
   var root = document.documentElement;
   root.classList.add('js');
@@ -15,7 +16,11 @@
   if (/^(compact|regular|large|quiet)$/.test(header || '')) root.setAttribute('data-header', header);
   if (params.get('controls') === 'quiet') root.setAttribute('data-controls', 'quiet');
   var choice = 'system';
-  try { choice = localStorage.getItem('castor.' + (root.getAttribute('data-world') || 'dev') + '.theme') || 'system'; } catch (e) { /* no storage: follow the system */ }
+  try {
+    var prefix = 'castor.' + (root.getAttribute('data-world') || 'dev') + '.';
+    choice = localStorage.getItem(prefix + 'theme') || 'system';
+    if (localStorage.getItem(prefix + 'themeChosen') !== '1' && choice !== 'dark') choice = 'system';
+  } catch (e) { /* no storage: follow the system */ }
   if (choice !== 'light' && choice !== 'dark') choice = 'system';
   var dark = choice === 'dark' ||
     (choice === 'system' && !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches));

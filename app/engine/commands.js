@@ -995,10 +995,13 @@
         else togglePanel(lastPanelId || 'outline');
       }
     });
-    ['light', 'dark', 'system'].forEach(function (mode) {
+    // Appearance, in the words of the Settings row; Search also finds it as a theme or a mode.
+    [['system', 'System', 'follow the device', 'theme auto automatic device'],
+      ['light', 'Light', '', 'theme light-mode day'],
+      ['dark', 'Dark', '', 'theme dark-mode night']].forEach(function (a) {
       register({
-        id: 'view.theme.' + mode, title: 'Theme ' + mode, section: 'View',
-        run: function () { setTheme(mode); }
+        id: 'view.theme.' + a[0], title: 'Appearance: ' + a[1], hint: a[2] || undefined, section: 'View', words: a[3],
+        run: function () { setTheme(a[0]); }
       });
     });
     [['computer', 'Computer'], ['ipad', 'iPad'], ['phone', 'Phone']].forEach(function (s) {

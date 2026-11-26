@@ -296,6 +296,10 @@
   #app[data-mode="tablet"] .dock-resizer { display: none; }
   #app[data-mode="tablet"] .sheet-grabber { display: block; }
   #app[data-mode="tablet"]:is([data-left-open="1"], [data-right-open="1"]) .command-island { opacity: 0; visibility: hidden; pointer-events: none; }
+  /* Writing in the article with a sheet open: the sheet steps down out of the way and the writing
+     row stays, so the caret, Done and the save state are in sight; both are back when the keyboard goes. */
+  #app[data-mode="tablet"][data-keyboard="up"] :is(#dock-left, #dock-right)[data-open="1"] { transform: translateY(100vh); }
+  #app[data-mode="tablet"][data-keyboard="up"]:is([data-left-open="1"], [data-right-open="1"]) .command-island { opacity: 1; visibility: visible; pointer-events: auto; }
 }
 #app:is([data-mode="tablet"], [data-mode="phone"]) .dock[data-open="1"] {
   border-radius: var(--radius-sheet, 16px) var(--radius-sheet, 16px) 0 0;
@@ -346,6 +350,10 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
 #app[data-mode="phone"] #topbar.mast .topwords { display: flex; align-items: center; position: static; gap: 8px; height: 52px; }
 #app[data-mode="phone"] #topbar.mast .topwords .word { min-height: 44px; height: 44px; padding: 0 8px; }
 #app[data-mode="phone"] #topbar.mast .topwords [data-panel="comments"] { display: inline-flex; }
+/* A 320 px window (Slide Over, the narrowest Split View): Comments keeps its icon and count, so Search fits. */
+@container castorapp (max-width: 359.98px) {
+  #app[data-mode="phone"] #topbar.mast .topwords [data-panel="comments"] .word-label { display: none; }
+}
 /* Phone: the Menu and Settings are one kind of sheet. Full height under the top row,
    on the paper, with named groups of 48 px rows on cards, as in Settings on the device. */
 #app[data-mode="phone"] #topbar.mast #more-sheet,

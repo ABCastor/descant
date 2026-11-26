@@ -3977,6 +3977,7 @@
   function key(name) { return 'castor.' + world + '.' + name; }
   function store(name, value) { try { localStorage.setItem(key(name), value); } catch (e) {} }
   function recall(name) { try { return localStorage.getItem(key(name)); } catch (e) { return null; } }
+  function forget(name) { try { localStorage.removeItem(key(name)); } catch (e) {} }
 
   /* --- the page ------------------------------------------------------------ */
 
@@ -3997,9 +3998,15 @@
 
   /* --- theme and size ------------------------------------------------------ */
 
-  /* Light, dark, or follow the system: the logbook's and the website's control.
-     The stored choice wins; with none, the page follows the system, and keeps
-     following it while the choice is "system". The toggle in the bar is a drawing
+  /* Appearance: System, Light or Dark (the logbook's and the website's control).
+     Only a choice the writer makes is stored (theme, with themeChosen beside it);
+     opening the app stores nothing, so with no choice the page follows the device
+     on every launch, and keeps following it while the choice is "system". An older
+     stored theme without themeChosen was written by the app itself, on every boot,
+     or by a single tap on the wordless toggle (System to Light): an old Light or
+     System is dropped, an old Dark (two taps away) is kept as a choice. Settings has
+     the row in words (Appearance, first); theme-early.js reads the store the same
+     way. The toggle in the bar is a drawing
      with no words (signature.css): its FACE says the choice (data-theme-choice),
      its COLOUR what is painted (data-resolved). theme-early.js paints the same
      four attributes before the first frame; this repaints them on boot and owns
@@ -4032,11 +4039,21 @@
       toggles[j].dataset.state = mode;
       toggles[j].setAttribute('aria-label', THEME_WORD[mode] + '. Switch to ' + THEME_WORD[next].toLowerCase() + '.');
     }
-    var radios = document.querySelectorAll('input[name="set-theme"]');
-    for (var k = 0; k < radios.length; k++) radios[k].checked = radios[k].value === mode;
+    var row = document.getElementById('set-appearance');
+    if (row && row.value !== mode) { row.value = mode; paintSettingsSegments(); }
   }
 
-  function setTheme(mode) {
+  function chosenTheme() {
+    var stored = recall('theme');
+    if (recall('themeChosen') === '1') return THEME_ORDER.indexOf(stored) >= 0 ? stored : 'system';
+    if (stored === 'dark') { store('themeChosen', '1'); return 'dark'; }
+    if (stored !== null) forget('theme');
+    return 'system';
+  }
+
+  /* `chosen` false: the page following the device (boot, a change of the system's
+     theme), which is not a choice and stores nothing. */
+  function setTheme(mode, chosen) {
     themeMode = THEME_ORDER.indexOf(mode) >= 0 ? mode : 'system';
     var root = document.documentElement;
     var willBeDark = themeMode === 'system' ? systemDark() : themeMode === 'dark';
@@ -4054,7 +4071,7 @@
       }
       paintTheme(mode);
     }
-    store('theme', themeMode);
+    if (chosen !== false) { store('theme', themeMode); store('themeChosen', '1'); }
     bus.emit('theme', themeMode);
   }
 
@@ -4065,7 +4082,7 @@
   /* While following the system, a change of the system's theme repaints the page. */
   try {
     var darkQuery = global.matchMedia && global.matchMedia('(prefers-color-scheme: dark)');
-    var onSystem = function () { if (themeBooted && themeMode === 'system') setTheme('system'); };
+    var onSystem = function () { if (themeBooted && themeMode === 'system') setTheme('system', false); };
     if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', onSystem);
     else if (darkQuery && darkQuery.addListener) darkQuery.addListener(onSystem);
   } catch (e) { /* no media queries: the choice alone decides */ }
@@ -4683,7 +4700,7 @@
         e.preventDefault(); selectTab(tabs[next], true);
       });
     });
-    ['set-width', 'set-size', 'set-preset'].forEach(function (id) {
+    ['set-appearance', 'set-width', 'set-size', 'set-preset'].forEach(function (id) {
       var select = document.getElementById(id);
       if (!select || !select.options || select.hidden) return;
       var group = line('span', 'seg settings-segment');
@@ -4815,8 +4832,7 @@
   }
   Castor.prefs = { preset: presetNow, setPreset: setPreset, exportProfile: exportProfile, importProfile: importProfile,
     marks: marksOn, setMarks: setMarks,
-    theme: function () { return themeMode; }, setTheme: function (mode) { setTheme(mode); return themeMode; },
-    themes: THEME_ORDER.map(function (mode) { return { value: mode, label: THEME_WORD[mode] }; }) };
+    theme: function () { return themeMode; }, setTheme: function (mode) { setTheme(mode); return themeMode; } };
 
   /* Export saves the profile through the browser's own download; Import reads a
      chosen file here, in the page, and sends it nowhere. */
@@ -4931,6 +4947,8 @@
     if (color) color.addEventListener('change', function () { saveReaderColor(color); });
     var preset = document.getElementById('set-preset');
     if (preset) preset.addEventListener('change', function () { setPreset(preset.value); });
+    var appearance = document.getElementById('set-appearance');
+    if (appearance) appearance.addEventListener('change', function () { setTheme(appearance.value); });
     var trayControl = document.getElementById('set-agent-tray');
     if (trayControl) trayControl.addEventListener('change', function () {
       if (!reviewing() && Castor.agentTray && Castor.agentTray.setEnabled) Castor.agentTray.setEnabled(trayControl.checked);
@@ -5219,7 +5237,7 @@
     /* the theme and the frame width are settled BEFORE the docks mount: panels
        reads the app's real width to pick its mode, and a shell reopened at
        Phone must not mount as a desktop first */
-    setTheme(recall('theme') || data.theme || 'system');
+    setTheme(chosenTheme(), false);
     themeBooted = true;
     setSize(recall('size') || 'computer');
 

@@ -191,7 +191,7 @@
     if (groups) publishRow(groups.publish);
     // Search is not listed: on the phone it sits at the top right of the row.
     move(proxy(sheet, 'menu-share', 'Share', '.descant-share', null, 'share'), groups ? groups.publish : sheet);
-    // Theme lives in Settings, Page, with its value: the Menu has no entry for it; the dock keeps its toggle.
+    // Appearance is the first row of Settings, with its value: the Menu has no entry for it; the dock keeps its toggle.
     move(proxy(sheet, 'menu-settings', 'Settings', '#castor-settings-gear', null, 'settings'), groups ? groups.app : sheet);
     // Keyboard shortcuts are a keyboard's: the phone's Menu leaves them out.
     var shortcuts = doc.getElementById('castor-shortcuts'); move(shortcuts, sheet);
