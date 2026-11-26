@@ -2984,7 +2984,8 @@
     summary.appendChild(el('span','castor-author-label',S.authorFilter ? authorOptionName(S.authorFilter) : 'All authors'));summary.setAttribute('data-filtered',String(!!S.authorFilter));summary.title=S.authorFilter || 'All authors';summary.setAttribute('aria-label','Filter comments by author: '+(S.authorFilter || 'All authors'));
     chooser.appendChild(summary);
     chooser.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape') { event.preventDefault(); chooser.removeAttribute('open'); summary.focus(); }
+      // Escape is the menu's only while it is open; a closed filter leaves it to the panel, which closes.
+      if (event.key === 'Escape' && (chooser.open || chooser.hasAttribute('open'))) { event.preventDefault(); chooser.removeAttribute('open'); summary.focus(); }
     });
     chooser.addEventListener('focusout', function (event) {
       if (event.relatedTarget && !chooser.contains(event.relatedTarget)) chooser.removeAttribute('open');

@@ -4810,13 +4810,14 @@
 
   /* --- interface presets and the device profile --------------------------------
      Minimal (the default) keeps the bar quiet, Writing adds Outline and Comments,
-     Advanced is every control the app has. A preset only sets attributes: #app
+     Advanced is every control the app has. Links (the writing graph) has no tier: More
+     offers it in every preset. A preset only sets attributes: #app
      gets data-preset, each panel word its data-tier (the stylesheet decides what
      that hides). Nothing is removed: every hidden word is still a palette command
      and a Settings row. Readers never get a preset. */
   var PRESETS = ['minimal', 'writing', 'advanced'], PRESET_NAMES = { minimal: 'Few', writing: 'Some', advanced: 'All' };
   var WORD_TIER = { outline: 'writing', comments: 'writing', files: 'advanced', changes: 'advanced',
-    drafts: 'advanced', workspace: 'advanced', links: 'writing', 'for-you': 'advanced', live: 'advanced', beside: 'advanced' };
+    drafts: 'advanced', workspace: 'advanced', 'for-you': 'advanced', live: 'advanced', beside: 'advanced' };
   function presetNow() { return writingPreference('preset', PRESETS, 'minimal'); }
   function applyPreset() {
     var preset = presetNow();
@@ -4841,7 +4842,7 @@
     if (!C || !C.register) return;
     PRESETS.forEach(function (name) {
       C.register({ id: 'view.preset.' + name, title: 'Tools in More: ' + PRESET_NAMES[name],
-        hint: name === 'minimal' ? 'Shortcuts only' : name === 'writing' ? 'adds Links' : 'every tool',
+        hint: name === 'minimal' ? 'Links and shortcuts' : name === 'writing' ? 'adds Outline and Comments' : 'every tool',
         section: 'View', when: function () { return !reviewing(); }, run: function () { setPreset(name); paintSettings(); } });
     });
     C.register({ id: 'view.marks', title: 'Show Markdown marks', hint: 'on or off, everywhere in the article', section: 'View',
