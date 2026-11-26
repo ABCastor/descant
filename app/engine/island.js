@@ -510,8 +510,22 @@
     return e && S.keyboardCaret && currentBlock(S.keyboardCaret) ? S.keyboardCaret : null;
   }
 
+  /* The on-screen keyboard is up for a field outside the article (Search, a comment, a title). */
+  function fieldKeyboardUp() {
+    if (editFocused()) return false;
+    var a = DOC.activeElement;
+    if (!a || !(a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return false;
+    if (a.tagName === 'INPUT' && /^(checkbox|radio|button|submit|reset|range|color|file|image|hidden)$/.test(a.type || '')) return false;
+    var vv = viewport();
+    if (!vv) return false;
+    var high = S.viewportHigh || vv.height;
+    return high - vv.height * (vv.scale || 1) > Math.max(96, high * .14);
+  }
+
   function publishKeyboard() {
     if (!S.app) return;
+    var field = fieldKeyboardUp() ? 'up' : 'down';
+    if (S.app.dataset.fieldKeyboard !== field) S.app.dataset.fieldKeyboard = field;
     var state = keyboardUp() ? 'up' : 'down';
     if (S.app.dataset.keyboard === state) return;
     S.app.dataset.keyboard = state;

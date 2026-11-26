@@ -371,8 +371,14 @@
     var read = pieceRead[path] = (pieceRead[path] || 0) + 1;
     return global.fetch(pieceAddress(path), Object.assign({ cache: 'no-store' }, options))
       .then(function (r) {
-        if (!r.ok) throw new Error('/api/piece answered ' + r.status);
+        if (!r.ok) {
+          // 503 is the offline worker's answer when it holds no copy: the server was not reached.
+          var refused = new Error('/api/piece answered ' + r.status); refused.unreachable = r.status === 503; throw refused;
+        }
         return r.json();
+      }, function (error) {
+        if (error && typeof error === 'object' && error.name !== 'AbortError') error.unreachable = true;
+        throw error;
       }).then(function (payload) {
         if (authority !== writingAuthority()) throw new Error('The writer changed while the article loaded.');
         // A GET started before our save is not a new baseline, even if it lands last.
@@ -827,8 +833,62 @@
     }).catch(function (error) {
       if (wanted !== pieceRequest || liveState.path !== path) return false;
       liveState.path = previous;
-      console.error('[castor] could not open that piece', error);
       renderTabs();
+      return unopened(path, previous, wanted, error);
+    });
+  }
+
+  /* Said when an article cannot be opened: a card of its own, so it never closes a recovery card. */
+  function openNotice(head, text) {
+    closeOpenNotice();
+    var card = line('div', 'castor-who castor-notice castor-open-notice');
+    card.id = 'castor-open-notice';
+    card.setAttribute('role', 'status');
+    card.setAttribute('aria-live', 'polite');
+    card.appendChild(line('p', 'castor-who-q', head));
+    if (text) card.appendChild(line('p', 'castor-notice-text', text));
+    var row = line('div', 'castor-who-row');
+    row.appendChild(pick('OK', closeOpenNotice));
+    card.appendChild(row);
+    document.body.appendChild(card);
+    return card;
+  }
+  function closeOpenNotice() {
+    var old = document.getElementById('castor-open-notice');
+    if (old) old.remove();
+  }
+  bus.on('piece:open', closeOpenNotice);
+  function pieceTitle(path) {
+    var title = '';
+    pieces.forEach(function (p) { if (p.path === path) title = p.title; });
+    return title || 'This article';
+  }
+  /* The read did not reach the server (fetchPiece marks it): the connection is gone, or the
+     offline worker answered that it holds no copy. Any other failure is said as one. */
+  function unreachable(error) { return !!(error && error.unreachable); }
+
+  /* An article the server could not give: its copy on this device opens instead (once), or the
+     writer is told. `fromDevice` is the path being opened from its device copy right now. */
+  var fromDevice = '';
+  function unopened(path, previous, wanted, error) {
+    if (!unreachable(error)) {
+      console.error('[castor] could not open that piece', error);
+      openNotice(pieceTitle(path) + ' could not be opened.', 'Try again in a moment.');
+      return false;
+    }
+    var again = fromDevice === path;
+    fromDevice = '';
+    // Away from the server: the copy this device kept of it opens as one in the session cache
+    // does (typing over it stays on this device until the server answers).
+    return (again ? Promise.resolve(null) : deviceCopy(path)).then(function (copy) {
+      if (wanted !== pieceRequest || liveState.path !== previous || displayedPath !== previous) return false;
+      if (copy) {
+        // Held where an opening reads first; the session cache keeps only the article being opened.
+        liveState.path = path; cachePiece(path, copy); liveState.path = previous;
+        fromDevice = path;
+        return openPieceNow(path).then(function (ok) { fromDevice = ''; return ok; });
+      }
+      openNotice(pieceTitle(path) + ' is not on this device yet.', 'It opens once you are back online.');
       return false;
     });
   }
@@ -2185,12 +2245,26 @@
   };
 
   var SAVE_PAUSE = 8000;
+  // The pause waits for a pause in the typing, but never longer than this after the first word
+  // not yet sent: steady typing is saved while it goes on.
+  var SAVE_MAX_WAIT = 20000;
   var SAVE_TIMEOUT = 20000;
   var RETRY_FIRST = 2000;
   var RETRY_MAX = 30000;
   var WRITABLE = new RegExp('^articles/[^/]+/(article\\.md|drafts/(' + Object.keys(WHO_NAMES).join('|') + ')/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md)$');
   var saver = { path: '', base: '', text: null, state: 'none', detail: '', short: '', timer: 0, inflight: null,
-    retries: 0, again: false, restored: false, typed: false, conflict: null, evidence: null, writer: null, writerHold: false, writerUnknown: false, needsLive: false };
+    retries: 0, again: false, restored: false, typed: false, conflict: null, evidence: null, writer: null, writerHold: false, writerUnknown: false, needsLive: false, waiting: 0 };
+  // The offline worker cannot run in this browser (boot): saves go online only.
+  var offlineUnavailable = false;
+  var OFFLINE_UNAVAILABLE = 'Offline is unavailable on this device: this browser does not let Descant keep an offline copy. Your words save while you are online.';
+  function sayOfflineUnavailable() {
+    offlineUnavailable = true;
+    renderSaveState();
+    // Said once per tab; the save word's details keep saying it.
+    try { if (global.sessionStorage.getItem('castor.offline-unavailable')) return; global.sessionStorage.setItem('castor.offline-unavailable', '1'); }
+    catch (e) { /* said every time, then */ }
+    openNotice('Offline is unavailable on this device.', 'This browser does not let Descant keep an offline copy. Your words save while you are online.');
+  }
   var SAVE_WORDS = {
     none: '', ready: 'Saved', saved: 'Saved', restored: 'Restored your unsaved text', saving: 'Saving',
     unsaved: 'Kept on this device', offline: 'Kept on this device',
@@ -2313,6 +2387,7 @@
       history: evidence.history, shared: evidence.shared, warning: [commentHere ? '' : comment, fileWarning()].filter(Boolean).join(' '),
       kept: commentHere ? comment : '',
       held: (['ready', 'saved'].indexOf(saver.state) >= 0 && heldRules() || {}).note || '',
+      onlineOnly: offlineUnavailable,
       problem: keeping ? '' : ['dirty', 'refused', 'conflict', 'stale', 'locked', 'offline'].indexOf(saver.state) >= 0 ? saver.detail || SAVE_WORDS[saver.state] : ''
     });
   }
@@ -2355,6 +2430,7 @@
       words.appendChild(line('small', 'save-step-detail', row.detail));
       p.appendChild(words); panel.appendChild(p);
     });
+    if (offlineUnavailable) panel.appendChild(line('p', 'save-explanation', OFFLINE_UNAVAILABLE));
     if (commentWarning()) panel.appendChild(line('p', 'save-explanation', commentWarning()));
     if (fileWarning()) panel.appendChild(line('p', 'save-explanation', fileWarning()));
     if (saver.detail && (editorSource() !== saver.text || ['dirty', 'refused', 'conflict', 'stale', 'locked', 'offline'].indexOf(saver.state) >= 0)) panel.appendChild(line('p', 'save-explanation', saver.detail));
@@ -2699,7 +2775,7 @@
     if (path !== saver.path) reattachTries = 0;
     var checkpoint = Promise.resolve();
     clearTimeout(saver.timer);
-    saver.timer = 0; saver.retries = 0; saver.base = ''; saver.text = null;
+    saver.timer = 0; saver.retries = 0; saver.waiting = 0; saver.base = ''; saver.text = null;
     saver.again = false; saver.restored = false; saver.typed = false; saver.conflict = null;
     saver.writer = null; saver.writerHold = false; saver.writerUnknown = false;
     closeKeptNotice();
@@ -3194,7 +3270,10 @@
       else setSave('unsaved');
     }
     clearTimeout(saver.timer);
-    saver.timer = setTimeout(function () { saver.timer = 0; saveNow(false); }, SAVE_PAUSE);
+    var now = Date.now();
+    if (!saver.waiting) saver.waiting = now;
+    var wait = Math.max(0, Math.min(SAVE_PAUSE, saver.waiting + SAVE_MAX_WAIT - now));
+    saver.timer = setTimeout(function () { saver.timer = 0; saveNow(false); }, wait);
   }
   var OFFLINE_KEPT = 'This device has no network. Your text is kept on this device and is sent when the connection returns.';
 
@@ -3251,6 +3330,7 @@
     if (saver.inflight) { saver.again = true; return saver.inflight; }
     var text = editorSource();
     if (text === saver.text) {
+      saver.waiting = 0;
       releaseWriter();
       if (['unsaved', 'offline', 'refused', 'dirty', 'saving'].indexOf(saver.state) >= 0) setSave(saver.restored ? 'restored' : 'saved');
       return Promise.resolve();
@@ -3261,6 +3341,7 @@
       return Promise.resolve();
     }
     var path = saver.path;
+    saver.waiting = 0;
     setSave(saver.restored ? 'restored' : 'saving', saver.restored ? saver.detail : '');
     var flight = post(path, saver.base, text, who, keepalive).then(function (res) {
       saver.inflight = null;
@@ -5013,7 +5094,10 @@
         // Bound for the original writer while the page's writer changed: this tab's storage
         // belongs to someone else now, so nothing read for this opening is shown.
         // The opening binds to a current worker at once; its upgrade check runs once the article is shown.
-        return Castor.offline.connect({ opening: true }).then(function () { if (sameWriter()) return payload; bindChanged = true; return denied(); }, function () {
+        return Castor.offline.connect({ opening: true }).then(function () { if (sameWriter()) return payload; bindChanged = true; return denied(); }, function (error) {
+          /* This browser cannot run the offline worker at all: no tab here can have an offline
+             copy to mix up, so the writer writes and saves online, and the save word says so. */
+          if (error && error.unavailable && sameWriter()) { sayOfflineUnavailable(); return payload; }
           // An installed worker can change during its first upgrade. Recheck
           // authentication before one retry; every storage handshake still runs.
           if (!sameWriter()) return denied();

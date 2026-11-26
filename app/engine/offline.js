@@ -101,14 +101,33 @@
     connecting++;
     try { return await bindWriter(options || {}); } finally { connecting--; }
   }
+  /* This browser cannot run the offline worker at all (no service worker API, the registration
+     refused or never answered, no worker installed): the page writes online only (app.js). */
+  var REGISTER_WAIT = 8000;
+  function unavailable() {
+    var error = Error('Offline is unavailable on this device: this browser does not let Descant keep its offline copy. Writing still saves while you are online.');
+    error.unavailable = true;
+    return error;
+  }
+  function register(service, scope) {
+    var timer;
+    return Promise.race([service.register('/write/sw.js', { scope: scope }), new Promise(function (_, reject) {
+      timer = setTimeout(function () { reject(unavailable()); }, REGISTER_WAIT);
+    })]).then(function (registration) {
+      clearTimeout(timer);
+      if (!registration || typeof registration !== 'object') throw unavailable();
+      return registration;
+    }, function () { clearTimeout(timer); throw unavailable(); });
+  }
   async function bindWriter(options) {
-    if (!/^founder:[a-z][a-z0-9-]{0,23}$/.test(account()) || !navigator.serviceWorker || !global.MessageChannel) throw Error('The writer could not be bound to offline storage.');
+    if (!/^founder:[a-z][a-z0-9-]{0,23}$/.test(account())) throw Error('The writer could not be bound to offline storage.');
+    if (!navigator.serviceWorker || typeof navigator.serviceWorker.register !== 'function' || !global.MessageChannel) throw unavailable();
     var service = navigator.serviceWorker;
     // Keep the original slash scope usable by older cached shells. Updating
     // both scopes also covers the bare launch address without deleting a pack.
     var registrations = [], workers = [], postponed = false;
     for (var scope of ['/write', '/write/']) {
-      var registration = await service.register('/write/sw.js', { scope: scope });
+      var registration = await register(service, scope);
       var current = options.opening && registration.active && registration.active.state === 'activated' &&
         !registration.installing && !registration.waiting && await generationOf(registration.active) === 2;
       if (current) postponed = true;
@@ -116,7 +135,7 @@
       // worker remains usable; the generation handshake below is mandatory.
       else try { await registration.update(); } catch (_) {}
       var candidate = current ? registration.active : registration.installing || registration.waiting || registration.active;
-      if (!candidate) throw Error('The writing app did not install its offline worker.');
+      if (!candidate) throw unavailable();
       if (candidate.state !== 'activated') await new Promise(function (resolve, reject) {
         var timer = setTimeout(function () { finish(Error('Offline installation did not finish. Your previous copy is unchanged.')); }, 8000);
         function finish(error) { clearTimeout(timer); candidate.removeEventListener('statechange', change); error ? reject(error) : resolve(); }

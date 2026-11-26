@@ -224,6 +224,10 @@
 #app[data-preset="writing"] .topwords [data-tier="advanced"],
 #app[data-preset="minimal"] #more-sheet [data-tier],
 #app[data-preset="writing"] #more-sheet [data-tier="advanced"] { display: none; }
+/* Key shortcuts are a keyboard's: More offers them only once a hardware keyboard is known, and with
+   the fewest tools and no keyboard the iPad's More would hold nothing, so it is not offered. */
+html[data-keys="off"] #app #topbar.mast #more-sheet #castor-shortcuts { display: none; }
+html[data-keys="off"] #app[data-preset="minimal"]:not([data-mode="phone"]) #more-word { display: none; }
 #app[data-mode="tablet"] { --dock-h: 52px; }
 #app[data-mode="tablet"] #footline { gap: 8px; padding-inline: 8px; }
 #app[data-mode="tablet"] #footline .foot-meta { gap: 8px; }
@@ -528,6 +532,9 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
 #app[data-touch-format="1"][data-keyboard="up"] #topbar.mast { visibility: hidden; pointer-events: none; }
 #app[data-keyboard="up"] { --footline-h: 0px; }
 #app[data-keyboard="up"] #footline { display: none; }
+/* The keyboard of any other field (Search, a comment) hides the bottom bar too (island.js). */
+#app[data-field-keyboard="up"] { --footline-h: 0px; }
+#app[data-field-keyboard="up"] #footline { display: none; }
 
 /* ---- the phone's floating bar ------------------------------------------------
    Keyboard up, the phone has one bar: a capsule just above the keyboard with the
@@ -1107,3 +1114,25 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
 #app[data-mode="phone"] .castor-goal .goal-field input { min-height: 44px; font-size: 16px; }
 #app[data-mode="phone"] .castor-goal .goal-today { min-height: 44px; }
 #app[data-mode="phone"] .castor-goal .goal-line { font-size: 14px; }
+
+/* ---- touch targets ---------------------------------------------------------------------------
+   On a touch screen every control a finger taps is a 44 px target; a mouse keeps the desktop's
+   density (dev/touch-targets-browser.js). The footnote number and its back arrow stay small to the
+   eye: their reach is a 44 px square around them. */
+@media (any-pointer: coarse) {
+  .page-column :is(.footnote-ref a, .footnote-back) { position: relative; }
+  .page-column :is(.footnote-ref a, .footnote-back)::after {
+    content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%);
+  }
+  .palette-item { box-sizing: border-box; display: flex; align-items: center; min-height: 44px; }
+  .palette-item .cw-row-title { flex: 1 1 auto; min-width: 0; }
+  #app .castor-row { min-height: 44px; }
+  #app .panel-close { min-height: 44px; }
+  /* iPad held sideways has the computer's bottom bar: its words are as tall as the tablet's. */
+  #app #footline :is(.descant-live-marker, .castor-save, .capsule-publish) { min-height: 44px; }
+  #app .castor-goal :is(.goal-done, .goal-remove, .goal-due-clear, .goal-set) { min-height: 44px; }
+  #app .castor-goal .goal-field input { min-height: 44px; }
+  .castor-who-pick { min-height: 44px; }
+  /* WebKit draws a native menu at its own height and ignores min-height. */
+  .descant-publish-sheet select { box-sizing: border-box; height: 44px; }
+}

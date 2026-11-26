@@ -57,7 +57,10 @@
     // Saved words that break a writing rule are safe; only publishing waits. Calm words, the same mark.
     var held = state === 'saved' && s.held ? s.held : '';
     if (held) { word = 'Saved as draft'; label = (device ? 'All three copies confirmed. ' : 'Saved in the article’s history and on the shared server. ') + held; }
-    return { word: word, state: state, label: label, rows: rows, sharedFailed: sharedFailed, held: !!held };
+    // No offline worker in this browser (app.js): saved means saved, and only while online.
+    var onlineOnly = s.onlineOnly === true;
+    if (onlineOnly) label = label.replace(/([^.!?])$/, '$1.') + ' Offline is unavailable on this device, so Descant saves here only while you are online.';
+    return { word: word, state: state, label: label, rows: rows, sharedFailed: sharedFailed, held: !!held, onlineOnly: onlineOnly };
   }
   function shortWord(view) {
     return view.state === 'device' ? 'On device' : view.state === 'saved' ? (view.held ? 'Draft' : 'Saved')

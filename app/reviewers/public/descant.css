@@ -106,6 +106,11 @@ body.auth { display: flex; flex-direction: column; }
 body.auth .brand { display: flex; align-items: center; width: 100%; max-width: 440px; height: 52px; margin: 0 auto; padding: 0 24px; }
 body.auth .brand-line { display: none; }
 body.auth main { width: 100%; max-width: 440px; margin: 0 auto; padding: clamp(24px, 9vh, 96px) 24px 48px; }
+/* A wide screen (an iPad either way up, a computer): the column stands at the optical middle of the
+   space under the name, not at the top over an empty lower half. A phone keeps it high, in sight of the keyboard. */
+@media (min-width: 700px) and (min-height: 560px) {
+  body.auth main { margin-block: auto; padding-block: 24px calc(24px + 6vh); }
+}
 body.auth h1 { margin: 0 0 8px; font: 600 30px/1.15 Title, Georgia, serif; letter-spacing: -.01em; }
 body.auth .lead { margin: 0 0 28px; color: var(--ink-2); }
 body.auth .lead b { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
