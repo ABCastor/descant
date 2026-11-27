@@ -228,11 +228,26 @@
     return typeof standsAsDefinition === 'function' && standsAsDefinition(b, after);
   }
 
+  /* Sources editingHtml could not draw from their rendering, so their block shows the source
+     itself (two footnote definitions in one block, say). The writer reads that source and edits
+     it as source, as in a plain text box (replaceVisible): read as visible characters, each key
+     would escape the whole shown source again and double every backslash in it. */
+  var drawnAsSource = new Set();
+  function shownAsSource(b, host) {
+    host = host || b && editOf(b.id);
+    return !!(b && host) && drawnAsSource.has(b.source) && host.textContent === b.source && !(host.querySelector && host.querySelector('*'));
+  }
   function editingHtml(html, source) {
     // Rendering is never a source transformation. Check the actual DOM projection
     // before installing it, including unknown block types and generated labels.
     var probe = document.createElement('div'); probe.innerHTML = html;
-    if (source != null && probe.textContent !== source) return esc(source);
+    var drawn = typeof drawnAsSource !== 'undefined' ? drawnAsSource : null;
+    if (source != null && probe.textContent !== source) {
+      if (drawn && drawn.size > 64) drawn.clear();
+      if (drawn) drawn.add(source);
+      return esc(source);
+    }
+    if (source != null && drawn) drawn.delete(source);
     // The reader decorates definitions by id. Its return links belong to the
     // mirror, never to the editable source projection.
     html = html.replace(/(<aside\b[^>]*class="footnote-definition"[^>]*?) id="fn-[^"]*"/g, '$1');
@@ -853,7 +868,10 @@
     return children(shown, wanted) && found ? found : null;
   }
 
-  function updateMirror(wrap, b) {
+  // caretFollows: the caller places the caret itself straight after (applyEdit). Then the redraw
+  // does not put the old one back first: nothing reads it between the two (the 'editor:mirror'
+  // listeners do not), and each placement is a selection change the browser pays for.
+  function updateMirror(wrap, b, caretFollows) {
     var started = global.performance && performance.now ? performance.now() : Date.now();
     b.type = classify(b.source);
     if (!wrap.getAttribute || wrap.getAttribute('data-type') !== b.type) wrap.setAttribute('data-type', b.type);
@@ -883,7 +901,7 @@
           if (patch) patch.node.data = patch.data;
           else host.innerHTML = inner;
           if (!host.firstChild) host.appendChild(document.createTextNode(''));
-          if (held) setCaret(b.id, held.start, held.end, true);
+          if (held && !(caretFollows && document.activeElement === host)) setCaret(b.id, held.start, held.end, true);
         }
       }
       if (host) host.cwReferenceKey = JSON.stringify(doc.references || {});
@@ -2228,7 +2246,7 @@
     var host = editOf(id), node = textOf(host);
     if (node) node.data = b.source;
     var wrap = elOf(id);
-    if (wrap && id === focusId) updateMirror(wrap, b);
+    if (wrap && id === focusId) updateMirror(wrap, b, true);
     setCaret(id, caretAt == null ? start + text.length : caretAt);
     changed();
     if (activePicker && activePicker.blockId === id) updatePicker();
@@ -2257,7 +2275,7 @@
     }
 
     // In a block written as source, every character is itself: no auto-close.
-    if (typeof editedAsSource === 'function' && editedAsSource(b, b.source.slice(0, c.start) + ch + b.source.slice(c.end))) { replaceVisible(id, c.start, c.end, ch, history === false ? false : 'type'); return true; }
+    if (typeof shownAsSource === 'function' && shownAsSource(b) || typeof editedAsSource === 'function' && editedAsSource(b, b.source.slice(0, c.start) + ch + b.source.slice(c.end))) { replaceVisible(id, c.start, c.end, ch, history === false ? false : 'type'); return true; }
     // Style delimiters are literal writer input, never an implicit command.
     if (ch === '*' || ch === '_' || ch === '`') {
       replaceVisible(id, c.start, c.end, ch, history === false ? false : 'type'); return true;
@@ -3292,6 +3310,10 @@
     function writerNote(node) { return !!(node && /(?:^| )writer-note(?: |$)/.test(node.className || '')); }
     var host = surface || editOf(id), b = blockOf(id);
     if (!host || !b) return;
+    // The block shows its own source (editingHtml could not draw it): every edit is written as
+    // source, and an edit that is not text (a style) leaves it as it is. Not a paragraph whose
+    // terminal break alone stopped the drawing, recovered below.
+    var asShown = typeof shownAsSource === 'function' && shownAsSource(b, host);
     if (!surface && typeof currentReferences === 'function') {
       var previousReferences = JSON.stringify(doc.references || {});
       currentReferences();
@@ -3309,7 +3331,8 @@
     if (b.type === 'p' && source.includes('\n') && host.textContent === source && !host.querySelector('.cw-mk')) {
       var multiline = document.createElement('div'), multilineContext = typeof doc !== 'undefined' && doc || {};
       multiline.innerHTML = MD().renderInline(source, { editSource: true, references: multilineContext.references, footnoteNumbers: new Map(Object.entries(multilineContext.footnoteNumbers || {})), footnotes: multilineContext.footnotes });
-      if (multiline.textContent === source) host = multiline;
+      // Then the paragraph is drawn after all, and written as a paragraph.
+      if (multiline.textContent === source) { host = multiline; asShown = false; }
     }
     var nodes = sourceNodes(host);
     var action = inserted && typeof inserted === 'object' ? inserted : { kind: 'text', text: inserted || '' };
@@ -3317,7 +3340,7 @@
     // saved as literal indentation, an HTML span that readers see as code. Pasted indentation keeps
     // it, and a block written as its source (a definition) keeps every character typed.
     if (action.kind === 'text' && !action.link && !surface && history !== 'paste' && history !== 'project' &&
-        start === end && /^[ \t]/.test(action.text) && typeof lineLead === 'function' && lineLead(b, host, start)) {
+        start === end && /^[ \t]/.test(action.text) && !asShown && typeof lineLead === 'function' && lineLead(b, host, start)) {
       if (!/[^ \t]/.test(action.text)) { setCaret(id, start); return { source: source, caret: start, start: start, end: end }; }
       action = Object.assign({}, action, { text: action.text.replace(/^[ \t]+/, '') });
     }
@@ -3447,7 +3470,7 @@
     // A fenced block has one body. Its fences and info string are structural,
     // never inline Markdown and never candidates for a paragraph split. A block
     // of reference definitions is written as source too (editedAsSource).
-    var asSource = !surface && (action.kind === 'text' || action.kind === 'split') && typeof editedAsSource === 'function' &&
+    var asSource = asShown || !surface && (action.kind === 'text' || action.kind === 'split') && typeof editedAsSource === 'function' &&
       (action.kind === 'text' ? editedAsSource(b, source.slice(0, start) + (action.text || '') + source.slice(end))
         : editedAsSource(b, source.slice(0, start)) && (!source.slice(end).trim() || definitionSource(source.slice(end))));
     // An edit that turns every definition of the block into prose removes their labels.

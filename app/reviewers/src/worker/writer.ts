@@ -2,7 +2,7 @@
 // reader sessions. Only this server supplies the per-founder origin credential.
 import { authenticatedFounder, passwordsOn } from "./founder-password.ts";
 import type { Env } from "./store.ts";
-import { FOUNDER_COOKIE, cookie, founderMaxAge, readCookie, sha256Hex, signFounderSession, type FounderSession } from "./session.ts";
+import { FOUNDER_COOKIE, backCookie, cookie, founderMaxAge, readCookie, sha256Hex, signFounderSession, type FounderSession } from "./session.ts";
 import { json, redirect, secure } from "./web.ts";
 
 const MAX_BODY = 5 * 1024 * 1024;
@@ -200,7 +200,10 @@ async function writerResponse(req: Request, env: Env, url: URL, principal: strin
         return type?.toLowerCase() === "text/html" && weights.length <= 1
           && /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(weight) && Number(weight) > 0;
       });
-    return document ? secure(redirect("/signin?write=1"), undefined, "private, no-store") : fail("founder-required", 401);
+    if (!document) return fail("founder-required", 401);
+    // The article asked for comes back after the sign-in (writingHome).
+    const back = backCookie(url);
+    return secure(redirect("/signin?write=1", back ? [back] : []), undefined, "private, no-store");
   }
   // The writer answers only on the address the deployment names (APP_URL in its wrangler config).
   if (!env.APP_URL) return fail("writer-not-configured", 503);

@@ -60,13 +60,17 @@
     // Saved words that break a writing rule are safe; only publishing waits. Calm words, the same mark.
     var held = state === 'saved' && s.held ? s.held : '';
     if (held) { word = 'Saved as draft'; label = (device ? 'All three copies confirmed. ' : 'Saved in the article’s history and on the shared server. ') + held; }
+    // The sign-in ended (app.js): the word says so, and the label is the page's own sentence (the words are
+    // kept on this device and saved once the writer signs in again).
+    var ended = typeof s.ended === 'string' && s.ended ? s.ended : '';
+    if (ended) { word = ended; state = 'partial'; label = s.problem || ended; }
     // No offline worker in this browser (app.js): saved means saved, and only while online.
     var onlineOnly = s.onlineOnly === true;
     if (onlineOnly) label = label.replace(/([^.!?])$/, '$1.') + ' Offline is unavailable on this device, so Descant saves here only while you are online.';
-    return { word: word, state: state, label: label, rows: rows, sharedFailed: sharedFailed, held: !!held, onlineOnly: onlineOnly };
+    return { word: word, state: state, label: label, rows: rows, sharedFailed: sharedFailed, held: !!held, onlineOnly: onlineOnly, ended: !!ended };
   }
   function shortWord(view) {
-    return view.state === 'device' ? 'On device' : view.state === 'waiting' ? view.word : view.state === 'saved' ? (view.held ? 'Draft' : 'Saved')
+    return view.ended ? view.word : view.state === 'device' ? 'On device' : view.state === 'waiting' ? view.word : view.state === 'saved' ? (view.held ? 'Draft' : 'Saved')
       : view.sharedFailed ? 'Not backed up' : view.state === 'partial' ? 'Not saved'
       : /^Checking/.test(view.word) ? 'Checking' : 'Saving';
   }

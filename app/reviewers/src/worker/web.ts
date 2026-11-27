@@ -21,7 +21,8 @@ export function esc(value: unknown): string {
 const PRESS = "document.addEventListener('touchstart',function(){},{passive:true,capture:true})";
 const PRESS_HASH = "sha256-QB/xoQhM52IzteDF9g1nhiba5VsZKvPp02XDjCSE48M=";
 
-export function page(title: string, body: string, status = 200, headers: Record<string, string> = {}, layout: "plain" | "auth" = "plain"): Response {
+// `home` is where the product's name leads: the writing sign-in pages keep a writer on the writing sign-in.
+export function page(title: string, body: string, status = 200, headers: Record<string, string> = {}, layout: "plain" | "auth" = "plain", home = "/"): Response {
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -37,7 +38,7 @@ export function page(title: string, body: string, status = 200, headers: Record<
 <script>${PRESS}</script>
 </head>
 <body class="${layout}">
-<header class="brand"><a href="/">Descant<span class="ast">*</span></a><span class="brand-line" aria-hidden="true"><span class="brand-dot"></span></span></header>
+<header class="brand"><a href="${esc(home)}">Descant<span class="ast">*</span></a><span class="brand-line" aria-hidden="true"><span class="brand-dot"></span></span></header>
 <main>
 ${body}
 </main>

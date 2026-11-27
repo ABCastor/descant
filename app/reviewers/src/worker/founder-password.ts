@@ -2,7 +2,7 @@
 import { clearFailures, guessKeys, reserveTry, waitWords } from './attempts.ts';
 import { emailProblem, foldEmail } from './rules.ts';
 import { hashPassword, PASSWORD_MAX, passwordProblem, verifyPassword } from './passwords.ts';
-import { FOUNDER_COOKIE, FOUNDER_DAYS, FOUNDER_HOURS, READER_COOKIE, cookie, founderMaxAge, randomId, readCookie, sha256Hex, signFounderSession, verifyFounderSession, verifySession, type FounderSession } from './session.ts';
+import { FOUNDER_COOKIE, FOUNDER_DAYS, FOUNDER_HOURS, READER_COOKIE, cookie, founderMaxAge, randomId, readCookie, sha256Hex, signFounderSession, verifyFounderSession, verifySession, writingHome, type FounderSession } from './session.ts';
 import type { Env } from './store.ts';
 import { isWriter } from './writers.ts';
 import { esc, formOf, message, page, redirect, sameSite } from './web.ts';
@@ -49,14 +49,15 @@ const GENERIC = 'The email or password did not match. Try again, or use an email
 /** Off where this plan cannot derive a password in time; on everywhere else. */
 export const passwordsOn = (env: Env): boolean => env.PASSWORD_SIGNIN !== 'off';
 const passwordsOff = () => message('Password sign-in is off', 'This server signs writers in with an email code.', 404, '<p><a href="/signin?write=1">Sign in with an email code</a></p>');
-function loginPage(error = '', status = 200): Response {
+// After a wrong password the typed address stays in its field (never the password).
+function loginPage(error = '', status = 200, email = ''): Response {
   return page('Sign in to write · Descant', `<h1>Sign in to write</h1>
 ${error ? `<p class="err" role="alert">${esc(error)}</p>` : ''}
 <form method="post" action="/signin/password" class="stack">
-<label>Email <input type="email" name="email" autocomplete="username" required maxlength="254"></label>
+<label>Email <input type="email" name="email"${email ? ` value="${esc(email)}"` : ''} autocomplete="username" autocapitalize="off" spellcheck="false" required maxlength="254"></label>
 <label>Password <input type="password" name="password" autocomplete="current-password" required maxlength="${PASSWORD_MAX}"></label>
 <button type="submit">Sign in</button></form>
-<p><a href="/signin?write=1">Use an email code instead</a></p>`, status);
+<p class="aside"><a href="/signin?write=1">Use an email code instead</a></p>`, status, {}, 'auth', '/signin?write=1');
 }
 export async function founderPasswordSignIn(req: Request, env: Env): Promise<Response> {
   if (!passwordsOn(env)) return passwordsOff();
@@ -65,23 +66,24 @@ export async function founderPasswordSignIn(req: Request, env: Env): Promise<Res
   const field = await formOf(req), email = foldEmail(field('email', 255)), password = field('password', 2049);
   const keys = (await guessKeys(req, email)).map(k => 'password:' + k);
   const wait = await reserveTry(env.DB, keys);
-  if (wait) return loginPage(`Too many tries. Wait ${waitWords(wait)}, then try again.`, 429);
+  if (wait) return loginPage(`Too many tries. Wait ${waitWords(wait)}, then try again.`, 429, email);
   const digest = await sha256Hex(email);
   const rows = (await env.DB.prepare(identitySql + ' WHERE f.emailSha256=?').bind(digest).all<Identity>()).results;
   const live = rows.length === 1 && isWriter(env, rows[0].key) ? rows[0] : null;
   const stored = live?.credentialEmail === digest ? live.secret : null;
   const verified = await verifyPassword(password, stored);
-  if (!verified || !live || emailProblem(email)) return loginPage(GENERIC, 401);
+  if (!verified || !live || emailProblem(email)) return loginPage(GENERIC, 401, email);
   // Re-read generation in an atomic claim after the expensive derivation, so a concurrent reset wins.
   const still = await env.DB.prepare(`SELECT f.key FROM founders f JOIN founder_credentials c ON c.founderKey=f.key
     WHERE f.key=? AND f.emailSha256=? AND c.emailSha256=? AND c.generation=? AND c.secret=?
     AND (SELECT COUNT(*) FROM founders WHERE emailSha256=?)=1`).bind(live.key,digest,digest,live.generation,stored,digest).first();
-  if (!still) return loginPage(GENERIC, 401);
+  if (!still) return loginPage(GENERIC, 401, email);
   // Sign the generation that was verified, never a newly rotated one.
   const now = Date.now();
   const value = await signFounderSession(env.SESSION_SECRET, live.key, digest, live.generation!, now, now);
   await clearFailures(env.DB, keys);
-  return redirect('/write/', [cookie(FOUNDER_COOKIE, value, FOUNDER_DAYS * 86400), cookie(READER_COOKIE, '', 0)]);
+  const home = writingHome(req);
+  return redirect(home.to, [cookie(FOUNDER_COOKIE, value, FOUNDER_DAYS * 86400), cookie(READER_COOKIE, '', 0), ...home.cookies]);
 }
 function settingsPage(hasPassword: boolean, recent: boolean, error = '', status = 200): Response {
   return page('Writing password · Descant', `<p><a href="/admin">People and sharing</a> · <a href="/write/">Writing</a></p>

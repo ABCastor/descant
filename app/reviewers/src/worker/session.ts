@@ -54,6 +54,24 @@ export const signedInAt = (expires: number): number => expires - READER_DAYS * 8
 
 /** Always Secure: plain http is redirected before any cookie is set (index.ts), and browsers treat
  * http://localhost and http://127.0.0.1 as secure for local development. */
+/** The article a signed-out writer asked for (/write/?live=<article>), kept for an hour through the
+ * sign-in pages, so the writer comes back to it whether they sign in by code or by password. Only an
+ * article path is ever kept or followed. */
+export const BACK_COOKIE = "descant_back";
+const ARTICLE_PATH = /^articles\/(?!\.)[A-Za-z0-9._-]{1,80}\/article\.md$/;
+export function backCookie(url: URL): string | undefined {
+  const live = url.searchParams.get("live") || "";
+  return ARTICLE_PATH.test(live) ? cookie(BACK_COOKIE, encodeURIComponent(live), 3600) : undefined;
+}
+/** Where a writer goes once signed in: the remembered article, or the writing; a remembered one is forgotten. */
+export function writingHome(req: Request): { to: string; cookies: string[] } {
+  const kept = readCookie(req.headers.get("Cookie"), BACK_COOKIE);
+  if (kept === undefined) return { to: "/write/", cookies: [] };
+  let live = "";
+  try { live = decodeURIComponent(kept); } catch { live = ""; }
+  return { to: ARTICLE_PATH.test(live) ? "/write/?live=" + encodeURIComponent(live) : "/write/", cookies: [cookie(BACK_COOKIE, "", 0)] };
+}
+
 export function cookie(name: string, value: string, maxAge: number): string {
   return `${name}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax; Secure`;
 }

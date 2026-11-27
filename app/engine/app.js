@@ -268,27 +268,66 @@
   var signinAt = '';
   function showSignedOut(detail, word, at) {
     signedOut = true; signinAt = at || '';
-    setSave('locked', detail || 'Your sign-in has ended. Everything you typed stays on this device. Sign in again to go on writing.', word || 'Signed out');
+    setSave('locked', detail || 'Your sign-in has ended. Your words are kept on this device and are saved once you sign in again.', word || 'Signed out');
   }
   Castor.reconfirm = function (reason) { return reconfirm(reason === 'comment'); };
   // A send that finds the session ended keeps the writer named, marked ended: their threads and
   // pending comments stay in view, read-only, and nothing is sent as them until they sign in again.
-  Castor.signedOut = function () {
-    if (!PUBLIC_WRITER) return;
+  function endSession() {
     keptOperation = (keptOperation || 0) + 1;
     if (!saver.writer || !saver.writer.length) saver.writer = whoList();
     Castor.role = Castor.role.confirmed || Castor.role.ended ? Object.assign({}, Castor.role, { confirmed: false, ended: true }) : Castor.roleFrom(null);
     journal();
+  }
+  Castor.signedOut = function () {
+    if (!PUBLIC_WRITER) return;
+    endSession();
     reconfirm();
   };
+  /* The server's own answer that this browser has no session (whoami 401 or 403), or that another
+     writer is signed in here (409): the session ended, said as above. No answer at all is not one. */
+  function sessionGone() { return roleStatus === 401 || roleStatus === 403 || roleStatus === 409; }
+  /* A save refused for want of a session (401, 403) asks whoami once whether the session ended. If it
+     did, the page is signed out, every word kept, and sends nothing more until the writer signs in again.
+     If whoami still confirms the writer, the refusal was about something else and is said plainly, with
+     no reload (which would only meet the same refusal). */
+  var refusedCheck = null;
+  function sessionRefused() {
+    journal();
+    if (refusedCheck) return refusedCheck;
+    refusedCheck = askRole().then(function (payload) {
+      refusedCheck = null;
+      if (Castor.roleFrom(payload).confirmed) { setSave('refused', 'The server refused this save. Your text is kept on this device.'); return; }
+      if (sessionGone()) { endSession(); unconfirmed(); return; }
+      retryLater('offline', 'The server could not be reached. Your text is kept on this device.');
+    });
+    return refusedCheck;
+  }
+  /* Back on screen, a confirmed writer page asks once whether its session still holds: it can end while
+     the page sleeps in the background (a month away, Sign out everywhere, a new password), and the page
+     would otherwise go on saying Saved. Words typed meanwhile wait for the answer before they are sent
+     (saveNow). No answer (offline) leaves everything as it was. */
+  var resumeCheck = null;
+  function stillSignedIn() {
+    if (!resumeCheck) resumeCheck = askRole().then(function (payload) {
+      resumeCheck = null;
+      if (!Castor.roleFrom(payload).confirmed && sessionGone()) { endSession(); unconfirmed(); return false; }
+      return true;
+    });
+    return resumeCheck;
+  }
+  function backOnScreen() {
+    if (PUBLIC_WRITER && roleSettled && Castor.role.confirmed && !reviewing()) stillSignedIn();
+    else reconfirm();
+  }
   // Reopening is the way back in: the server sends a page without a session to its sign-in,
   // and a page whose session is fine simply opens again.
   Castor.signin = function () { flushSave(true); try { if (signinAt) global.location.assign(signinAt); else global.location.reload(); } catch (e) { /* nothing to reopen */ } };
   if (global.addEventListener) {
     global.addEventListener('online', function () { reconfirm(); });
-    global.addEventListener('pageshow', function () { reconfirm(); });
+    global.addEventListener('pageshow', backOnScreen);
   }
-  if (document.addEventListener) document.addEventListener('visibilitychange', function () { if (!document.hidden) reconfirm(); });
+  if (document.addEventListener) document.addEventListener('visibilitychange', function () { if (!document.hidden) backOnScreen(); });
 
   var REVIEWER_WITHHELD = ['files', 'beside', 'changes', 'drafts', 'workspace', 'live', 'assist', 'for-you', 'links'];
   /* The palette rows a reader has a use for: going somewhere, the panels still
@@ -2404,6 +2443,8 @@
       kept: commentHere ? comment : '',
       held: (['ready', 'saved'].indexOf(saver.state) >= 0 && heldRules() || {}).note || '',
       onlineOnly: offlineUnavailable,
+      // Signed out (or another writer signed in here): the bar says so in its own word.
+      ended: signedOut && saver.state === 'locked' ? saver.short || 'Signed out' : '',
       problem: keeping ? '' : ['dirty', 'refused', 'conflict', 'stale', 'locked', 'offline'].indexOf(saver.state) >= 0 ? saver.detail || SAVE_WORDS[saver.state] : ''
     });
   }
@@ -3345,6 +3386,7 @@
 
   function saveNow(keepalive) {
     if (PUBLIC_WRITER && !Castor.role.confirmed) return Promise.resolve();
+    if (resumeCheck) return resumeCheck.then(function (still) { if (still) return saveNow(keepalive); });
     clearTimeout(saver.timer);
     saver.timer = 0;
     if (saver.writerUnknown) return Promise.resolve();
@@ -3423,6 +3465,8 @@
       drainSoon(0);
       return;
     }
+    // Refused for want of a session: whoami says whether it ended (sessionRefused).
+    if (PUBLIC_WRITER && (res.status === 401 || res.status === 403)) { sessionRefused(); return; }
     var reason = (res.body || {}).reason;
     var kept = ' Your text is kept on this device.';
     switch (reason) {
@@ -3471,7 +3515,13 @@
         : 'The server could not be reached.') + kept);
       return;
     }
-    setSave('refused', ((res.body || {}).error || 'The server refused this save.') + kept);
+    setSave('refused', plainRefusal(res) + kept);
+  }
+  /* The server's own sentence when it sent one; a bare code ("founder-required") is never shown. */
+  function plainRefusal(res) {
+    var said = String((res.body || {}).error || '').trim();
+    if (/\s/.test(said)) return said.charAt(0).toUpperCase() + said.slice(1) + (/[.!?]$/.test(said) ? '' : '.');
+    return res.status === 401 ? 'The server asks you to sign in again.' : 'The server refused this save.';
   }
 
   /* The check's first refusal, from its own line ("FAIL <rule> in <file> (<why>) -> <line>:<words>"):
@@ -3669,6 +3719,7 @@
   function drain() {
     drainTimer = 0;
     if (saver.inflight) return;                       // landed() calls drainSoon again
+    if (PUBLIC_WRITER && !Castor.role.confirmed) return;  // signed in again, the page reopens and drains
     var who = whoList();
     if (!who.length) return;
     Castor.keep.mine().then(keptForWriter).then(function (entries) {
@@ -3683,6 +3734,8 @@
           savedPieceCache(next.path, next.text, res, settled(res, next.text));
           drainTries = 0;
           Castor.keep.confirm(next.path, next.text, Castor.role.publicWriter ? Castor.role.who : undefined).then(function () { drainSoon(0); });
+        } else if (PUBLIC_WRITER && (res.status === 401 || res.status === 403)) {
+          sessionRefused();
         } else if (retryable(res)) {
           drainTries += 1;
           drainSoon(Math.min(RETRY_MAX, RETRY_FIRST * Math.pow(2, drainTries - 1)));

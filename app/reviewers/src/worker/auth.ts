@@ -30,7 +30,7 @@ ${writing ? `<input type="hidden" name="write" value="1">\n` : ""}<label>Email <
 <button type="submit">Email me a code</button>
 </form>` : `<p>Email is unavailable. Ask the person who invited you to try again later.</p>`}
 ${passwordsOn(env) ? `<p class="aside"><a href="/signin/password">Sign in to write with a password</a></p>
-` : ""}<p class="quiet">${writing ? "Reader invitations use a separate account." : "If you used a password before, ask the person who invited you for a recovery link."}</p>`, 200, {}, "auth");
+` : ""}<p class="quiet">${writing ? "Reader invitations use a separate account." : "If you used a password before, ask the person who invited you for a recovery link."}</p>`, 200, {}, "auth", writing ? "/signin?write=1" : "/");
 }
 
 export async function signInRoute(req: Request, env: Env): Promise<Response> {

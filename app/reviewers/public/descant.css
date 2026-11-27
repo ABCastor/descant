@@ -121,6 +121,10 @@ body.auth .stack button { justify-self: stretch; min-height: 48px; font-size: 16
 body.auth input.code { font-size: 26px; letter-spacing: .32em; text-align: center; font-variant-numeric: tabular-nums; padding-left: calc(14px + .32em); }
 body.auth .err { margin: -12px 0 16px; }
 body.auth .aside { margin-top: 24px; }
+/* Every link here is a finger-sized target (44 px tall), the name included; the padding reaches past the
+   line and the negative margin gives it back, so the words around a link stay where they were. */
+body.auth .brand a { min-height: 44px; }
+body.auth main a { display: inline-block; padding-block: 12px; margin-block: -12px; }
 body.auth .quiet { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--rule); color: var(--ink-3); font-size: 13px; }
 
 /* Send the code again: pressable once the first email has had time to arrive. The wait is drawn

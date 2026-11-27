@@ -32,5 +32,5 @@ ${purpose}<input type="hidden" name="email" value="${esc(email)}">
 <p class="resend-wait" aria-hidden="true">You can ask again in <span class="resend-count"><span>${COUNT}</span></span> s</p>
 <p class="resend-note">A new code replaces this one: use the newest email.</p>
 </form>
-<p class="aside"><a href="/signin${write ? "?write=1" : ""}">Use another address</a></p>` : `<p class="aside">No code? <a href="${esc(back)}">Ask for another code</a>.</p>`}`, status, {}, "auth");
+<p class="aside"><a href="/signin${write ? "?write=1" : ""}">Use another address</a></p>` : `<p class="aside">No code? <a href="${esc(back)}">Ask for another code</a>.</p>`}`, status, {}, "auth", write ? "/signin?write=1" : "/");
 }

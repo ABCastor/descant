@@ -2,7 +2,7 @@
 // principal. Founder challenges cannot create or recover reader identities.
 import { clearFailures, guessKeys, reserveTry, waitWords } from "./attempts.ts";
 import { CODE_MINUTES, codePage } from "./code-page.ts";
-import { READER_COOKIE, cookie, emailCodeHash, newToken, randomId, sameText, sha256Hex } from "./session.ts";
+import { READER_COOKIE, cookie, emailCodeHash, newToken, randomId, sameText, sha256Hex, writingHome } from "./session.ts";
 import { founderSessionCookie } from './founder-password.ts';
 import type { Env } from "./store.ts";
 import { isWriter, writerList } from "./writers.ts";
@@ -79,5 +79,6 @@ export async function verifyFounderCode(req: Request, env: Env, token: string, v
   await clearFailures(env.DB, keys);
   const session = await founderSessionCookie(env, claimed.founderKey, true, row.generation, row.emailSha256);
   if (!session) return invalid();
-  return redirect("/write/", [session, cookie(READER_COOKIE, "", 0)]);
+  const home = writingHome(req);
+  return redirect(home.to, [session, cookie(READER_COOKIE, "", 0), ...home.cookies]);
 }
