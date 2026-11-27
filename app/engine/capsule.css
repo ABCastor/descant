@@ -245,6 +245,13 @@ html[data-keys="off"] #app #topbar.mast #more-sheet #castor-shortcuts { display:
   #app #castor-tabs .castor-tab-close { width: 44px; height: 44px; }
 }
 
+/* The docks float over the page in every mode of this world (cards in a laptop's margin, sheets
+   on an iPad and a phone), and the column never moves for them: the dock widths the engine's grid
+   and --page-shift read stay zero. Set on #app, every open and close restyled each word of the
+   article (11-25 ms per open on a slow Linux machine) and, in a 600-700 px window, slid the text
+   sideways behind the rising sheet. */
+#app:is([data-mode="desktop"], [data-mode="tablet"], [data-mode="phone"]) { --dock-l-w: 0px; --dock-r-w: 0px; }
+
 /* ---- margin cards (computer) ------------------------------------------------- */
 #app[data-mode="desktop"] {
   grid-template-columns: 0 minmax(0, 1fr) 0;

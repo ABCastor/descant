@@ -39,8 +39,11 @@
     if (!peek) {
       control.removeAttribute('data-comment-peek');
       if (preview) { preview.remove(); preview = null; }
-      var width = control.getBoundingClientRect().width;
-      if (width) control.style.setProperty('--comment-slot-width', width + 'px');
+      // Learnt by its resize observer once the chrome has one (watchSlot); asked only before that.
+      if (!control._slotWatched) {
+        var width = control.getBoundingClientRect().width;
+        if (width) control.style.setProperty('--comment-slot-width', width + 'px');
+      }
     }
     if (peek) {
       if (!preview) {
@@ -62,6 +65,19 @@
       control.removeAttribute('data-comment-peek'); control.removeAttribute('aria-label');
       if (preview) preview.remove();
     }
+  }
+  /* The peek takes the Comments control's own width, so the bar does not move when a comment shows
+     in it. That width is learnt when the control resizes (after layout, where it costs nothing),
+     never asked for while the chrome rearranges: that runs inside a click that just changed the
+     page, and the question would lay the whole article out there. */
+  function watchSlot(control) {
+    if (!control || control._slotWatched || !global.ResizeObserver) return;
+    control._slotWatched = true;
+    new global.ResizeObserver(function () {
+      if (peek || control !== commentControl) return;
+      var width = control.getBoundingClientRect().width;
+      if (width) control.style.setProperty('--comment-slot-width', width + 'px');
+    }).observe(control);
   }
   function labelWords() {
     Array.prototype.forEach.call(doc.querySelectorAll('.topwords .word, #more-sheet .word, .descant-share'), function (w) {
@@ -170,6 +186,7 @@
       var button = id === 'comments' && commentControl || doc.querySelector('.topwords [data-panel="' + id + '"], #more-sheet [data-panel="' + id + '"]');
       if (id === 'comments' && button) {
         commentControl = button;
+        watchSlot(button);
         if (!button._peekClick) {
           button._peekClick = true;
           button.addEventListener('mousedown', function (event) { if (peek) event.preventDefault(); });
@@ -242,6 +259,13 @@
     arranging = true;
     try { if (menu) layoutMenu(menu); measureMargins(); } finally { arranging = false; }
   }
+  /* A panel opened or closed: its words in the bar change state; the column has not moved (its own
+     resize observer measures it when it does). */
+  function arrangeChrome() {
+    if (arranging) return;
+    arranging = true;
+    try { if (menu) layoutMenu(menu); } finally { arranging = false; }
+  }
   function start() {
     var app = doc.getElementById('app'); if (!app || !bar()) return;
     arrange();
@@ -251,16 +275,18 @@
     // out of the document (a comment mark the page drew again) is no longer under #page to be known,
     // and lays nothing out.
     var quiet = '#page, #castor-save, .castor-session, .descant-live-marker, .command-island-tuck, #castor-words';
+    // A panel's contents in its dock are not the chrome either (panels.js reports open and close).
+    var docks = '.dock';
     var observer = new global.MutationObserver(function (records) {
       for (var i = 0; i < records.length; i++) {
         var node = records[i].target, el = node.nodeType === 1 ? node : node.parentNode;
         if (el && el.isConnected === false) continue;
-        if (!(el && el.closest && el.closest(quiet))) { arrange(); return; }
+        if (!(el && el.closest && (el.closest(quiet) || el.closest(docks)))) { arrange(); return; }
       }
     });
     observer.observe(app, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-mode', 'data-keyboard', 'data-preset'] });
     if (Castor.bus && Castor.bus.on) ['comments:pending', 'comments:saved', 'comments:unsaved', 'piece:opened', 'live:reload'].forEach(function (name) { Castor.bus.on(name, arrange); });
-    if (Castor.panels && Castor.panels.onLayout) Castor.panels.onLayout(arrange);
+    if (Castor.panels && Castor.panels.onLayout) Castor.panels.onLayout(arrangeChrome);
     global.addEventListener('resize', arrange, { passive: true });
     if (global.ResizeObserver) { var col = doc.querySelector('#page .page-column'); if (col) new global.ResizeObserver(measureMargins).observe(col); }
   }

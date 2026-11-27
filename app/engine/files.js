@@ -320,12 +320,39 @@
     return global.fetch(Castor.endpoints.api('files/') + route, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
+    }).catch(function () {
+      var away = new Error('You are offline, or the server did not answer.');
+      away.own = true;
+      throw away;
     }).then(function (response) {
       return response.json().catch(function () { return {}; }).then(function (payload) {
-        if (!response.ok) throw new Error(payload.error || ('The server returned ' + response.status));
+        if (!response.ok) {
+          var refused = new Error(payload.error ? sentence(payload.error) : 'The server could not do that just now.');
+          refused.own = true; refused.status = response.status;
+          throw refused;
+        }
         return payload;
       });
     });
+  }
+
+  function sentence(words) {
+    words = String(words).trim();
+    words = words.charAt(0).toUpperCase() + words.slice(1);
+    return /[.!?]$/.test(words) ? words : words + '.';
+  }
+
+  /* A file action that failed says so in Descant's words, and what did not happen. Never the
+     browser's own error: a fetch with no answer is a TypeError worded differently by each engine
+     ("Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."). */
+  function failureWords(error) {
+    if (error && error.own) return error.message;
+    if (error && (error.name === 'TypeError' || error.name === 'AbortError')) return 'You are offline, or the server did not answer.';
+    if (!error || !error.message || error.name === 'SyntaxError' || /^The server returned \d+$/.test(error.message)) return 'The server could not do that just now.';
+    return sentence(error.message);
+  }
+  function failed(nothing) {
+    return function (error) { setStatus(failureWords(error) + ' ' + nothing); };
   }
 
   function hasTransfer(dt, type) {
@@ -380,7 +407,7 @@
       if (served() && (!payload || !payload.saved)) { setStatus('Workspace is still unsaved.'); return; }
       ensureCanvasEntry();
       setStatus(served() ? 'Saved in workspace.canvas in Git.' : 'Saved in this browser\'s workspace canvas.');
-    }).catch(function (error) { setStatus(error.message); });
+    }).catch(failed('The workspace is not saved yet.'));
     else setStatus('Open Workspace before saving it.');
   }
 
@@ -395,7 +422,7 @@
     }).then(function (saved) {
       putEntry(saved);
       setStatus(served() ? 'Saved in Git.' : 'Saved in this browser.');
-    }).catch(function (error) { setStatus(error.message); });
+    }).catch(failed('The file is not saved.'));
   }
 
   function applyMove(source, destination) {
@@ -440,7 +467,7 @@
     postFileRoute('move', body).then(function () {
       applyMove(source, destination);
       setStatus(served() ? 'Moved in Git.' : 'Moved in this browser.');
-    }).catch(function (error) { setStatus(error.message); });
+    }).catch(failed('Nothing was moved.'));
   }
 
   function moveIntoGroup(source, group) {
@@ -458,7 +485,7 @@
       var destination = relativePath(saved.path);
       if (destination && destination !== source) applyMove(source, destination);
       setStatus(served() ? 'Moved into ' + group + ' in Git.' : 'Moved into ' + group + ' in this browser.');
-    }).catch(function (error) { setStatus(error.message); });
+    }).catch(failed('Nothing was moved.'));
   }
 
   function receiveCard(payload, group) {
@@ -489,7 +516,7 @@
       persist();
       renderFiles();
       setStatus(served() ? 'Order saved in Git.' : 'Order saved in this browser.');
-    }).catch(function (error) { setStatus(error.message); });
+    }).catch(failed('The order is not saved.'));
   }
 
   function wireDrop(row, entry, opts) {
@@ -680,7 +707,7 @@
           S.folded[path] = false;
           persist(); renderFiles(path);
           setStatus(served() ? 'Folder created in Git.' : 'Folder created in this browser.');
-        }).catch(function (error) { setStatus(error.message); });
+        }).catch(failed('No folder was made.'));
       });
     });
     return area;

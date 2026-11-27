@@ -208,9 +208,16 @@
 
   function known(id) { return IDS.indexOf(id) >= 0 || !!reg[id]; }
 
+  /* The app's width, learnt when it changes (mount and the resize observer, where layout is already
+     fresh). A panel opening must not ask for it: by then the panel is in the page, and the question
+     lays out the whole article inside the click (31 ms of a 474 ms opening on a slow Linux machine). */
+  var appWidth = 0;
+  function learnWidth() { appWidth = els.app ? els.app.clientWidth : 0; return appWidth; }
+
   function clampDock(px) {
-    if (els.app && els.app.clientWidth > 0 && els.app.clientWidth < 700) return Math.max(MIN_DOCK, px);
-    var max = els.app ? Math.floor(els.app.clientWidth * 0.4) : 640;
+    var w = appWidth;
+    if (w > 0 && w < 700) return Math.max(MIN_DOCK, px);
+    var max = els.app && w > 0 ? Math.floor(w * 0.4) : 640;
     return Math.max(MIN_DOCK, Math.min(px, Math.max(MIN_DOCK, max)));
   }
 
@@ -669,6 +676,7 @@
     return s;
   }
 
+  var dockSizes = {};
   function apply() {
     if (!els.app) return;
     els.app.dataset.leftOpen = (visibleIds('left').length && shows('left')) ? '1' : '0';
@@ -678,8 +686,10 @@
     /* in focus mode a panel you summon comes back on its own, one at a time,
        while the top bar and the agent line stay away */
     els.app.dataset.summoned = (state.focus && state.summoned) ? '1' : '0';
-    els.app.style.setProperty('--dock-l-size', clampDock(state.size.left) + 'px');
-    els.app.style.setProperty('--dock-r-size', clampDock(state.size.right) + 'px');
+    /* Every word inherits from #app: write its widths only when they change. */
+    var l = clampDock(state.size.left) + 'px', r = clampDock(state.size.right) + 'px';
+    if (dockSizes.l !== l) els.app.style.setProperty('--dock-l-size', dockSizes.l = l);
+    if (dockSizes.r !== r) els.app.style.setProperty('--dock-r-size', dockSizes.r = r);
     applySurface();
   }
 
@@ -706,10 +716,11 @@
     apply();
     if (persist !== false) save();
     emit();
-    /* the dock is still travelling: tell the modules again when it lands, so
-       comments.js can put its cards level with the passages */
+    /* the dock is still travelling: tell the modules again when it has landed, so
+       comments.js can put its cards level with the passages. Not before: their measuring
+       would fall on the frames of the rise. */
     clearTimeout(emitTimer);
-    emitTimer = setTimeout(emit, DUR + 30);
+    emitTimer = setTimeout(emit, travelMs() + 30);
   }
 
   function info() {
@@ -976,6 +987,11 @@
     var m = Castor.motion && Castor.motion.ms;
     return m ? (state.mode === 'desktop' ? m('out') : m('sheet-out')) : DUR;
   }
+  /* The longest a dock moves for: a sheet or card rising (410 ms), or leaving. */
+  function travelMs() {
+    var m = Castor.motion && Castor.motion.ms;
+    return Math.max(m ? m('sheet-in') : DUR, exitMs());
+  }
 
   /* --- mode ---------------------------------------------------------------- */
 
@@ -1068,17 +1084,18 @@
       setupBondLayer();
       mounted = true;
 
-      var w = els.app.clientWidth || 1280;
+      var w = learnWidth() || 1280;
       state.mode = w <= 700 ? 'phone' : w < 1100 ? 'tablet' : 'desktop';
       els.app.dataset.mode = state.mode;
       normaliseSide();
 
       if (global.ResizeObserver) {
         new ResizeObserver(function (entries) {
+          learnWidth();
           setMode(entries[0].contentRect.width);
         }).observe(els.app);
       } else {
-        window.addEventListener('resize', function () { setMode(els.app.clientWidth); });
+        window.addEventListener('resize', function () { setMode(learnWidth()); });
       }
       window.addEventListener('keydown', onKey);
       document.addEventListener('focusin', onPanelFocus);
