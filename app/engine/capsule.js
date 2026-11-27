@@ -222,7 +222,14 @@
     if (list._stamp !== stamp) {
       list._stamp = stamp; list.textContent = '';
       tabs.forEach(function (tab, i) {
-        var button = proxy(list, 'menu-article-' + i, tab.textContent.trim(), null, function () { tab.click(); }, 'article');
+        // The title, then the piece's private label as every list shows it (after a quiet dot): inside the
+        // row's words, so a long one is cut first and the title stays whole.
+        var name = tab.querySelector('.castor-tab-name'), mark = tab.querySelector('.castor-tab-label');
+        var button = proxy(list, 'menu-article-' + i, (name || tab).textContent.trim(), null, function () { tab.click(); }, 'article');
+        if (mark && mark.textContent.trim()) {
+          var label = doc.createElement('span'); label.className = 'castor-label'; label.textContent = mark.textContent.trim();
+          button.querySelector('.word-label').appendChild(label);
+        }
         button.setAttribute('aria-current', tab.getAttribute('aria-selected') === 'true' ? 'page' : 'false');
       });
     }

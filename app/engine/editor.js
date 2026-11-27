@@ -2353,6 +2353,26 @@
     var b = blockOf(id), c = caretSource();
     if (!b || !c) return;
     pushUndo('split');
+    // Enter in a footnote's words continues the same note on an indented line, as a pasted line break
+    // does. A second "[^1]: " would define the same note again, and the site prints only the first
+    // definition: the words typed after Enter would never reach readers. On an empty last line the
+    // note ends and a paragraph starts after it, as an empty list item ends the list.
+    if (b.type === 'footnote-def' && c.start >= markerLen(b.source.split('\n')[0])) {
+      var noteLine = b.source.lastIndexOf('\n', Math.max(0, c.start - 1)) + 1;
+      if (noteLine > 0 && c.start === c.end && !b.source.slice(noteLine).trim()) {
+        b.source = b.source.slice(0, noteLine - 1);
+        var after = { id: mintId(), type: 'p', source: '' };
+        blocks.splice(idx(id) + 1, 0, after);
+        var wasNote = focusId;
+        focusId = null;
+        refreshRendered(b); repaint(wasNote);
+        insertBlockEl(after);
+        focusBlock(after.id, 0); requestOverlay('snap'); changed();
+        return;
+      }
+      replaceVisible(id, c.start, c.end, '\n', false);
+      return;
+    }
     var split = replaceVisible(id, c.start, c.end, { kind: 'split' }, 'project');
     if (b.type === 'code') { applyEdit(id, 0, b.source.length, split.source, split.caret); return; }
     var head = split.head, tail = split.tail;
@@ -2932,7 +2952,18 @@
       }
       return;                                 // native caret handling inside the raw host
     }
+    // Taking the paragraph being typed in back to reading can move the pressed one before the button is
+    // released (an empty paragraph left by Enter goes, a block shown as its source is drawn again): the
+    // release then lands on other words or another block, where WebKit sends no click at all. The press
+    // is kept with how far its paragraph moved, so the caret goes where it was pressed (takePress).
+    var tracks = typeof takePress === 'function';
+    var pressBox = tracks && focusId && e.button === 0 && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !touchInput ? el.getBoundingClientRect() : null;
     if (focusId) blurCurrent();               // so a drag can select across blocks
+    if (tracks) pressed = null;
+    var movedEl = pressBox && elOf(id), movedBox = movedEl && movedEl.getBoundingClientRect();
+    if (movedBox && (Math.abs(movedBox.top - pressBox.top) > 0.5 || Math.abs(movedBox.left - pressBox.left) > 0.5)) {
+      pressed = { id: id, x: e.clientX, y: e.clientY, dx: movedBox.left - pressBox.left, dy: movedBox.top - pressBox.top };
+    }
     // A drag that starts on a link selects words, as anywhere else in the writing. WebKit would drag the
     // link itself (and Firefox, without draggable="false"): the page selects instead (onPointerMove).
     // A click on it is still a click (onClick puts the caret there).
@@ -2949,6 +2980,18 @@
     }
   }
   var linkDrag = null;
+  // A press on a paragraph that moved under the pointer before its release (onMouseDown), and the click
+  // it makes, at the place pressed: the same point of the paragraph where it now stands. Null for a
+  // click that is not that press's (a drag, another click).
+  var pressed = null;
+  function takePress(x, y, preventDefault) {
+    var press = pressed;
+    pressed = null;
+    if (!press || Math.abs(x - press.x) > 4 || Math.abs(y - press.y) > 4) return null;
+    var el = elOf(press.id), px = press.x + press.dx, py = press.y + press.dy, hit = el && document.elementFromPoint(px, py);
+    if (!el || !hit || !el.contains(hit)) return null;
+    return { target: hit, clientX: px, clientY: py, preventDefault: preventDefault || function () {} };
+  }
   // A hard break is drawn as a <br> with no character of its own, so in the reading view the end of
   // one line and the start of the next read as the same offset, and with the marks hidden the
   // browser puts or deletes around a break as if its source were not there. These find
@@ -3560,8 +3603,9 @@
   function onClick(e) {
     if (touchInput && Date.now() < suppressClickUntil) return;
     var sel = global.getSelection();
-    if (sel && !sel.isCollapsed) return;
-    passageTap(e, touchInput);
+    if (sel && !sel.isCollapsed) { if (typeof pressed !== 'undefined') pressed = null; return; }
+    var press = typeof pressed !== 'undefined' && pressed && takePress(e.clientX, e.clientY, function () { if (e.preventDefault) e.preventDefault(); });
+    passageTap(press || e, touchInput);
   }
   function onTouchStart(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
@@ -3734,8 +3778,18 @@
       requestOverlay('navigate');
     }
   }
-  function onPointerUp() {
+  function onPointerUp(e) {
     var started = pointerStartedInPage;
+    // A press whose paragraph moved before this release: when no click follows (WebKit sends none
+    // for a release on another element), the press is the click.
+    var press = typeof pressed !== 'undefined' ? pressed : null;
+    if (press && e && (Math.abs(e.clientX - press.x) > 4 || Math.abs(e.clientY - press.y) > 4)) pressed = press = null;
+    if (press) global.setTimeout(function () {
+      if (pressed !== press) return;
+      var sel = global.getSelection(), tap = sel && sel.rangeCount && !sel.isCollapsed ? null : takePress(press.x, press.y);
+      pressed = null;
+      if (tap) passageTap(tap, false);
+    }, 0);
     if (typeof linkDrag !== 'undefined') linkDrag = null;
     pointerSelecting = false;
     pointerStartedInPage = false;
@@ -4712,12 +4766,16 @@
         }
         lo = hi;
       }
+      // Variants 9 to 11 spell words already bold or italic again as part of the run around them, and a
+      // run's edge spaces go outside it whatever stands past these words. 9 and 10 also put bold and
+      // italic outside links: Bold over "a [web link](…) and" is one "**…**" around the link.
+      var outer = variant >= 9 && variant <= 11, spanning = variant === 9 || variant === 10;
       var rawLiteral = list.map(function (c) { return c.text; }).join('');
-      var rawAutomatic = (variant == null || variant < 6) && /https?:\/\/|www\./i.test(rawLiteral) && list.every(function (c) { return !c.atom && !c.link && !c.styles.length; }) && matchesEmphasis({ source: rawLiteral }, list);
+      var rawAutomatic = (variant == null || variant < 6 || outer) && /https?:\/\/|www\./i.test(rawLiteral) && list.every(function (c) { return !c.atom && !c.link && !c.styles.length; }) && matchesEmphasis({ source: rawLiteral }, list);
       function escaped(s, character) {
-        if (variant >= 7 && s === '`' && !character.originalStyles) return '&#96;';
+        if (variant >= 7 && !outer && s === '`' && !character.originalStyles) return '&#96;';
         return s.replace(/[\\`*_\[\]()~#<>!|=^%&]/g, function (ch) {
-          if ((variant == null || variant < 6) && !character.link && indexes.get(character) < automaticCut && (rawAutomatic && /[)_*\[\](]/.test(ch) || automaticCandidate && automaticWord && automatic[indexes.get(character)]) && character.styles.indexOf('code') < 0) return ch;
+          if ((variant == null || variant < 6 || outer) && !character.link && indexes.get(character) < automaticCut && (rawAutomatic && /[)_*\[\](]/.test(ch) || automaticCandidate && automaticWord && automatic[indexes.get(character)]) && character.styles.indexOf('code') < 0) return ch;
           var literalCount = literalCounts.get(ch) || 0;
           if (ch === '!' && !(list[indexes.get(character) + 1] && list[indexes.get(character) + 1].link)) return ch;
           var point = indexes.get(character), prev = list[point - 1], next = list[point + 1];
@@ -4730,7 +4788,8 @@
           return '\\' + ch;
         });
       }
-      var order = ['link', variant >= 3 && variant < 6 ? 'italic' : 'bold', variant >= 3 && variant < 6 ? 'bold' : 'italic', 'highlight', 'strike', 'sup', 'sub', 'span', 'note', 'code'];
+      var order = spanning ? [variant === 9 ? 'bold' : 'italic', variant === 9 ? 'italic' : 'bold', 'link', 'highlight', 'strike', 'sup', 'sub', 'span', 'note', 'code'] :
+        ['link', variant >= 3 && variant < 6 ? 'italic' : 'bold', variant >= 3 && variant < 6 ? 'bold' : 'italic', 'highlight', 'strike', 'sup', 'sub', 'span', 'note', 'code'];
       function ownerKey(owner) { return { A: 'link', STRONG: 'bold', EM: 'italic', MARK: 'highlight', DEL: 'strike', SUP: 'sup', SUB: 'sub', SPAN: writerNote(owner.node) ? 'note' : 'span', CODE: 'code' }[owner.node.tagName]; }
       function rawFits(group, owner, level) {
         return group.every(function (c) {
@@ -4781,14 +4840,17 @@
           var previous = list[indexes.get(group[0]) - 1], following = list[indexes.get(group[group.length - 1]) + 1];
           // Existing underscore italics need new delimiters when an edit changes
           // their flanking word. Everything else in an untouched owner is raw.
-          if (variant !== 8 && key !== 'note' && whole && rawFits(group, owner, level) && rawFlanks(group, owner)) {
+          if (variant !== 8 && key !== 'note' && !(outer && (key === 'bold' || key === 'italic')) && whole && rawFits(group, owner, level) && rawFlanks(group, owner)) {
             if (caretIndex >= base + i && caretIndex <= base + j) caret = out.length + (caretIndex === base + j ? group[group.length - 1].end : group[caretIndex - base - i].at) - owner.at;
             append(source.slice(owner.at, owner.end), false, null, owner.at); i = j; continue;
           }
 
           if (key !== 'code' && key !== 'note' && !(key === 'span' && owner && /^<span style="white-space:pre">/i.test(source.slice(owner.at, owner.end)))) {
-            while (lo < hi && /\s/.test(items[lo].text)) { if (previous && (key === 'link' ? previous.link === value : previous.styles.indexOf(key) >= 0)) break; lo++; }
-            while (hi > lo && /\s/.test(items[hi - 1].text)) { if (following && (key === 'link' ? following.link === value : following.styles.indexOf(key) >= 0)) break; hi--; }
+            // A neighbour outside these words (past the run around them, variants 9 and 10) cannot join
+            // this run: the spaces at its edge go outside it.
+            var joinsBefore = previous && !(outer && i === 0), joinsAfter = following && !(outer && j === items.length);
+            while (lo < hi && /\s/.test(items[lo].text)) { if (joinsBefore && (key === 'link' ? previous.link === value : previous.styles.indexOf(key) >= 0)) break; lo++; }
+            while (hi > lo && /\s/.test(items[hi - 1].text)) { if (joinsAfter && (key === 'link' ? following.link === value : following.styles.indexOf(key) >= 0)) break; hi--; }
           }
           emit(items.slice(i, lo), level + 1, base + i);
           if (hi > lo) {
@@ -4832,7 +4894,7 @@
               if (base + hi === caretIndex && caret == null) caret = out.length;
               out += pad + ticks;
             } else {
-              open = { bold: variant % 3 === 1 ? '__' : '**', italic: variant % 3 === 2 ? '_' : '*', highlight: '==', strike: '~~' }[key];
+              open = { bold: !outer && variant % 3 === 1 ? '__' : '**', italic: !outer && variant % 3 === 2 ? '_' : '*', highlight: '==', strike: '~~' }[key];
               var stop = indexes.get(items[hi - 1]) + 1;
               var prev = out.slice(-1), next = hi === items.length && boundary ? boundary : list[stop] ? list[stop].text : '';
               var first = items[lo].text, last = items[hi - 1].text;
@@ -4847,7 +4909,7 @@
                 var right = !!next && !/\s/.test(next) && (!punct(next) || !last || /\s/.test(last) || punct(last));
                 canOpen = canOpen && (!left || punct(prev)); canClose = canClose && (!right || punct(next));
               }
-              if (!open || variant >= 6 && (key === 'bold' || key === 'italic' || key === 'highlight' || key === 'strike')) canOpen = false;
+              if (!open || variant >= 6 && !outer && (key === 'bold' || key === 'italic' || key === 'highlight' || key === 'strike')) canOpen = false;
               var original = items[lo].owners && items[lo].owners.find(function (o) { return o.node.tagName === tag.toUpperCase(); });
               var generated = original && ownerCharacters(original).every(function (c) { return c.typed; });
               var raw = original && !generated && source.slice(original.at, original.end);
@@ -4870,7 +4932,7 @@
         if (variant !== 8 && !character.typed && character.originalStyles && character.owners) {
           character.owners.slice().reverse().some(function (owner) {
             var key = ownerKey(owner);
-            if (!key || key === 'note') return false;
+            if (!key || key === 'note' || outer && (key === 'bold' || key === 'italic')) return false;
             var original = ownerCharacters(owner);
             // A raw owner can begin only at its first original character.
             // Reject every interior position before slicing or scanning its characters.
@@ -4879,6 +4941,9 @@
             if (!rawFlanks(group, owner)) return false;
             function belongs(c) { return c && c.owners && c.owners.some(function (o) { return o.node === owner.node; }) && (key === 'link' ? c.link === owner.node : c.styles.indexOf(key) >= 0); }
             if (belongs(list[point - 1]) || belongs(list[point + original.length])) return false;
+            // Around a link whose words are bold, bold words on either side make one run with them.
+            var runsOn = function (c) { return c && group[0].styles.some(function (k) { return (k === 'bold' || k === 'italic') && c.styles.indexOf(k) >= 0; }); };
+            if (spanning && (runsOn(list[point - 1]) || runsOn(list[point + original.length]))) return false;
             if (group.length !== original.length || !group.every(function (c, i) { return c === original[i] && !c.typed && c.originalStyles && c.styles.join() === c.originalStyles.join() && c.link === c.originalLink; }) || !rawFits(group, owner, 0)) return false;
             retained = owner; members = group; return true;
           });
@@ -4906,6 +4971,14 @@
             candidate = serialize(list, caretIndex, choice);
             if (matchesEmphasis(candidate, list) && (!best || fallbackCount(candidate) < fallbackCount(best))) best = candidate;
             if (best && !fallbackCount(best)) break;
+          }
+        }
+        // Still HTML where Markdown can say it: bold or italic that crosses a link or words already
+        // styled. The run goes around them, once (variants 9 and 10).
+        if (best && fallbackCount(best) && list.some(function (c) { return c.styles.indexOf('bold') >= 0 || c.styles.indexOf('italic') >= 0; })) {
+          for (var around = 9; around <= 11 && fallbackCount(best); around++) {
+            candidate = serialize(list, caretIndex, around);
+            if (matchesEmphasis(candidate, list) && fallbackCount(candidate) < fallbackCount(best)) best = candidate;
           }
         }
         if (best) { out = best.source; caret = best.caret; newEscapes = best.escapes || []; }
@@ -5237,7 +5310,10 @@
       var sample = chars.slice(from, to)[0] || active, selection = chars.slice(from, to);
       var styleFor = { STRONG: 'bold', EM: 'italic', MARK: 'highlight', DEL: 'strike', CODE: 'code', SUP: 'sup', SUB: 'sub', SPAN: 'span' };
       var intent = typeof typingStyles !== 'undefined' && typingStyles && typingStyles.blockId === id && typingStyles.at === start ? typingStyles : null;
-      var window = sample && sample.owners && sample.owners.find(function (owner, index) {
+      // A line break in a list, a quote or a note takes the rows below, which give the new line its
+      // continuation; inside an element it would go in bare (a note's next line not indented).
+      var lineInStructure = action.kind === 'text' && /\n/.test(action.text || '') && /^(?:list|quote|callout|footnote-def)$/.test(b.type);
+      var window = !lineInStructure && sample && sample.owners && sample.owners.find(function (owner, index) {
         if (!/^(?:STRONG|EM|MARK|DEL|SUP|SUB|SPAN)$/.test(owner.node.tagName)) return false;
         var raw = source.slice(owner.at, owner.end), name = owner.node.tagName.toLowerCase();
         var open = new RegExp('^<' + name + (name === 'span' ? '(?: style="white-space:pre")?' : '') + '>', 'i').exec(raw), close = new RegExp('</' + name + '>$', 'i').exec(raw);
@@ -6547,6 +6623,13 @@
   // Type anywhere: a printable key with nothing focused starts writing in the
   // piece rather than going nowhere. Never while a picker, a palette or any
   // other field owns the keyboard.
+  function keepThePage(e) {
+    if (e.key !== 'Backspace' && e.key !== 'Delete' || e.defaultPrevented) return;
+    var t = e.target;
+    if (t && t.nodeType === 1 && (t.isContentEditable || /^(?:textarea|select)$/i.test(t.tagName) ||
+      /^input$/i.test(t.tagName) && !/^(?:button|checkbox|radio|submit|reset|image|file|range|color|hidden)$/i.test(t.type || ''))) return;
+    e.preventDefault();
+  }
   function onGlobalKey(e) {
     if (!page || focusId || activePicker) return;
     function inert(node) {
@@ -6717,6 +6800,11 @@
         document.addEventListener('pointerdown', function (e) { if (e.pointerType) touchInput = e.pointerType === 'touch'; }, true);
         document.addEventListener('selectionchange', onSelectionChange);
         if (isArticle) document.addEventListener('keydown', onGlobalKey);   // typing while reading starts the article, never a field
+        // Backspace or Delete with no text field focused never leaves the page. WebKit (Safari's engine,
+        // and a WKWebView unless told otherwise) takes Backspace there as Back in the page's history.
+        // On the window, after every other listener: a key the page answers itself (selected words,
+        // a focused tab) is still answered.
+        if (isArticle) global.addEventListener('keydown', keepThePage);
         // Keys, Cut and Paste over selected words that are not all in the paragraph being typed in, before
         // anything else reads them (typing while reading would add the letter at the article's end).
         if (isArticle) {

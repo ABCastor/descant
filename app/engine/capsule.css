@@ -415,6 +415,8 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
   border: solid var(--ink); border-width: 0 2px 2px 0; transform: rotate(45deg); box-sizing: border-box;
 }
 #app[data-mode="phone"] #more-sheet #menu-article-list .word[aria-current="page"] { color: var(--ink); }
+/* An open article's private label sits on the title's own line (the outline's lift is for its veins). */
+#app[data-mode="phone"] #more-sheet #menu-article-list .castor-label { top: 0; }
 #app[data-mode="phone"] #more-sheet .menu-rows .castor-pending::after { content: none; }
 #app[data-mode="phone"] #more-sheet .foot-by { margin: 24px 16px 0; padding: 0; border: 0; min-height: 44px; align-items: center; }
 #app #more-sheet [data-icon="publish"] { --icon: var(--icon-publish); }
