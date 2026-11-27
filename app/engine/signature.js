@@ -92,12 +92,7 @@
   function tapName() {
     var name = document.querySelector('#topbar .brand-name');
     if (!name) return;
-    var brand = name.closest('.brand');
-    if (brand) brand.addEventListener('click', function () {
-      var Castor = window.Castor || {};
-      if (Castor.role && Castor.role.reviewer) return;
-      if (Castor.panels && Castor.panels.open) Castor.panels.open('files', 'left');
-    });
+    // The name is the app's, not a control: a tap opens nothing (Files is in More and the Menu).
     // A tap drops the asterisk, as a hover does: the name's and the credit's.
     [name].concat(Array.prototype.slice.call(document.querySelectorAll('.foot-by'))).forEach(function (target) {
       target.addEventListener('pointerdown', function (e) {

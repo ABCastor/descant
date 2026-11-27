@@ -275,7 +275,8 @@
   }
 
   // Phone, keyboard up: the writing bar floats above the keyboard. A finger scroll
-  // tucks it into one round button that keeps the save mark; a press on that
+  // tucks it into one round button that shows the tools' own letters (Aa, set like
+  // the bar's B and I), or a save problem's mark while there is one; a press on that
   // button, a tap in the text or typing brings the whole bar back at once.
   function floating() {
     return !!(S.root && S.root.dataset.arrangement === 'writing' && mode() === 'phone');
@@ -286,7 +287,7 @@
     if (!S.app || tucked() === on) return;
     if (on) S.app.dataset.barTucked = ''; else delete S.app.dataset.barTucked;
     if (S.root) S.root.inert = on;
-    if (S.tuck) S.tuck.inert = !on;
+    if (S.tuck) { S.tuck.inert = !on; S.tuck.setAttribute('aria-expanded', on ? 'false' : 'true'); }
   }
   function ensureTuck() {
     if (S.tuck) return;
@@ -294,6 +295,7 @@
     button.type = 'button';
     button.className = 'command-island-tuck';
     button.inert = true;
+    button.setAttribute('aria-expanded', 'true');
     // The caret stays in the text: no focus moves, and iOS gets no mouse events to blur on.
     button.addEventListener('pointerdown', function (event) { event.preventDefault(); });
     button.addEventListener('touchend', function (event) { event.preventDefault(); tuck(false); });
@@ -312,9 +314,15 @@
     }
     var signal = save && save.getAttribute('data-signal') || 'saving';
     if (S.tuck.getAttribute('data-signal') !== signal) S.tuck.setAttribute('data-signal', signal);
-    var label = (save && save.getAttribute('aria-label') || 'Save state').replace(/[.\s]*$/, '') + '. Show the writing tools';
+    var label = 'Show the writing tools. ' + (save && save.getAttribute('aria-label') || 'Save state').replace(/[.\s]*$/, '');
     if (S.tuck.getAttribute('aria-label') !== label) S.tuck.setAttribute('aria-label', label);
-    if (S.tuck._mark !== signal && icon) { S.tuck._mark = signal; S.tuck.innerHTML = icon.outerHTML; }
+    // A tick reads as "done", never as "the tools are here": only a problem takes the tools' place.
+    var problem = signal === 'partial' || signal === 'device';
+    var mark = problem ? signal : 'tools';
+    if (S.tuck._mark !== mark && (!problem || icon)) {
+      S.tuck._mark = mark;
+      S.tuck.innerHTML = problem ? icon.outerHTML : '<span class="tuck-glyph" aria-hidden="true">Aa</span>';
+    }
   }
   function inPage(event) {
     return !!(event.target && event.target.closest && event.target.closest('#page .page-scroll'));

@@ -300,7 +300,7 @@
     var status = element('p', 'changes-website-status', v.status);
     status.setAttribute('role', 'status'); main.appendChild(status);
     if (S.full && v.mode === 'personal' && v.base) main.appendChild(element('p', 'changes-help', 'Your last check here compared with the current saved writing.'));
-    if (!S.demo && (v.status === 'Unpublished changes' || v.status === 'Not published' || /^Changed since Edition /.test(v.status))) {
+    if (!S.demo && (v.status === 'Unpublished changes' || v.status === 'Not published' || v.status === 'Not live' || /^Changed since Edition /.test(v.status))) {
       main.className += ' changes-has-publish';
       var publisher = Castor.publishState;
       var blocked = publisher && publisher.reason ? publisher.reason() : 'Publishing is not available in this view.';

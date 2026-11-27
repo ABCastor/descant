@@ -1022,10 +1022,15 @@
     } catch (err) {
       r.selectNodeContents(el); r.collapse(false);
     }
+    // A selection put into an editing host focuses it as a plain focus() would (WebKit), and on iOS the
+    // last focus before the page is drawn decides whether the keyboard reveals the host: without
+    // preventScroll it pans the window to centre the paragraph, and the page puts it back, a jump on a
+    // tap into another paragraph. So the host is focused without a scroll before the range and again after.
+    if (document.activeElement !== el) el.focus({ preventScroll: true });
     if (typeof selectionTurn !== 'undefined') selectionTurn++; sel.removeAllRanges(); sel.addRange(r);
     frameReads.invalidateSelection();
     rememberNativeCaret({ start: Math.min(start, end), end: Math.max(start, end) });
-    if (document.activeElement !== el) el.focus({ preventScroll: true });
+    el.focus({ preventScroll: true });
     requestOverlay(overlayMode);
   }
 
@@ -2989,6 +2994,7 @@
       paddedRange.setStart(paddedCell, 0); paddedRange.setEnd(paddedCell, 0);
       if (typeof selectionTurn !== 'undefined') selectionTurn++; paddedSelection.removeAllRanges(); paddedSelection.addRange(paddedRange);
       frameReads.invalidateSelection();
+      editOf(id).focus({ preventScroll: true });   // the range focused it as a plain focus(): see setCaret
     }
     undoFocusScroll();
     requestOverlay('navigate');
@@ -3025,6 +3031,10 @@
       // words would go unseen, and Chromium on the number's other side: the caret is the editor's
       // for the rest of this tap.
       if (typeof guardTap === 'function' && (inAtom(native && native.startContainer) || inAtom(e.target) || atomAt(host, off))) guardTap(id, off);
+      // With the keyboard down the tap is left to iOS as well (it raises the keyboard), and iOS, finding the
+      // paragraph focused, moves the caret to the nearest word's edge some 100 ms later: the caret is held.
+      var view = global.visualViewport;
+      if (typeof guardTap === 'function' && !(view && view.height < global.innerHeight - 120)) guardTap(id, off);
     }
   }
   // The atom (a footnote number, a label) that starts or ends at source offset `off`, with its extent.
@@ -5073,6 +5083,9 @@
   function onBeforeInput(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
     if (subtitle && subtitle.classList && subtitle.classList.contains('cw-subtitle')) return;
+    // Words typed after a tap (a suggestion or dictation comes with no key) move the caret on: the tap's
+    // hold on its caret ends, or it would pull the caret back behind them.
+    if (typeof tapGuard !== 'undefined') tapGuard = null;
     if (!focusId) return;
     var el = editOf(focusId);
     if (!el || !el.contains(e.target) && e.target !== el) return;

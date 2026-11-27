@@ -125,11 +125,11 @@ html[data-world="typewell"] #frame:not([data-ready]) #app{transition:none}
 /* The name: Literata 560, optical size 72, the header's tracking, in ink, then
    the typed Castor asterisk in --human at the name's size and weight 650, .1em
    after it. 22px where the logbook's is 30: a writing surface carries its name
-   small. The button opens the article files without leaving the editor. */
+   small. It is the app's name, not a control: a tap only drops the asterisk. */
 #topbar.mast .brand{position:relative;display:block;flex:0 0 auto;margin-right:1.5rem;
   padding:0;border:0;background:none;text-align:left;
   font-family:var(--word);font-weight:560;font-variation-settings:'opsz' 72;letter-spacing:-.04em;font-size:var(--header-brand,22px);
-  line-height:1;text-box:trim-both cap alphabetic;color:var(--ink);white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none}
+  line-height:1;text-box:trim-both cap alphabetic;color:var(--ink);white-space:nowrap;cursor:default;user-select:none;-webkit-user-select:none}
 .mast .brand-name{display:inline-block}
 .mast .brand .star{display:inline-block;margin-left:.1em;line-height:.88;font-size:1em;font-weight:650;color:var(--human)}
 @media (pointer:coarse){

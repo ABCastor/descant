@@ -92,8 +92,6 @@
       });
     });
     ['comments:draft', 'piece:open'].forEach(function (name) { Castor.bus.on(name, render); });
-    var brand = global.document.querySelector('#topbar .brand');
-    if (brand) brand.setAttribute('aria-label', 'Descant');
     settings(); render();
   }
   Castor.readerShell = { mount: mount, render: render, settings: settings, view: view, details: details };

@@ -166,15 +166,16 @@
     if (menuLabel && menuLabel.textContent !== (small ? 'Menu' : 'More')) menuLabel.textContent = small ? 'Menu' : 'More';
     menu.word.setAttribute('aria-label', small ? 'Menu' : 'More');
     sheet.setAttribute('aria-label', small ? 'Menu' : 'More');
-    /* Phone: one sheet of named groups, in the order he reaches for them: the
-       article's own tools, Publish, the library, Settings, and last the open
-       articles, whose list grows, so Settings stays in view (S2). */
+    /* Phone: one sheet of named groups, by what the writer is doing: working on this
+       article, sending it out (Publish, Share), then going elsewhere (the library, the
+       open articles), and Settings last, below the open articles, where an app keeps
+       it. Settings is an untitled group of one row. */
     var groups = small && {
       article: group(sheet, 'menu-article', 'This article'),
       publish: group(sheet, 'menu-publish', 'Publish'),
       library: group(sheet, 'menu-library', 'Library'),
-      app: group(sheet, 'menu-app', ''),
-      articles: group(sheet, 'menu-articles', 'Open articles')
+      articles: group(sheet, 'menu-articles', 'Open articles'),
+      app: group(sheet, 'menu-app', '')
     };
     var groupOf = { outline: 'article', changes: 'article', drafts: 'article', links: 'article', workspace: 'article', files: 'library', 'for-you': 'library' };
     // The library starts with New article (app.js newArticle): one tap, the caret in its title.

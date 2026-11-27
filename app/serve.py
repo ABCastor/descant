@@ -3468,6 +3468,11 @@ class Handler(SimpleHTTPRequestHandler):
                 shown["editions"] = live_editions(record)
                 shown["edition"] = record.get("edition") if type(record.get("edition")) is int else \
                     (shown["editions"][-1]["edition"] if shown["editions"] else None)
+            if "withdrawn" in record:
+                # Taken off the site: when, and which edition was the last live one; the editions stay.
+                mark = record["withdrawn"] if isinstance(record["withdrawn"], dict) else {}
+                shown["withdrawn"] = {"at": mark.get("at") if isinstance(mark.get("at"), str) else None,
+                                      "edition": mark.get("edition") if type(mark.get("edition")) is int else None}
             return shown
         except (OSError, ValueError):
             return None
@@ -3516,7 +3521,8 @@ class Handler(SimpleHTTPRequestHandler):
                                 "sites": {str(k): str(v) for k, v in sites.items() if space_config.site(str(k))}})
 
     def api_publish_start(self):
-        """POST {who, path, site, article_sha256}: publish the saved article live from this server."""
+        """POST {who, path, site, article_sha256[, action: "unpublish"]}: publish the saved article live
+        from this server, or take it off the site."""
         if hasattr(self, "reviewer"):
             return self.reply(403, {"error": "Only founders publish."})
         if (self.headers.get("Content-Type") or "").split(";", 1)[0] != "application/json":
@@ -3537,6 +3543,9 @@ class Handler(SimpleHTTPRequestHandler):
         if not path or path != body.get("path") or not isinstance(site, str) or not space_config.site(site) \
                 or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             return self.reply(400, {"error": "Name a saved article, a site and its saved version."})
+        action = body.get("action", "publish")
+        if action not in ("publish", "unpublish"):
+            return self.reply(400, {"error": "Publish or take off, nothing else."})
         if self.piece_locked(path):
             return self.reply(403, {"error": "This article cannot be published here."})
         allowed = site_publishers(site)
@@ -3550,8 +3559,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self.reply(404, {"error": "The article is not saved here."})
         if hashlib.sha256(saved).hexdigest() != digest:
             return self.reply(409, {"error": "The saved article changed; reload it before publishing."})
-        code, answer = publisher_call("POST", "/start", {"article": path, "site": site, "live": True,
-                                                        "article_sha256": digest, "principal": who})
+        code, answer = publisher_call("POST", "/start", dict({"article": path, "site": site, "live": True,
+                                                             "article_sha256": digest, "principal": who},
+                                                            **({"action": "unpublish"} if action == "unpublish" else {})))
         job = answer.get("id") if isinstance(answer, dict) else None
         if code != 202 or not isinstance(job, str) or not re.fullmatch(r"[0-9a-f]{32}", job):
             message = answer.get("message") if isinstance(answer, dict) and isinstance(answer.get("message"), str) else ""

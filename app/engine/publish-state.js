@@ -205,9 +205,16 @@
     return typeof live.edition === 'number' && live.edition >= 1 ? live.edition : 1;
   }
   function matches() { var p = piece(); return p.article_sha256_now === p.live.article_sha256 && source() === p.savedMarkdown; }
+  /* Taken off the site: the record keeps its editions and says when, and which edition was the last live one. */
+  function withdrawn() { var live = piece().live; return live && live.withdrawn ? live.withdrawn : null; }
+  function offWords() {
+    var off = withdrawn();
+    return 'Taken off the site ' + date(off.at) + '. Edition ' + (off.edition || edition()) + ' was the last live edition.';
+  }
   function state() {
     var p = piece(), live = p.live;
     if (!live) return 'Not published';
+    if (withdrawn()) return 'Not live on ' + live.site + ' since ' + date(withdrawn().at) + '. Edition ' + (withdrawn().edition || edition()) + ' was the last live edition.';
     var prefix = 'Live on ' + live.site;
     if (!canDiff()) return prefix + '. Descant has no record of which version. Update the live version to record it.';
     if (matches()) return prefix + ', Edition ' + edition() + ', matches what you are reading';
@@ -217,13 +224,14 @@
   function statusWords() {
     var live = piece().live;
     if (!live) return 'Not published';
+    if (withdrawn()) return 'Not live';
     if (!canDiff()) return 'Live, version not recorded';
     return matches() ? 'Edition ' + edition() : 'Changed since Edition ' + edition();
   }
   // none, unknown, match or changed: what the marker's dot shows.
   function stateCode() {
     var live = piece().live;
-    return !live ? 'none' : !canDiff() ? 'unknown' : matches() ? 'match' : 'changed';
+    return !live || withdrawn() ? 'none' : !canDiff() ? 'unknown' : matches() ? 'match' : 'changed';
   }
   function publisherNames(site) {
     var listed = siteRule(site).publishers, names = C.people && C.people.names ? C.people.names() : {};
@@ -335,7 +343,7 @@
     var live = piece().live, words = statusWords();
     // One dot, like the green dot that marks where you are in the article tabs:
     // green = the live version is what you are reading, amber = changed since, grey = not live.
-    var code = !live ? 'none' : !canDiff() ? 'unknown' : matches() ? 'match' : 'changed';
+    var code = !live || live.withdrawn ? 'none' : !canDiff() ? 'unknown' : matches() ? 'match' : 'changed';
     var shortWords = code === 'none' ? 'Not live' : code === 'changed' ? 'Changed' : code === 'match' ? 'Edition ' + edition() : 'Live';
     // It repaints on every keystroke: the marker is written only when what it says changed,
     // and the panel is built while it is open (popovers.bind builds it as it opens).
@@ -354,7 +362,8 @@
     if (shut) return;
     panel.replaceChildren(); var live = piece().live;
     panel.appendChild(el('p', live ? live.site : 'Not published'));
-    if (live) {
+    if (live && live.withdrawn) panel.appendChild(el('p', offWords()));
+    else if (live) {
       var url;
       try { url = new URL(live.url); } catch (error) { url = null; }
       if (url && url.protocol === 'https:' && (url.hostname === live.site || url.hostname === 'www.' + live.site)) {
@@ -364,7 +373,7 @@
       panel.appendChild(el('p', state()));
       if (canDiff()) panel.appendChild(button('See changes', showDiff));
     }
-    var publish = button(live ? 'Update the live version' : 'Publish', confirm);
+    var publish = button(live && !live.withdrawn ? 'Update the live version' : 'Publish', confirm);
     var blocked = reason(); publish.disabled = !!blocked; panel.appendChild(publish);
     if (blocked) { panel.appendChild(el('p', blocked)); showLine(panel); }
   }
@@ -377,8 +386,10 @@
     if (blocked) { var unavailable = dialog('Publish unavailable'); unavailable.appendChild(el('p', blocked)); showLine(unavailable); unavailable.appendChild(button('Close', hideSheet)); return; }
     var article = path, captured = epoch, who = founder(), original = source();
     var fields = C.md.parse(original).frontmatter;
-    var box = dialog(piece().live ? 'Update the live version' : 'Publish this article');
+    var box = dialog(piece().live && !withdrawn() ? 'Update the live version' : 'Publish this article');
     ['title', 'subtitle', 'slug'].forEach(function (key) { box.appendChild(el('p', key.charAt(0).toUpperCase() + key.slice(1) + ': ' + (fields[key] || '(missing)'))); });
+    // An article that names one of the site's own pages publishes onto it, not under /writing/.
+    if (fields.path && fields.path !== '/writing/' + fields.slug) box.appendChild(el('p', 'Page: ' + fields.path + ' (this replaces that page of the site)'));
     var label = el('label', 'Site'), site = el('select'); site.setAttribute('aria-label', 'Site');
     sites().forEach(function (entry) { var option = el('option', entry.name); option.value = entry.name; site.appendChild(option); });
     var preferred = [fields.site, piece().live && piece().live.site, defaultSite(fields)].filter(function (name) { return name && siteRule(name).name; })[0];
