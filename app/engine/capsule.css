@@ -908,7 +908,8 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
 }
 #app .command-island[data-arrangement="writing"] .command-island-word s { text-decoration-thickness: 1.5px; }
 
-/* The selection menu: one row of words on the card surface, Copy first, hairlines between them. */
+/* The selection menu: one row of words on the card surface, hairlines between them. With a mouse
+   each word leads with its glyph (B, I, the comment bubble, the link), drawn like the writing bar's. */
 .selection-menu.cw-selmenu {
   gap: 0; padding: 0 4px; border: 1px solid var(--rule); border-radius: 12px;
   background: var(--surface-raised, #FFFDF8); color: var(--ink); box-shadow: 0 2px 6px rgba(27, 25, 21, .06), 0 18px 44px rgba(27, 25, 21, .12);
@@ -921,6 +922,15 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
 }
 .selection-menu.cw-selmenu button:active { background: var(--wash); }
 @media (hover: hover) { .selection-menu.cw-selmenu button:hover { background: var(--wash); } }
+.selection-menu.cw-selmenu button:has(.cw-selmenu-glyph) { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 12px 0 10px; }
+.selection-menu.cw-selmenu .cw-selmenu-glyph {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none;
+  font: 600 16px/1 var(--font-ui, system-ui, sans-serif); color: var(--ink);
+}
+.selection-menu.cw-selmenu .cw-selmenu-glyph b { font-weight: 800; }
+.selection-menu.cw-selmenu .cw-selmenu-glyph i { font-family: var(--font-serif, Georgia, serif); font-size: 17px; font-weight: 500; }
+.selection-menu.cw-selmenu .cw-selmenu-glyph svg { width: 17px; height: 17px; display: block; }
+.selection-menu.cw-selmenu .cw-selmenu-word { line-height: 1; }
 
 /* Import (import.js): the Files panel's own view, from the choice to the receipt. */
 #app .files-new-area .files-import { margin-left: var(--s4); }

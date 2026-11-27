@@ -1078,6 +1078,8 @@
     });
     ['footnote', 'link'].forEach(function (id) {
       register({ id: 'edit.' + id, title: id === 'link' ? 'Link' : 'Footnote', section: 'Writing',
+        // Cmd/Ctrl+K is Link while words in the writing are selected (editor.js selectionKey), Search otherwise.
+        keys: id === 'link' ? '⌘K' : undefined, hint: id === 'link' ? 'over selected words' : undefined,
         when: function () { return hasEditor() && !!Castor.editor.command && !(Castor.editor.isReadOnly && Castor.editor.isReadOnly()); },
         run: function () { Castor.editor.command(id); } });
     });
@@ -1391,6 +1393,8 @@
     function show(e) {
       var control = e.target.closest && e.target.closest('button,input,[data-command]');
       if (!control || control === active) return;
+      // The bar over selected words shows each key above its word already: no second label under it.
+      if (control.closest && control.closest('.selection-menu') && control.querySelector && control.querySelector('.shortcut-hint')) return;
       // A shortcut hint is for a keyboard or a pointer: a finger, or focus a tap moved, shows none.
       if (e.pointerType === 'touch' || e.type === 'focusin' && control.matches && !safeMatches(control, ':focus-visible')) return;
       hide();

@@ -415,6 +415,8 @@
     s.textContent = [
       '.cw-block{position:relative}',
       '.cw-editor-page ::selection{background:transparent}',
+      // A drag that starts on a link selects words, as everywhere else in the writing (onMouseDown).
+      '.cw-editor-page .cw-block a{-webkit-user-drag:none;-webkit-user-select:text;user-select:text}',
       '.cw-editor-page[data-own-selection] .cw-block{-webkit-user-select:none;user-select:none}',
       '.cw-block>*{margin:0}',
       '.cw-editor-stack{display:grid;position:relative}',
@@ -2491,11 +2493,12 @@
     }
     return rect;
   }
-  function openPicker(kind, id, start, len, independent, end) {
+  // `over` (Link over words across paragraphs): where the words are, what they say and each paragraph's part.
+  function openPicker(kind, id, start, len, independent, end, over) {
     if (!Castor.commands || !Castor.commands.picker) return;
     if (!isArticle && kind !== 'mention') return;   // a field takes @names, not blocks, links or footnotes
     closePicker();
-    var anchor = independent ? caretRect() : null;
+    var anchor = over && over.rect ? over.rect : independent ? caretRect() : null;
     var handle = Castor.commands.picker(kind, {
       anchorRect: anchor,
       query: '',
@@ -2505,10 +2508,10 @@
       addresses: !!independent   // the Link tool also takes a web address; a typed [[ stays a link to a piece
     });
     if (!handle) return;
-    var label = independent && end > start ? interactionRuns(editOf(id)).map(function (n) {
+    var label = over ? over.label : independent && end > start ? interactionRuns(editOf(id)).map(function (n) {
       return n.node.nodeValue.slice(Math.max(0, start - n.at), Math.max(0, Math.min(n.len, end - n.at)));
     }).join('') : '';
-    activePicker = { kind: kind, blockId: id, start: start, end: end == null ? start : end, label: label, source: blockOf(id).source, len: len, handle: handle, independent: !!independent };
+    activePicker = { kind: kind, blockId: id, start: start, end: end == null ? start : end, label: label, source: blockOf(id).source, len: len, handle: handle, independent: !!independent, parts: over ? over.parts : null };
     if (independent) {
       var input = document.createElement('input');
       input.className = 'cw-link-query';
@@ -2552,7 +2555,9 @@
     if (activePicker && activePicker.dismiss) document.removeEventListener('pointerdown', activePicker.dismiss, true);
     if (activePicker && activePicker.handle) activePicker.handle.close();
     activePicker = null;
-    if (restore && previous && previous.independent) {
+    if (restore && previous && previous.parts) {
+      if (previous.parts.every(function (p) { var b = blockOf(p.id); return b && b.source === p.source; })) reselect(previous.parts);
+    } else if (restore && previous && previous.independent) {
       var block = blockOf(previous.blockId);
       if (block && block.source === previous.source) {
         focusBlock(previous.blockId, previous.start);
@@ -2566,6 +2571,7 @@
     var p = activePicker, b = blockOf(p.blockId), c = caretSource();
     if (p.dismiss) document.removeEventListener('pointerdown', p.dismiss, true);
     activePicker = null;
+    if (p.parts) { linkEach(p, item); return; }
     if (!b || !c && !p.independent || p.independent && p.source != null && b.source !== p.source) {
       if (p.handle) p.handle.close();
       return;
@@ -2612,26 +2618,53 @@
     applyEdit(p.blockId, p.start, end, text, caretAt);
     if (p.handle) p.handle.close();
   }
-  // The page's one menu for words it holds: Copy first, then Comment; Share where the device has a
-  // share sheet; and with a mouse or trackpad, Bold, Italic and Link for words in the paragraph being
-  // written (on a touch screen that paragraph has iOS's own menu, and the writing bar has these).
-  function menuItems(range) {
-    var items = ['copy'];
-    if (!(Castor.comments && Castor.comments.available && !Castor.comments.available())) items.push('comment');
-    var host = focusId && editOf(focusId);
-    var writing = !opts.readOnly && !!host && document.activeElement === host && !!range &&
-      host.contains(range.startContainer) && host.contains(range.endContainer);
-    if (writing && !coarsePointer()) items.push('bold', 'italic', 'link');
-    if (coarsePointer() && global.navigator && typeof global.navigator.share === 'function') items.push('share');
-    return items;
+  // The address picked for words across paragraphs links each paragraph's words: one undo step.
+  function linkEach(p, item) {
+    if (p.handle) p.handle.close();
+    var wiki = /^\[\[([^]*?)\]\]$/.exec(item.insert || '');
+    var link = item.url ? { wiki: false, target: item.url } : wiki ? { wiki: true, target: wiki[1].split('|')[0] } : null;
+    if (!link || !p.parts.every(function (part) { var b = blockOf(part.id); return b && b.source === part.source; })) return;
+    pushUndo('pick');
+    p.parts.forEach(function (part) {
+      spansOf(part).forEach(function (span) {
+        focusBlock(part.id, span[0]);
+        setCaret(part.id, span[0], span[1]);
+        replaceVisible(part.id, span[0], span[1], { kind: 'link', link: link }, false);
+      });
+    });
+    var last = p.parts[p.parts.length - 1], lastBlock = blockOf(last.id);
+    if (lastBlock) setCaret(last.id, Math.min(lastBlock.source.length, (caretSource() || { end: last.end }).end));
+    requestOverlay('navigate');
   }
+  // The page's one menu for words it holds. With a mouse or trackpad it is the same four for any
+  // words of the article, however they were selected and over however many paragraphs: Bold, Italic,
+  // Comment, Link, each a drawn glyph and its word, its key shown on hover (the system has Copy, and
+  // Cmd/Ctrl+C). On a touch screen it is the one iOS would show, in words: Copy, Comment, and Share
+  // where the device has a share sheet (the writing bar has formatting; in the paragraph being typed in
+  // iOS's own menu is the one: systemMenuOver).
+  function menuItems(range) {
+    var comment = !(Castor.comments && Castor.comments.available && !Castor.comments.available());
+    if (coarsePointer()) {
+      var touch = ['copy'];
+      if (comment) touch.push('comment');
+      if (global.navigator && typeof global.navigator.share === 'function') touch.push('share');
+      return touch;
+    }
+    var items = opts.readOnly ? [] : ['bold', 'italic'];
+    if (comment) items.push('comment');
+    if (!opts.readOnly) items.push('link');
+    return items.length ? items : ['copy'];
+  }
+  // Each word's glyph is drawn like the writing bar's: B and I as letters, the comment and the link
+  // as the bar's own strokes.
   function menuWord(id) {
+    var stroke = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">';
     return {
       copy: { label: 'Copy', keys: ['MOD C', 'MOD+C'] },
-      comment: { label: 'Comment', command: 'edit.comment' },
-      bold: { label: 'Bold', keys: ['MOD B', 'MOD+B'] },
-      italic: { label: 'Italic', keys: ['MOD I', 'MOD+I'] },
-      link: { label: 'Link' },
+      comment: { label: 'Comment', command: 'edit.comment', glyph: stroke + '<path d="M4 5.5h16v10.5H10l-4.5 3.5V16H4z"/></svg>' },
+      bold: { label: 'Bold', keys: ['MOD B', 'MOD+B'], glyph: '<b>B</b>' },
+      italic: { label: 'Italic', keys: ['MOD I', 'MOD+I'], glyph: '<i>I</i>' },
+      link: { label: 'Link', keys: ['MOD K', 'MOD+K'], glyph: stroke + '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>' },
       share: { label: 'Share' }
     }[id];
   }
@@ -2657,7 +2690,7 @@
       if (words) global.navigator.share({ text: words }).catch(function () { /* the share sheet was closed */ });
       return;
     }
-    if (id === 'bold' || id === 'italic' || id === 'link') { command(id); return; }
+    if (id === 'bold' || id === 'italic' || id === 'link') { selectionCommand(id); return; }
     if (!a) return;
     if (opts.onComment) opts.onComment(a);
     else if (Castor.comments && Castor.comments.add) Castor.comments.add(a, '');
@@ -2677,10 +2710,17 @@
     selMenu.setAttribute('aria-label', 'Selected words');
     selMenu.setAttribute('data-open', '0');
     selMenu.hidden = true;
+    var glyphs = !coarsePointer();
     menuItems(range).forEach(function (id) {
       var item = menuWord(id), btn = document.createElement('button');
       btn.type = 'button';
-      btn.textContent = item.label;
+      if (glyphs && item.glyph) {
+        var glyph = document.createElement('span'), word = document.createElement('span');
+        glyph.className = 'cw-selmenu-glyph'; glyph.setAttribute('aria-hidden', 'true'); glyph.innerHTML = item.glyph;
+        word.className = 'cw-selmenu-word'; word.textContent = item.label;
+        btn.appendChild(glyph); btn.appendChild(word);
+        btn.setAttribute('aria-label', item.label);
+      } else btn.textContent = item.label;
       btn.setAttribute('data-command', id);
       if (item.command && Castor.commands && Castor.commands.hint) Castor.commands.hint(btn, item.command);
       else if (item.keys && Castor.keys && Castor.keys.hint) Castor.keys.hint(btn, item.keys[0], item.keys[1]);
@@ -2773,19 +2813,27 @@
     var selectedHost = host.closest && host.closest('.cw-edit,.cw-mirror');
     var textNode = selectedHost && el.contains(selectedHost) ? selectedHost : el;
     if (!textNode.contains(r.startContainer) || !textNode.contains(r.endContainer)) return null;
-    var text = textNode.textContent, at = blockTextOffset(textNode, r.startContainer, r.startOffset);
-    // A long press on a line's first word, in its own element (a mark, bold, a link): WebKit starts
-    // the range at the end of the line above, before the space the wrap hid; the words have none.
-    var skip = at == null ? 0 : /^\s*/.exec(text.slice(at))[0].length;
-    if (skip && text.slice(at, at + quote.length) !== quote && text.slice(at + skip, at + skip + quote.length) === quote) at += skip;
-    if (at == null || text.slice(at, at + quote.length) !== quote) return null;
-    // His notes are drawn for him (withNotes) but are no words of the article: a passage is quoted
-    // as a reader reads it, so a reviewer's page finds it and no note is quoted to anyone.
-    var plain = readerText(textNode), words = plain.text.slice(plain.at[at], plain.at[at + quote.length]);
+    // The words are read from the range's two ends, never by finding the selected string in the
+    // paragraph: in the paragraph being typed in its text is the Markdown, and words that cross a bold
+    // phrase, a link or list items are not a run of it ("and a [link](...) so"). The writer's notes are
+    // drawn for the writer (withNotes) but are no words of the article, and the hidden marks are none
+    // either: a passage is quoted as a reader reads it, so a reviewer's page finds it and no note is
+    // quoted to anyone.
+    // The range's own text is every character between its ends, hidden or not: its length is the span.
+    var at = blockTextOffset(textNode, r.startContainer, r.startOffset), to = at == null ? null : at + r.toString().length;
+    if (at == null || to <= at) return null;
+    var plain = readerText(textNode), from = plain.at[Math.min(at, plain.at.length - 1)], until = plain.at[Math.min(to, plain.at.length - 1)];
+    var words = plain.text.slice(from, until);
     if (!words.trim()) return null;
-    var projected = plain.text !== text;
-    at = plain.at[at] + (projected ? /^\s*/.exec(words)[0].length : 0);
-    quote = projected ? words.trim() : words; text = plain.text;
+    // Where nothing is hidden the words are the ones shown selected, spaces and all. A long press on a
+    // line's first word in its own element (a mark, bold, a link) starts the range at the end of the
+    // line above, before the space the wrap hid, which the shown words leave out; a triple click ends
+    // after the break. Where marks or notes are hidden, the words are trimmed.
+    var shown = plain.text === textNode.textContent ? quote : '', inside = shown ? words.indexOf(shown) : -1;
+    var lead = inside >= 0 ? inside : /^\s*/.exec(words)[0].length;
+    var trail = inside >= 0 ? words.length - inside - shown.length : /\s*$/.exec(words)[0].length;
+    at = from + lead; quote = words.slice(lead, words.length - trail);
+    var text = plain.text;
     var md = MD();
     if (b && text === b.text && md.makeAnchor) {
       try { return withBlock(md.makeAnchor(doc, id, at, at + quote.length, version), id); } catch (e) { /* fall through */ }
@@ -2854,20 +2902,53 @@
     return null;
   }
 
+  // Every word of a paragraph being typed in, selected: from its first word to its last (no heading
+  // marks before them).
+  function selectWholeBlock(id) {
+    var host = editOf(id), runs = host && interactionRuns(host).filter(function (n) { return n.len > 0; });
+    if (!runs || !runs.length) return;
+    var last = runs[runs.length - 1];
+    setCaret(id, runs[0].at, last.at + last.len);
+    requestOverlay('snap');
+  }
   function onMouseDown(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
     if (subtitle && subtitle.classList && subtitle.classList.contains('cw-subtitle')) return;
     lastUndoKind = '';
     var el = e.target.closest ? e.target.closest('.cw-block') : null;
+    var link = el && el.contains && e.target.closest('a[href]');
+    if (link && el.contains(link) && !link.hasAttribute('draggable')) link.setAttribute('draggable', 'false');
     pointerSelecting = false;
     pointerStartedInPage = !!el;
     pointerAnchor = null; pointerCrossed = false;
     overlayMode = 'navigate';
     if (!el) { if (focusId) blurCurrent(); return; }
     var id = el.getAttribute('data-block-id');
-    if (id === focusId) return;               // native caret handling inside the raw host
+    if (id === focusId) {
+      // A triple click selects the paragraph. In the paragraph being typed in the browser stops at a
+      // note's number (its own island in the editing host), so the page selects the rest.
+      if (e.detail === 3 && e.button === 0 && !e.shiftKey && /^(?:p|h[1-6])$/.test((blockOf(id) || {}).type || '')) {
+        global.setTimeout(function () { if (focusId === id) selectWholeBlock(id); }, 0);
+      }
+      return;                                 // native caret handling inside the raw host
+    }
     if (focusId) blurCurrent();               // so a drag can select across blocks
+    // A drag that starts on a link selects words, as anywhere else in the writing. WebKit would drag the
+    // link itself (and Firefox, without draggable="false"): the page selects instead (onPointerMove).
+    // A click on it is still a click (onClick puts the caret there).
+    if (typeof linkDrag === 'undefined') return;
+    linkDrag = null;
+    if (link && el.contains(link) && e.button === 0 && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !coarsePointer()) {
+      var from = pointToCaret(e.clientX, e.clientY);
+      if (from && el.contains(from.startContainer)) {
+        if (e.preventDefault) e.preventDefault();
+        linkDrag = { node: from.startContainer, offset: from.startOffset };
+        var start = global.getSelection();
+        if (start) { start.removeAllRanges(); }
+      }
+    }
   }
+  var linkDrag = null;
   // A hard break is drawn as a <br> with no character of its own, so in the reading view the end of
   // one line and the start of the next read as the same offset, and with the marks hidden the
   // browser puts or deletes around a break as if its source were not there. These find
@@ -2934,14 +3015,27 @@
     // A block drawn with its marks holds its whole source: the finger's place is the offset.
     var marked = el.querySelector('.cw-mirror.cw-read');
     if (marked && marked.contains(r.startContainer)) return domOffset(marked, r.startContainer, r.startOffset);
-    // Count reading characters at the finger BEFORE installing an edit surface.
-    var reading = document.createRange();
-    reading.selectNodeContents(el); reading.setEnd(r.startContainer, r.startOffset);
-    var count = reading.toString().length;
-    var b = blockOf(el.getAttribute('data-block-id')), temp = document.createElement('div');
+    var b = blockOf(el.getAttribute('data-block-id'));
     if (!b) return null;
+    return readingSource(el, b, r.startContainer, r.startOffset);
+  }
+  // The source offset of a point in a paragraph drawn for reading: its reading characters are counted
+  // up to the point BEFORE an edit surface is installed, then found in the block's source as typed in.
+  // `forward` is for a selection's start: a point at the end of a line (a list item, a table row) is
+  // the start of the next one's words, so the line's break and the next line's marks are not selected.
+  function readingSource(el, b, node, offset, forward) {
+    var reading = document.createRange();
+    try { reading.selectNodeContents(el); reading.setEnd(node, offset); } catch (e) { return null; }
+    // A click at the very start of a line's words (a table row's first cell, a list item) is there,
+    // not at the end of the line above, which has the same count of reading characters before it.
+    if (forward === undefined) forward = node.nodeType === 3 && offset === 0;
+    return sourceAtCount(b, reading.toString().length, !!lineBreakBefore(el, node, offset), forward);
+  }
+  // The source offset of the reading character `count` of a block, as drawn for reading.
+  function sourceAtCount(b, count, lineStart, forward) {
+    var temp = document.createElement('div');
     temp.innerHTML = liveHtml(b);
-    var nodes = sourceNodes(temp), seen = 0, lineStart = !!lineBreakBefore(el, r.startContainer, r.startOffset);
+    var nodes = sourceNodes(temp), seen = 0;
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i], atom = n.node.parentElement && n.node.parentElement.closest('.cw-atom');
       if (atom) {
@@ -2953,11 +3047,363 @@
       if (seen + n.len >= count) {
         // A point right after a <br> starts the next line, after the break's source, not before it.
         var br = lineStart && seen + n.len === count ? breakAfter(temp, n.node) : null, next = br && lineStartAfterBreak(temp, br);
+        if (next == null && forward && seen + n.len === count) {
+          for (var j = i + 1; j < nodes.length; j++) {
+            var after = nodes[j];
+            if (hiddenSource(after.node) || !after.len || !/\S/.test(after.node.data || '')) continue;
+            if (after.at > n.at + n.len && b.source.slice(n.at + n.len, after.at).indexOf('\n') >= 0) next = after.at;
+            break;
+          }
+        }
         return next != null ? next : n.at + count - seen;
       }
       seen += n.len;
     }
     return b.source.length;
+  }
+
+  // --- selected words, wherever they are drawn ---------------------------------
+  // A selection can lie in the paragraph being typed in (its own source offsets), in paragraphs drawn for
+  // reading (a mouse drag that started in one, a long press, a script) or across several of them. Every
+  // action on selected words (Delete, a typed letter, Cut, Paste, Bold, Italic, Link) reads it as one
+  // source span per paragraph, so none of them depends on how the words were selected.
+  function pointSource(el, b, node, offset, forward) {
+    var host = el.querySelector('.cw-edit');
+    if (host && host.contains(node)) return domOffset(host, node, offset);
+    var mirror = el.querySelector('.cw-mirror');
+    if (mirror && mirror.contains(node)) return domOffset(mirror.querySelector('.cw-live') || mirror, node, offset);
+    if (host) {
+      // A point in the block's own frame, beside its editing surface: before it or after it.
+      var probe = document.createRange(); probe.selectNodeContents(host);
+      try { return probe.comparePoint(node, offset) < 0 ? 0 : b.source.length; } catch (e) { return null; }
+    }
+    return readingSource(el, b, node, offset, forward);
+  }
+  // The reading characters before a point (the words a reader sees, no hidden marks).
+  // In the paragraph being typed in, its words as drawn: no hidden marks or writer's notes, and a note's
+  // number (an atom, its source hidden, its label drawn) counted as its label, as the reading view has it.
+  function hostReadingCount(host, node, offset) {
+    var r = document.createRange();
+    try { r.setStart(host, 0); r.setEnd(node, offset); } catch (e) { return null; }
+    var words = r.cloneContents();
+    Array.prototype.forEach.call(words.querySelectorAll('.cw-atom'), function (a) { a.textContent = a.getAttribute('data-label') || ''; });
+    Array.prototype.forEach.call(words.querySelectorAll('.cw-mk,.writer-note,[data-castor-ui]'), function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
+    return words.textContent.replace(/\u200b/g, '').length;
+  }
+  function readingCount(el, node, offset) {
+    var host = el.querySelector('.cw-edit');
+    if (host) {
+      if (host.contains(node)) return hostReadingCount(host, node, offset);
+      var probe = document.createRange(); probe.selectNodeContents(host);
+      try { return probe.comparePoint(node, offset) < 0 ? 0 : hostReadingCount(host, host, host.childNodes.length); } catch (e) { return null; }
+    }
+    return blockTextOffset(el, node, offset);
+  }
+  function readingLength(el) {
+    var host = el.querySelector('.cw-edit');
+    return host ? hostReadingCount(host, host, host.childNodes.length) : el.textContent.length;
+  }
+  function selectionParts(range) {
+    var out = [];
+    if (!range || range.collapsed || !page) return out;
+    var els = page.querySelectorAll('.cw-block');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i], id = el.getAttribute('data-block-id'), b = blockOf(id), hit = false;
+      if (!b || !visible(b) || b.type === 'frontmatter') continue;
+      try { hit = range.intersectsNode(el); } catch (e) { hit = false; }
+      if (!hit) continue;
+      var hasStart = el.contains(range.startContainer), hasEnd = el.contains(range.endContainer);
+      var start = hasStart ? pointSource(el, b, range.startContainer, range.startOffset, true) : 0;
+      var end = hasEnd ? pointSource(el, b, range.endContainer, range.endOffset, false) : b.source.length;
+      var readStart = hasStart ? readingCount(el, range.startContainer, range.startOffset) : 0;
+      var readEnd = hasEnd ? readingCount(el, range.endContainer, range.endOffset) : readingLength(el);
+      if (start == null || end == null || readStart == null || readEnd == null) return [];
+      // An end that lies on a line's break (the end of a list item or a table row, where the next
+      // line's words start at the same place on the page) is moved onto the selected words: a start to
+      // the next line's first word, an end to the last word before the break. Otherwise the break and
+      // the next line's marks (a list item's "- ", a table's rows of dashes) would be taken with them.
+      if (hasStart && readEnd > readStart) {
+        var ahead = sourceAtCount(b, readStart, false, true);
+        if (ahead != null && ahead > start && ahead <= end && b.source.slice(start, ahead).indexOf('\n') >= 0) start = ahead;
+      }
+      if (hasEnd && readEnd > readStart) {
+        var back = sourceAtCount(b, readEnd, false, false);
+        if (back != null && back < end && back >= start && b.source.slice(back, end).indexOf('\n') >= 0) end = back;
+      }
+      out.push({ id: id, start: start, end: Math.max(start, end), readStart: readStart, readEnd: Math.max(readStart, readEnd), words: readEnd > readStart });
+    }
+    // A selection that ends at the very start of the next paragraph (a triple click, a drag to a line's
+    // start) selects nothing there; one that starts at a paragraph's very end selects its break, so
+    // deleting it joins the two, as in any editor.
+    while (out.length > 1 && !out[out.length - 1].words) out.pop();
+    return out;
+  }
+  // The live selection when it is the article's words and not wholly inside the paragraph being typed
+  // in (that one has its own native editing); null otherwise.
+  function pageSelection() {
+    if (!page || !isArticle) return null;
+    var snapshot = frameReads.selection(), sel = snapshot.sel, range = snapshot.range;
+    if (!range || !sel || sel.isCollapsed || !page.contains(range.startContainer) || !page.contains(range.endContainer)) return null;
+    if (foreign(range.startContainer) || foreign(range.endContainer)) return null;
+    var host = focusId && editOf(focusId);
+    if (host && host.contains(range.startContainer) && host.contains(range.endContainer)) return null;
+    var parts = selectionParts(range);
+    return parts.length && parts.some(function (p) { return p.words || parts.length > 1; }) ? { range: range, parts: parts } : null;
+  }
+  // Words selected in one paragraph drawn for reading become the paragraph being typed in, with the
+  // same words selected, so every key and command works on them natively. Not on a touch screen: there
+  // the selection is a long press's, for reading, and focusing would raise the keyboard.
+  function adoptSelection(at) {
+    if (opts.readOnly || coarsePointer()) return false;
+    at = at || pageSelection();
+    if (!at || at.parts.length !== 1 || !at.parts[0].words) return false;
+    var part = at.parts[0], sel = global.getSelection(), backward = false;
+    try { backward = !!(sel.anchorNode && sel.focusNode && sel.anchorNode.compareDocumentPosition(sel.focusNode) & 2 ||
+      sel.anchorNode === sel.focusNode && sel.focusOffset < sel.anchorOffset); } catch (e) { backward = false; }
+    focusBlock(part.id, part.start);
+    setCaret(part.id, part.start, part.end);
+    if (backward) {
+      // The anchor stays where the drag began, so Shift and an arrow move the end the writer moved.
+      var host = editOf(part.id), a = host && sourcePoint(host, part.end, false), f = host && sourcePoint(host, part.start, true);
+      if (a && f && sel.setBaseAndExtent) { if (typeof selectionTurn !== 'undefined') selectionTurn++; sel.setBaseAndExtent(a.node, a.offset, f.node, f.offset); frameReads.invalidateSelection(); }
+    }
+    overlayMode = 'snap';
+    requestOverlay('snap');
+    return true;
+  }
+  // Puts `text` in place of selected words across paragraphs: the first paragraph keeps its start, the
+  // last its end, the ones between go, and what is left of the last joins the first (its own heading,
+  // list or quote mark goes, as Backspace at its start would take it). One undo step. A table, a code
+  // block or another block that cannot be joined keeps its place; only its selected words go.
+  var JOINABLE = /^(?:p|h[1-6]|list|quote|callout)$/;
+  function replaceParts(parts, text, history) {
+    if (opts.readOnly || !parts || !parts.length) return false;
+    var kind = history || (text ? 'replace' : 'delete');
+    if (parts.length === 1) {
+      var one = parts[0];
+      if (one.end <= one.start && !text) return false;
+      focusBlock(one.id, one.start);
+      setCaret(one.id, one.start, one.end);
+      if (one.end > one.start) replaceVisible(one.id, one.start, one.end, text, kind);
+      else { pushUndo(kind); replaceVisible(one.id, one.start, one.start, text, false); }
+      requestOverlay('snap');
+      return true;
+    }
+    var first = parts[0], last = parts[parts.length - 1];
+    var firstBlock = blockOf(first.id), lastBlock = blockOf(last.id);
+    if (!firstBlock || !lastBlock) return false;
+    pushUndo(kind);
+    var join = JOINABLE.test(firstBlock.type) && JOINABLE.test(lastBlock.type);
+    // What joins the first paragraph is the rest of the last one's line, read before anything changes,
+    // spaces and all. A list's or a quote's other lines stay where they are, in their own block.
+    var rest = '', keepLines = false;
+    if (join) {
+      rest = lastBlock.source.slice(last.end);
+      var lineEnd = /^(?:list|quote|callout)$/.test(lastBlock.type) ? rest.indexOf('\n') : -1;
+      if (lineEnd >= 0 && rest.slice(lineEnd + 1).trim()) { rest = rest.slice(0, lineEnd); keepLines = true; }
+      if (last.end === 0) rest = rest.slice(markerLen(rest.split('\n')[0]));
+    }
+    // The last paragraph's selected words (and, joined, the line that joins), then whole paragraphs
+    // between, then the first paragraph's.
+    if (last.end > 0 && (!join || keepLines)) {
+      focusBlock(last.id, last.end);
+      replaceVisible(last.id, join ? 0 : last.start, join ? last.end + rest.length + 1 : last.end, '', false);
+    }
+    for (var k = parts.length - 2; k > 0; k--) {
+      var middle = blockOf(parts[k].id);
+      if (!middle) continue;
+      if (focusId === middle.id) focusId = null;
+      blocks.splice(idx(middle.id), 1); removeBlockEl(middle.id); delete rendered[middle.id];
+    }
+    focusBlock(first.id, first.start);
+    var placed = replaceVisible(first.id, first.start, firstBlock.source.length, text, false);
+    var caret = placed && placed.caret != null ? placed.caret : first.start + text.length;
+    if (join && blockOf(last.id)) {
+      if (!keepLines) {
+        if (focusId === last.id) focusId = null;
+        blocks.splice(idx(last.id), 1); removeBlockEl(last.id); delete rendered[last.id];
+      }
+      firstBlock.source = firstBlock.source + rest;
+      firstBlock.type = classify(firstBlock.source);
+      focusId = null;
+      focusBlock(first.id, caret);
+    } else if (blockOf(last.id) && !blockOf(last.id).source.trim()) {
+      blocks.splice(idx(last.id), 1); removeBlockEl(last.id); delete rendered[last.id];
+      focusBlock(first.id, caret);
+    }
+    setCaret(first.id, caret);
+    changed();
+    requestOverlay('snap');
+    return true;
+  }
+  // Whether every selected word of a part carries a style already, read from the page as drawn.
+  var STYLE_TAGS = { bold: 'STRONG,B', italic: 'EM,I', highlight: 'MARK', strike: 'DEL,S' };
+  function partStyled(part, style) {
+    var el = elOf(part.id), root = el && (el.querySelector('.cw-edit') || el), tags = STYLE_TAGS[style];
+    if (!root || !tags) return false;
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), node, seen = 0, all = true, any = false;
+    var atomsSeen = [];
+    while ((node = walker.nextNode())) {
+      var parent = node.parentElement;
+      if (parent && parent.closest('.cw-mk,.writer-note,[data-castor-ui]')) continue;
+      // A note's number counts as its label (readingCount); it carries no style of its own.
+      var atom = root !== el && parent && parent.closest('.cw-atom');
+      if (atom) { if (atomsSeen.indexOf(atom) < 0) { atomsSeen.push(atom); seen += (atom.getAttribute('data-label') || '').length; } continue; }
+      var from = Math.max(part.readStart, seen), to = Math.min(part.readEnd, seen + node.data.length);
+      if (to > from && /\S/.test(node.data.slice(from - seen, to - seen))) {
+        any = true;
+        var styled = false;
+        for (var p = parent; p && p !== root; p = p.parentElement) if (tags.split(',').indexOf(p.tagName) >= 0) { styled = true; break; }
+        if (!styled) all = false;
+      }
+      seen += node.data.length;
+    }
+    return any && all;
+  }
+  // Bold, Italic (and the other wraps) over words across paragraphs: each paragraph's words, one undo
+  // step, on when any of them lacks the style and off only when all of them carry it. The words stay
+  // selected, across the same paragraphs.
+  // A table's selected words cell by cell, last first (each edit then leaves the earlier offsets as
+  // they were): a style or a link applies to one cell at a time, never across a cell's edge.
+  function spansOf(part) {
+    var b = blockOf(part.id);
+    if (!b || b.type !== 'table') return [[part.start, part.end]];
+    var out = [], source = b.source, lineStart = 0;
+    source.split('\n').forEach(function (line, row) {
+      var at = lineStart;
+      lineStart += line.length + 1;
+      if (row === 1 && /^[\s|:-]+$/.test(line)) return;
+      var edges = [at - 1];
+      for (var i = at; i < at + line.length; i++) {
+        if (source.charAt(i) === '\\') { i++; continue; }
+        if (source.charAt(i) === '|') edges.push(i);
+      }
+      edges.push(at + line.length);
+      for (var k = 1; k < edges.length; k++) {
+        var left = edges[k - 1] + 1, right = edges[k];
+        while (left < right && /[ \t]/.test(source.charAt(left))) left++;
+        while (right > left && /[ \t]/.test(source.charAt(right - 1))) right--;
+        var from = Math.max(left, part.start), to = Math.min(right, part.end);
+        if (to > from) out.push([from, to]);
+      }
+    });
+    return out.reverse();
+  }
+  function styleParts(parts, style) {
+    var worded = parts.filter(function (p) { return p.words && p.end > p.start; });
+    if (opts.readOnly || !worded.length) return false;
+    var off = worded.every(function (p) { return partStyled(p, style); });
+    pushUndo('command:' + style);
+    worded.forEach(function (p) {
+      if (!off && partStyled(p, style)) return;
+      spansOf(p).forEach(function (span) {
+        focusBlock(p.id, span[0]);
+        setCaret(p.id, span[0], span[1]);
+        replaceVisible(p.id, span[0], span[1], { kind: 'style', style: style }, false);
+      });
+    });
+    reselect(worded);
+    return true;
+  }
+  // Selects the same reading characters again across paragraphs drawn for reading.
+  function reselect(parts) {
+    if (focusId) blurCurrent();
+    var first = elOf(parts[0].id), last = elOf(parts[parts.length - 1].id);
+    if (!first || !last) return;
+    var a = positionAt(first, parts[0].readStart), z = positionAt(last, parts[parts.length - 1].readEnd);
+    var sel = global.getSelection(), r = document.createRange();
+    try { r.setStart(a.node, a.offset); r.setEnd(z.node, z.offset); } catch (e) { return; }
+    if (typeof selectionTurn !== 'undefined') selectionTurn++;
+    sel.removeAllRanges(); sel.addRange(r);
+    frameReads.invalidateSelection();
+    requestOverlay('snap');
+  }
+  // A command (Bold, Italic, Link and the other wraps) on the selected words, wherever they are.
+  function selectionCommand(id) {
+    var at = pageSelection();
+    if (!at) return command(id);
+    if (adoptSelection(at) || at.parts.length === 1 && at.parts[0].words && (focusBlock(at.parts[0].id, at.parts[0].start), setCaret(at.parts[0].id, at.parts[0].start, at.parts[0].end), true)) return command(id);
+    if (WRAPS[id]) return styleParts(at.parts, id) ? commandResult(id) : null;
+    if (id === 'link') return linkParts(at.parts) ? commandResult(id) : null;
+    return null;
+  }
+  // Link over words across paragraphs: the link picker opens over them and the address chosen links
+  // each paragraph's words.
+  function linkParts(parts) {
+    var worded = parts.filter(function (p) { return p.words && p.end > p.start; });
+    if (opts.readOnly || !worded.length || !Castor.commands || !Castor.commands.picker) return false;
+    var range = frameReads.selection().range, rect = range && range.getBoundingClientRect();
+    var label = String(global.getSelection ? global.getSelection() : '').replace(/\s+/g, ' ').trim();
+    var first = worded[0];
+    openPicker('wiki', first.id, first.start, 0, true, first.end, { rect: rect, label: label, parts: worded.map(function (p) {
+      return { id: p.id, start: p.start, end: p.end, readStart: p.readStart, readEnd: p.readEnd, source: blockOf(p.id).source };
+    }) });
+    return !!activePicker;
+  }
+  // Keys over selected words that are not all in the paragraph being typed in: Delete and Backspace take
+  // them, a letter (or Return) takes their place, and Bold, Italic and Link apply to them. Cmd/Ctrl+K
+  // is Link while words in the writing are selected, and Search otherwise (commands.js).
+  function selectionKey(e) {
+    if (!page || !isArticle || opts.readOnly || composing || e.isComposing || e.defaultPrevented) return false;
+    if (activePicker || e.target && e.target.closest && e.target.closest('input,textarea,select,.castor-composer,.castor-comment-editor,.cw-picker,.palette')) return false;
+    // Only keys meant for the writing: on the page itself or in the paragraph being typed in, never a
+    // control that has the focus (Space on a button presses it).
+    var target = e.target;
+    if (target && target !== document.body && target !== document.documentElement && !(page.contains(target) && target.isContentEditable)) return false;
+    var mod = modKey(e);
+    if (mod && !e.altKey && !e.shiftKey && keyChar(e) === 'k') {
+      var sel = frameReads.selection();
+      if (!sel.range || sel.sel.isCollapsed || !page.contains(sel.range.startContainer)) return false;
+      e.preventDefault(); e.stopPropagation();
+      selectionCommand('link');
+      return true;
+    }
+    var at = pageSelection();
+    if (!at) return false;
+    if (e.shiftKey && !mod && /^Arrow(?:Left|Right|Up|Down)$/.test(e.key)) {
+      // The page's selection grows and shrinks by the keys too, wherever the focus is.
+      if (document.activeElement && page.contains(document.activeElement) && document.activeElement.isContentEditable) return false;
+      if (extendBlockSelection(e)) { e.stopPropagation(); return true; }
+      return false;
+    }
+    if (mod && !e.altKey) {
+      var chord = FORMAT_KEYS[(e.shiftKey ? '⇧' : '') + keyChar(e)];
+      if (!chord) return false;
+      e.preventDefault(); e.stopPropagation();
+      selectionCommand(chord);
+      return true;
+    }
+    if (e.metaKey || e.ctrlKey) return false;
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault(); e.stopPropagation();
+      replaceParts(at.parts, '', 'delete');
+      return true;
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault(); e.stopPropagation();
+      if (replaceParts(at.parts, '', 'delete') && focusId) splitBlock(focusId);
+      return true;
+    }
+    if (e.key && e.key.length === 1 || e.key && /^.$/u.test(e.key)) {
+      e.preventDefault(); e.stopPropagation();
+      replaceParts(at.parts, e.key, 'type');
+      return true;
+    }
+    return false;
+  }
+  function onSelectionCut(e) {
+    var at = pageSelection();
+    if (!at || opts.readOnly || !e.clipboardData) return;
+    onCopy(e);
+    if (!e.defaultPrevented) return;
+    replaceParts(at.parts, '', 'cut');
+  }
+  function onSelectionPaste(e) {
+    var at = pageSelection();
+    if (!at || opts.readOnly) return;
+    if (e.target && e.target.closest && e.target.closest('input,textarea,select,.castor-composer,.cw-picker')) return;
+    e.preventDefault(); e.stopPropagation();
+    if (replaceParts(at.parts, '', 'paste') && focusId) onPaste(e);
   }
   function passageTap(e, touch) {
     if (e.target.closest && e.target.closest('.cw-subtitle')) return;
@@ -3238,6 +3684,18 @@
   }
 
   function onPointerMove(e) {
+    if (typeof linkDrag !== 'undefined' && linkDrag && e.buttons & 1 && page) {
+      var to = pointToCaret(e.clientX, e.clientY), drag = global.getSelection();
+      if (to && page.contains(to.startContainer) && !foreign(to.startContainer) && drag && drag.setBaseAndExtent) {
+        if (e.preventDefault) e.preventDefault();
+        pointerSelecting = true;
+        if (typeof selectionTurn !== 'undefined') selectionTurn++;
+        try { drag.setBaseAndExtent(linkDrag.node, linkDrag.offset, to.startContainer, to.startOffset); } catch (err) { /* a node left the page */ }
+        frameReads.invalidateSelection();
+        requestOverlay('navigate');
+      }
+      return;
+    }
     if (e.buttons && page && (pointerStartedInPage || page.contains(e.target))) {
       pointerSelecting = true;
       var sel = global.getSelection && global.getSelection(), host = focusId && editOf(focusId);
@@ -3253,16 +3711,38 @@
           else { sel.collapse(pointerAnchor.node, pointerAnchor.offset); sel.extend(p.node, p.offset); }
           pointerCrossed = true;
           frameReads.invalidateSelection();
+          if ((sel.focusNode !== p.node || sel.focusOffset !== p.offset) && typeof readingCount === 'function') {
+            // WebKit keeps a selection inside the editing host it began in. The paragraph goes back to
+            // reading, its words stay selected from the same place, and the page drives the drag on
+            // (as for a drag that starts on a link).
+            var anchorWrap = pointerAnchor.node.nodeType === 3 ? pointerAnchor.node.parentNode : pointerAnchor.node;
+            anchorWrap = anchorWrap && anchorWrap.closest && anchorWrap.closest('.cw-block');
+            var count = anchorWrap ? readingCount(anchorWrap, pointerAnchor.node, pointerAnchor.offset) : null;
+            if (count != null && anchorWrap.getAttribute('data-block-id') === focusId) {
+              var was = focusId;
+              blurCurrent();
+              var reading = elOf(was), back = reading && positionAt(reading, count), to = pointToCaret(e.clientX, e.clientY);
+              if (back && to && page.contains(to.startContainer)) {
+                linkDrag = { node: back.node, offset: back.offset };
+                try { sel.setBaseAndExtent(back.node, back.offset, to.startContainer, to.startOffset); } catch (err) { /* a node left the page */ }
+                frameReads.invalidateSelection();
+              }
+            }
+          }
         }
       }
       requestOverlay('navigate');
     }
   }
   function onPointerUp() {
+    var started = pointerStartedInPage;
+    if (typeof linkDrag !== 'undefined') linkDrag = null;
     pointerSelecting = false;
     pointerStartedInPage = false;
     pointerAnchor = null; pointerCrossed = false;
     requestOverlay('navigate');
+    // Words a mouse selected in a paragraph not yet being typed in become that paragraph's selection.
+    if (started && typeof adoptSelection === 'function' && isArticle) global.setTimeout(function () { if (!pointerStartedInPage) adoptSelection(); }, 0);
   }
   function onCopy(e) {
     var subtitle = e.target && e.target.closest && e.target.closest('.cw-subtitle');
@@ -3489,8 +3969,8 @@
     }
     if (asSource || b.type === 'code' || b.type === 'frontmatter' || b.type === 'table' || /^ {0,3}</.test(source) && MD().parse(source).blocks[0]?.meta.htmlBlock) {
       if (action.kind !== 'text' && action.kind !== 'split') {
-        if (b.type === 'table' && action.kind === 'style' && end > start) {
-          // Project just one cell through the ordinary inline transaction.
+        if (b.type === 'table' && (action.kind === 'style' || action.kind === 'link') && end > start) {
+          // Project just one cell through the ordinary inline transaction (a style or a link).
           // Delimiters, clipped fields and cross-cell selections stay raw.
           var lineStart = source.lastIndexOf('\n', start - 1) + 1, lineEnd = source.indexOf('\n', start);
           if (lineEnd < 0) lineEnd = source.length;
@@ -5118,8 +5598,16 @@
     var t = e.inputType;
     if (/^(insert|delete|format)/.test(t || '') && crossHostRange(el)) {
       // A highlight may span reading blocks, but native input may mutate only
-      // its one raw Markdown host. Never reinterpret a partial range as a caret.
+      // its one raw Markdown host. Never reinterpret a partial range as a caret:
+      // words selected across paragraphs are taken or replaced as a whole (a
+      // software keyboard's Delete or letter; hardware keys go to selectionKey).
       if (e.cancelable !== false) e.preventDefault();
+      var across = !composing && t !== 'insertCompositionText' && e.cancelable !== false && pageSelection();
+      if (across && /^delete/.test(t)) { replaceParts(across.parts, '', 'delete'); return; }
+      if (across && /^insert(?:Text|ReplacementText)$/.test(t) && (e.data || e.dataTransfer)) {
+        replaceParts(across.parts, e.data || e.dataTransfer.getData('text/plain'), 'type'); return;
+      }
+      if (across && t === 'insertParagraph') { if (replaceParts(across.parts, '', 'delete') && focusId) splitBlock(focusId); return; }
       if (composing || t === 'insertCompositionText' || e.cancelable === false) retireNativeHost(el);
       return;
     }
@@ -5324,7 +5812,11 @@
     var off = host === wrap ? blockTextOffset(host, sel.focusNode, sel.focusOffset) : domOffset(host, sel.focusNode, sel.focusOffset);
     if (off == null) return false;
     var backwards = e.key === 'ArrowLeft' || e.key === 'ArrowUp';
-    var boundary = backwards ? off === 0 : off === host.textContent.length;
+    // In the paragraph being typed in its edge is its last word, not its source's end: a paragraph that
+    // ends in a link or a bold phrase ends in hidden marks after it.
+    var runs = host !== wrap && typeof interactionRuns === 'function' ? interactionRuns(host).filter(function (n) { return n.len > 0; }) : null;
+    var boundary = runs ? (backwards ? !runs.some(function (n) { return n.at < off; }) : !runs.some(function (n) { return n.at + n.len > off; }))
+      : backwards ? off === 0 : off === host.textContent.length;
     var i = idx(id), target = boundary ? (backwards ? firstVisibleBefore(i) : firstVisibleAfter(i)) : -1;
     var p;
     if (target < 0) {
@@ -5348,9 +5840,27 @@
     if (!sel.setBaseAndExtent && !sel.extend) return false;
     e.preventDefault();
     if (typeof selectionTurn !== 'undefined') selectionTurn++;
-    if (sel.setBaseAndExtent) sel.setBaseAndExtent(sel.anchorNode, sel.anchorOffset, p.node, p.offset);
-    else { var anchorNode = sel.anchorNode, anchorOffset = sel.anchorOffset; sel.collapse(anchorNode, anchorOffset); sel.extend(p.node, p.offset); }
+    var anchorNode = sel.anchorNode, anchorOffset = sel.anchorOffset;
+    if (sel.setBaseAndExtent) sel.setBaseAndExtent(anchorNode, anchorOffset, p.node, p.offset);
+    else { sel.collapse(anchorNode, anchorOffset); sel.extend(p.node, p.offset); }
     frameReads.invalidateSelection();
+    if ((sel.focusNode !== p.node || sel.focusOffset !== p.offset) && focusId && typeof readingCount === 'function') {
+      // WebKit keeps a selection inside the editing host it began in. Words selected across paragraphs
+      // are then the page's: the paragraph being typed in goes back to reading, and its words stay
+      // selected from the same place.
+      var anchorWrap = anchorNode && (anchorNode.nodeType === 3 ? anchorNode.parentNode : anchorNode);
+      anchorWrap = anchorWrap && anchorWrap.closest && anchorWrap.closest('.cw-block');
+      var count = anchorWrap && anchorWrap.getAttribute('data-block-id') === focusId ? readingCount(anchorWrap, anchorNode, anchorOffset) : null;
+      if (count != null) {
+        var was = focusId;
+        blurCurrent();
+        var reading = elOf(was), back = reading && positionAt(reading, count);
+        if (back && page.contains(p.node)) {
+          try { sel.setBaseAndExtent(back.node, back.offset, p.node, p.offset); } catch (err) { /* a node left the page */ }
+          frameReads.invalidateSelection();
+        }
+      }
+    }
     requestOverlay('navigate');
     return true;
   }
@@ -5444,6 +5954,13 @@
         if (next) {
           var relative = clamp(current - next.at, 0, next.len);
           var want = next.atomic ? next.at + (backward ? 0 : next.len) : next.at + selectionStep(next.node.nodeValue, relative, backward, false);
+          // Hidden marks inside a line (a bold word's **) are the same place as the letter beside them,
+          // so a step passes them and a letter. A hidden line break (between list items, table rows,
+          // a quote's lines) is a place of its own: one step crosses it to the next line's start (or
+          // back to the line above's end), as at any line's end.
+          var gapFrom = backward ? next.at + next.len : current, gapTo = backward ? current : next.at;
+          var source = (blockOf(focusId) || {}).source || '';
+          if (!next.atomic && gapTo > gapFrom && source.slice(gapFrom, gapTo).indexOf('\n') >= 0) want = backward ? next.at + next.len : next.at;
           if (!e.shiftKey && arrowEnds.anchor !== current) want = backward ? Math.min(current, arrowEnds.anchor) : Math.max(current, arrowEnds.anchor);
           e.preventDefault();
           if (e.shiftKey) {
@@ -6015,7 +6532,13 @@
     }
 
     if (id === 'link') {
-      openPicker('wiki', focusId, c.start, 0, true, c.end);
+      // Words selected to a table cell's edge end on its hidden " | ": the link is the cell's words.
+      var from = c.start, to = c.end;
+      if (b.type === 'table' && to > from) {
+        while (to > from && /[\s|]/.test(b.source.charAt(to - 1))) to--;
+        while (from < to && /[\s|]/.test(b.source.charAt(from))) from++;
+      }
+      openPicker('wiki', focusId, from, 0, true, to);
       return commandResult(id);
     }
     return null;
@@ -6194,6 +6717,13 @@
         document.addEventListener('pointerdown', function (e) { if (e.pointerType) touchInput = e.pointerType === 'touch'; }, true);
         document.addEventListener('selectionchange', onSelectionChange);
         if (isArticle) document.addEventListener('keydown', onGlobalKey);   // typing while reading starts the article, never a field
+        // Keys, Cut and Paste over selected words that are not all in the paragraph being typed in, before
+        // anything else reads them (typing while reading would add the letter at the article's end).
+        if (isArticle) {
+          document.addEventListener('keydown', function (e) { selectionKey(e); }, true);
+          document.addEventListener('cut', onSelectionCut, true);
+          document.addEventListener('paste', onSelectionPaste, true);
+        }
         global.addEventListener('blur', function () { markAway(true); });
         global.addEventListener('focus', function () { markAway(false); });
         document.addEventListener('mousemove', own(onPointerMove), true);
