@@ -26,8 +26,9 @@
     // Nothing typed since the article opened: the text on screen is the server's saved text, in
     // its history and on the shared server. This device writing its own receipt of it is not saving.
     var idle = s.idle === true && !s.saving && shared;
-    // Words typed since the last save are saving: the pause before it is part of saving. "Kept on
-    // this device" is for words that cannot reach the server (offline), below.
+    // "Saving" is for a request on its way to the server. Words typed since the last save wait for a
+    // pause in the typing first (each save is a commit): meanwhile they are kept on this device
+    // (keep.js, within a moment), quietly, below. "On device" is for words that cannot reach it.
     var word = s.saving || !current ? 'Saving…'
       : !history ? 'Checking…' : !shared ? (sharedFailed ? 'Not backed up' : 'Checking backup…') : !device && !idle ? 'Kept in history' : 'Saved';
     var rows = [
@@ -48,12 +49,14 @@
     var onDevice = !s.warning && (s.offline && device || commentHere);
     if (onDevice) word = 'On device';
     else if (checking) word = 'Checking…';
-    var state = onDevice ? 'device' : failed ? 'partial' : checking ? 'saving' : idle ? 'saved' : pending || s.saving || !rows.every(function (row) { return row.ok; }) ? 'saving' : 'saved';
+    var waiting = !onDevice && !failed && !checking && !current && !s.saving && !s.offline;
+    if (waiting) word = s.journal === false ? 'Not saved yet' : 'Kept here';
+    var state = onDevice ? 'device' : failed ? 'partial' : checking ? 'saving' : waiting ? 'waiting' : idle ? 'saved' : pending || s.saving || !rows.every(function (row) { return row.ok; }) ? 'saving' : 'saved';
     var missing = rows.filter(function (row) { return !row.ok; }).map(function (row) { return row.label + ': ' + row.detail; });
     if (s.warning) missing.push(s.warning);
     if (s.kept) missing.push(s.kept);
     if (s.problem) missing.push(s.problem);
-    var label = state === 'device' ? 'Kept on this device. Waiting to sync when the connection returns.' + (s.kept ? ' ' + s.kept : '') : checking ? ('Checking with the server. ' + (s.problem || '')).trim() : state === 'saving' ? (history && !shared ? 'Checking the shared backup. ' + rows[2].detail : 'Saving') : state === 'saved' ? (device ? 'Saved: all three copies confirmed' : 'Saved in the article’s history and on the shared server. This browser is writing its own copy.') : 'Save incomplete. ' + missing.join(' ');
+    var label = state === 'waiting' ? (s.journal === false ? 'Not saved yet.' : 'Kept on this device.') + ' It goes to the server when you pause.' : state === 'device' ? 'Kept on this device. Waiting to sync when the connection returns.' + (s.kept ? ' ' + s.kept : '') : checking ? ('Checking with the server. ' + (s.problem || '')).trim() : state === 'saving' ? (history && !shared ? 'Checking the shared backup. ' + rows[2].detail : 'Saving') : state === 'saved' ? (device ? 'Saved: all three copies confirmed' : 'Saved in the article’s history and on the shared server. This browser is writing its own copy.') : 'Save incomplete. ' + missing.join(' ');
     // Saved words that break a writing rule are safe; only publishing waits. Calm words, the same mark.
     var held = state === 'saved' && s.held ? s.held : '';
     if (held) { word = 'Saved as draft'; label = (device ? 'All three copies confirmed. ' : 'Saved in the article’s history and on the shared server. ') + held; }
@@ -63,7 +66,7 @@
     return { word: word, state: state, label: label, rows: rows, sharedFailed: sharedFailed, held: !!held, onlineOnly: onlineOnly };
   }
   function shortWord(view) {
-    return view.state === 'device' ? 'On device' : view.state === 'saved' ? (view.held ? 'Draft' : 'Saved')
+    return view.state === 'device' ? 'On device' : view.state === 'waiting' ? view.word : view.state === 'saved' ? (view.held ? 'Draft' : 'Saved')
       : view.sharedFailed ? 'Not backed up' : view.state === 'partial' ? 'Not saved'
       : /^Checking/.test(view.word) ? 'Checking' : 'Saving';
   }
@@ -86,7 +89,7 @@
     }
     setAttr(button, 'data-signal', view.state);
     var shapes = { device: 'M3 4h14v12H3z M7 13h6', saved: 'M4 10l4 4 8-8', partial: 'M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16 M10 6v5 M10 14v.01',
-      saving: 'M10 2a8 8 0 1 1-8 8' };
+      saving: 'M10 2a8 8 0 1 1-8 8', waiting: 'M10 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6' };
     setAttr(icon.firstChild, 'd', shapes[view.state]);
     var word = shortWord(view);
     if (label.textContent !== word) label.textContent = word;

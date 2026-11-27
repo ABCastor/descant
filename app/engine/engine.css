@@ -3671,6 +3671,14 @@ html[data-keyhint="on"] .castor-tab-item:has(.word-key) .castor-tab-close { visi
 [data-comment-layout="list"] .castor-canvas-wrap { overflow: visible; }
 [data-comment-layout="list"] .castor-comments .castor-lost { max-height: none; overflow: visible; }
 
+/* iOS zooms the page when a field whose text is under 16px takes the focus, and the zoom stays after
+   it closes (the page then pans sideways). On any touch screen, whatever the width or layout mode (an
+   iPhone held sideways is in tablet mode), every field takes at least 16px, or the larger size it
+   inherits (the subtitle). A desktop keeps its sizes. */
+@media (any-pointer: coarse) {
+  :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="hidden"]), textarea, select) { font-size: max(16px, 1em) !important; }
+}
+
 /* iOS zooms focused editables below 16px, including comment editor hosts. */
 @media (pointer: coarse) {
   .castor-composer .cw-field, .castor-comment-editor .cw-field,

@@ -460,7 +460,7 @@
       var selected = site.value, success = null;
       if (hubReady(selected)) return serverPublish(selected).finally(function () { busy = false; go.disabled = false; site.disabled = false; picker.lock(); if (syncSheet) syncSheet(); paint(); });
       return request(helper + '/health').catch(function () {
-        steps.appendChild(el('p', 'Publishing runs from your Mac. Start it with:'));
+        steps.appendChild(el('p', 'Publishing runs through the publishing helper. Ask your agent to start it with:'));
         var command = el('input'); command.value = startCommand; command.readOnly = true; command.setAttribute('aria-label', 'Start publishing helper');
         command.addEventListener('click', function () { command.select(); }); steps.appendChild(command);
         throw Error('The publishing helper is unreachable.');
@@ -517,8 +517,8 @@
       var refusal = site.value ? siteRefusal(site.value) : '';
       go.disabled = !site.value || waiting || required || picker.pending() || checking || !configured || !!refusal;
       availability.textContent = checking ? 'Checking the publishing connection.' : refusal ? refusal : onServer || !site.value ? ''
-        : hub && healthFailed ? 'Publishing to ' + site.value + ' is not set up on the server yet, and the Mac publishing helper is not running.'
-        : healthFailed ? 'The publishing helper is not running on this Mac. Ask your agent to start it with the command above.'
+        : hub && healthFailed ? 'Publishing to ' + site.value + ' is not set up on the server yet, and the publishing helper is not running.'
+        : healthFailed ? 'The publishing helper is not running. Ask your agent to start it with the command above.'
         : !configured ? 'Publishing is not set up for ' + site.value + '. Ask your agent to connect this site.' : '';
       saveStatus.textContent = waiting ? (tagsChanged ? (['error', 'conflict', 'offline', 'refused', 'dirty'].indexOf(C.saver.state()) >= 0 ? words.saveFailed : words.saving) : 'Save first')
         : required ? words.required + site.value + '.' : picker.pending() ? words.pending : tagsChanged ? words.saved : '';

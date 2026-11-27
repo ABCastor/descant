@@ -7,7 +7,88 @@ var WRITER = /^founder:[a-z][a-z0-9-]{0,23}$/;
 var AUTH = new URL('/write/__authenticated', self.location.origin).href;
 function clientKey(id) { return new URL('/write/__client/' + encodeURIComponent(id), self.location.origin).href; }
 function cacheKey(value) { var url = new URL(value); url.searchParams.sort(); return url.href; }
-function problem(message, status) { return new Response(message, { status: status || 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } }); }
+function problem(message, status) { return new Response(message, { status: status || 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Descant-Problem': '1' } }); }
+/* A launch the server cannot answer, with no prepared offline copy to open: not a dead end. The page
+   shows the words this device kept for the writer (keep.js's journal, read-only: they are not saved,
+   and it never says so), and opens the app by itself once the server answers again. */
+function waiting(account) {
+  var page = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
+    '<title>Descant</title><style>' +
+    ':root{color-scheme:light dark;--paper:#F7F4EC;--ink:#1B1915;--ink-2:#5D584E;--rule:rgba(27,25,21,.14)}' +
+    '@media (prefers-color-scheme:dark){:root{--paper:#000;--ink:#EEE9DE;--ink-2:#A8A296;--rule:rgba(238,233,222,.18)}}' +
+    'body{margin:0;background:var(--paper);color:var(--ink);font:400 17px/1.55 -apple-system,system-ui,sans-serif}' +
+    'main{max-width:38rem;margin:0 auto;padding:max(48px,env(safe-area-inset-top)) 24px 48px}' +
+    'h1{font-size:22px;line-height:1.25;font-weight:600;margin:0 0 12px}p{margin:0 0 12px;color:var(--ink-2)}' +
+    'button{font:inherit;min-height:44px;padding:0 18px;border-radius:22px;border:1px solid var(--rule);background:transparent;color:var(--ink)}' +
+    'article{margin:28px 0 0;padding:20px 0 0;border-top:1px solid var(--rule)}article h2{font-size:15px;font-weight:600;margin:0 0 8px;color:var(--ink-2)}' +
+    '.words{white-space:pre-wrap;overflow-wrap:anywhere;font:400 18px/1.6 "Source Serif 4",ui-serif,Georgia,serif;color:var(--ink);-webkit-user-select:text;user-select:text}' +
+    '</style></head><body><main><h1 id="head">Descant can\u2019t reach the server</h1>' +
+    '<p id="say">This device has no offline copy of Descant, so it opens once the server answers. It opens by itself.</p>' +
+    '<p id="state" role="status" aria-live="polite">Waiting for the server\u2026</p><button type="button" id="again">Try now</button><div id="kept"></div></main><script>' +
+    '(' + offlineWaiting.toString() + ')(' + JSON.stringify(account || '') + ');</script></body></html>';
+  return new Response(page, { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Descant-Problem': '1' } });
+}
+// Runs in that page, not in the worker.
+function offlineWaiting(account) {
+  var writer = account.replace(/^founder:/, ''), live = new URLSearchParams(location.search).get('live') || '';
+  var state = document.getElementById('state'), busy = false;
+  function sig(e) { return JSON.stringify([e.path, e.text, e.base || '', e.who || [], e.at || 0]); }
+  function writerOf(e) { var first = e.who && e.who[0]; return (typeof first === 'string' ? first : first && first.id) || ''; }
+  function valid(e) { return !!e && typeof e.key === 'string' && typeof e.path === 'string' && typeof e.text === 'string'; }
+  // The journal's two stores, read only: an absent database is never created here.
+  function rows() {
+    var local = [];
+    try { for (var i = 0; i < localStorage.length; i++) { var k = localStorage.key(i); if (k && k.indexOf('castor.keep.') === 0) { try { local.push(JSON.parse(localStorage.getItem(k))); } catch (e) {} } } } catch (e) {}
+    return new Promise(function (done) {
+      var q;
+      try { q = indexedDB.open('castor-keep'); } catch (e) { done(local); return; }
+      q.onupgradeneeded = function () { q.transaction.abort(); };
+      q.onerror = function () { done(local); };
+      q.onsuccess = function () {
+        var db = q.result;
+        try { var all = db.transaction('entries').objectStore('entries').getAll(); all.onsuccess = function () { db.close(); done((all.result || []).concat(local)); }; all.onerror = function () { db.close(); done(local); }; }
+        catch (e) { db.close(); done(local); }
+      };
+    });
+  }
+  function title(text) { var m = /^---\n(?:[\s\S]*?\n)?title:\s*["']?(.+?)["']?\s*\n[\s\S]*?\n---/.exec(text); return m ? m[1] : ''; }
+  function body(text) { var t = text.replace(/^---\n[\s\S]*?\n---\n*/, '').trim(), name = title(text); return name && t.indexOf('# ' + name + '\n') === 0 ? t.slice(name.length + 3).trim() : t; }
+  rows().then(function (all) {
+    all = all.filter(valid);
+    var saved = {}, gone = {};
+    all.forEach(function (e) { if (!e.confirmed) return; if (e.key === 'saved|' + e.path) saved[e.path] = e.text; if (e.key.indexOf('discarded|') === 0 || e.key.indexOf('saved|' + e.path + '|') === 0) gone[sig(e)] = true; });
+    var newest = {};
+    all.forEach(function (e) {
+      if (e.confirmed || gone[sig(e)] || live && e.path !== live) return;
+      if (writer && writerOf(e) && writerOf(e) !== writer) return;
+      if (saved[e.path] === e.text) return;
+      if (!newest[e.path] || (e.at || 0) > (newest[e.path].at || 0)) newest[e.path] = e;
+    });
+    var kept = Object.keys(newest).map(function (k) { return newest[k]; }).sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
+    if (!kept.length) return;
+    document.getElementById('head').textContent = 'Your words are on this device';
+    document.getElementById('say').textContent = 'Descant can\u2019t reach the server, and this device has no offline copy of it. What you typed here is kept on this device and not sent yet: it goes to the server when Descant opens, by itself, once the server answers.';
+    var box = document.getElementById('kept');
+    kept.forEach(function (e) {
+      var a = document.createElement('article'), h = document.createElement('h2'), w = document.createElement('div');
+      h.textContent = title(e.text) || e.path.replace(/^articles\//, '').replace(/\/article\.md$/, '');
+      w.className = 'words'; w.textContent = body(e.text);
+      a.appendChild(h); a.appendChild(w); box.appendChild(a);
+    });
+  });
+  // The server answers when a read comes back that this worker did not write itself.
+  function probe() {
+    if (busy) return; busy = true;
+    fetch('/write/api/whoami', { cache: 'no-store', credentials: 'same-origin' }).then(function (r) {
+      if (!r.headers.get('X-Descant-Problem')) { state.textContent = 'The server answered. Opening Descant\u2026'; location.reload(); return; }
+      busy = false; state.textContent = 'Waiting for the server…';
+    }, function () { busy = false; state.textContent = 'Waiting for the server…'; });
+  }
+  setInterval(probe, 3000);
+  addEventListener('online', probe); addEventListener('focus', probe); addEventListener('pageshow', probe);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) probe(); });
+  document.getElementById('again').addEventListener('click', function () { state.textContent = 'Asking the server…'; probe(); });
+}
 async function state(meta, id) {
   var hit = id && await meta.match(clientKey(id)), value = hit && await hit.json();
   return { account: value && value.account || '', revision: value && Number.isSafeInteger(value.revision) ? value.revision : 0 };
@@ -80,7 +161,7 @@ self.addEventListener('fetch', function (event) {
         account = observedGrant.account;
       }
       var record = index && account && index.accounts && index.accounts[account];
-      if (!record) return problem('No offline copy is prepared for this writer on this device. Open Descant online and choose Prepare offline.');
+      if (!record) return request.mode === 'navigate' ? waiting(account) : problem('No offline copy is prepared for this writer on this device. Open Descant online and choose Prepare offline.');
       var key = request.mode === 'navigate' && (url.pathname === '/write' || url.pathname === '/write/') ? new URL('/write/', url.origin).href : cacheKey(request.url);
       var hit = await (await caches.open(record.cache)).match(key);
       if (!hit) return problem('This file is not in the prepared offline copy. Your unsent writing remains on this device.');

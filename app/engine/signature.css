@@ -325,6 +325,7 @@ html[data-theme-choice="system"] .theme-toggle .t-system{display:block}
 .castor-save[data-signal="saved"] .save-signal{color:var(--between)}
 .castor-save[data-signal="partial"] .save-signal{color:var(--save-amber)}
 .castor-save[data-signal="saving"] .save-signal{color:var(--quiet,var(--ink-2))}
+.castor-save[data-signal="waiting"] .save-signal{color:var(--quiet,var(--ink-2))}
 .save-signal-label{white-space:nowrap}
 .castor-save[data-signal] .save-signal{position:absolute;left:0;top:calc(50% - 9px)}
 @media(max-width:699px){.footline{gap:.75rem}.foot-meta{--status-gap:.75rem}.footline{padding-inline:var(--bar-pad,1rem)}}

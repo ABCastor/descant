@@ -2382,6 +2382,8 @@
     return Castor.saveStatus.describe({
       checking: unasked,
       current: text === saver.text, offline: saver.state === 'offline', saving: !!saver.inflight || saver.state === 'saving',
+      // Words waiting for the save pause are kept here only while the journal works (keep.js).
+      journal: journalKeeps(),
       // Nothing typed here since the article opened: the server's own saved text is on screen.
       idle: !saver.typed && ['ready', 'saved'].indexOf(saver.state) >= 0 && text === saver.text,
       deviceAt: deviceAt,

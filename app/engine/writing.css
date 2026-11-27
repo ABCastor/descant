@@ -274,6 +274,13 @@
 .page-column .cw-mirror em { font-style: italic; }
 .page-column .cw-mirror :is(code,.cw-code) { font-family: var(--font-mono, ui-monospace, monospace); }
 .cw-edit::after { content: none !important; }
+/* WebKit paints no space at the end of a line of text here (white-space: normal), so it reports the
+   caret after a typed final space as the caret before it, and the phone keyboard reads the words
+   without that space: two spaces never made a full stop, and a suggestion lost its space. A
+   zero-width character after each run of text the writer types into keeps that space painted, as a
+   text box does. It has no width, so no line moves; a list item holding a list gets none. */
+.page-column .cw-block .cw-editor-stack > .cw-edit:not(:has(> :is(p, div, ul, ol, blockquote, table, pre, h1, h2, h3, h4, h5, h6, aside, hr, figure, section)))::after,
+.page-column .cw-block .cw-editor-stack > .cw-edit :is(p, li:not(:has(> :is(ul, ol))), h1, h2, h3, h4, h5, h6)::after { content: "\200B" !important; }
 .page-column .cw-mirror mark:not(.commented):not(.in-workspace) { padding: 0 .12em; }
 .page-column .cw-mirror code { font-size: .88em; line-height: inherit; }
 .cw-definition-gap::after { content: ' '; }
