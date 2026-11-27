@@ -37,9 +37,16 @@
     return isWriter(role.who || '') || role.confirmed === true || role.role === 'founder';
   }
   function editable() { return founder() && C.editor && C.editor.canEditSubtitle(); }
+  /* The front matter as md.js reads it (a first line "---" up to the next line "---"), parsed on
+     its own: this runs after every reparse while the writer types, and the essay below it never
+     changes what it holds. No such block means no front matter, as a whole parse would find. */
+  function frontmatter() {
+    var lines = C.editor.getSource().split('\n'), end = lines.indexOf('---', 1);
+    return lines[0] === '---' && end > 0 ? C.md.parse(lines.slice(0, end + 1).join('\n')).frontmatter || {} : {};
+  }
   function value() {
-    var doc = C.md.parse(C.editor.getSource());
-    return typeof doc.frontmatter.subtitle === 'string' ? doc.frontmatter.subtitle : '';
+    var fm = frontmatter();
+    return typeof fm.subtitle === 'string' ? fm.subtitle : '';
   }
   function fit() {
     if (!input || !input.style) return;
@@ -156,7 +163,7 @@
     if (el._castorTitle) return;
     el._castorTitle = true;
     el.addEventListener('focusin', function () {
-      var fm = C.md.parse(C.editor.getSource()).frontmatter || {};
+      var fm = frontmatter();
       titleAtFocus = { heading: headingText(el), title: typeof fm.title === 'string' ? fm.title.trim() : null };
       if (global.requestAnimationFrame) global.requestAnimationFrame(function () { markerWidth(el); keepCaretOutOfMarker(); });
     });

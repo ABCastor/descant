@@ -2610,19 +2610,26 @@
     if (!(info && info.sending)) { pendingComments[path] = 'A comment is kept on this device and is waiting to save.'; commentKept[path] = 'kept'; }
     renderSaveState();
   });
+  /* Why a reader's comment did not go, in the page's own words. comments.js has already put the
+     page back to what the server holds when the server REFUSED the comment (`dropped`); on a
+     network failure it keeps the comment and sends it again. No answer at all (`offline`) is said
+     plainly, never as the browser's network error, which every engine words differently
+     ("Load failed", "Failed to fetch", "NetworkError when attempting to fetch resource."). */
+  function commentFailure(info) {
+    info = info || {};
+    if (info.offline && !info.held && !info.dropped) return { why: 'You are offline, or the server did not answer.', after: ' It is kept in this browser and posted when the connection returns.' };
+    var why = String(info.reason || 'the server refused it').replace(/\s+$/, '');
+    if (!/[.!?]$/.test(why)) why += '.';
+    return { why: why, after: info.held
+      ? ' Your words are kept on this device. Open Comments to compare the saved copy and choose which to keep.'
+      : info.dropped
+      ? ' The comments shown now are the ones the server has.'
+      : ' It is kept in this browser and sent again with your next comment.' };
+  }
   bus.on('comments:unsaved', function (info) {
     if (reviewing()) {
       info = info || {};
-      /* comments.js has already put the page back to what the server holds when
-         the server REFUSED the comment (`dropped`); on a network failure it keeps
-         the comment and sends it again with the next one. */
-      var why = String(info.reason || 'the server refused it').replace(/\s+$/, '');
-      if (!/[.!?]$/.test(why)) why += '.';
-      var detail = info.held
-        ? why + ' Your words are kept on this device. Open Comments to compare the saved copy and choose which to keep.'
-        : info.dropped
-        ? why + ' The comments shown now are the ones the server has.'
-        : why + ' It is kept in this browser and sent again with your next comment.';
+      var failure = commentFailure(info), detail = failure.why + failure.after;
       setSave('refused', detail, 'comment');
       saver.words = info.words || null;
       showNotice(info.held ? 'Compare your comment with the saved copy' : 'Your comment was not saved', detail, saver.words, true);

@@ -132,8 +132,10 @@
         !registration.installing && !registration.waiting && await generationOf(registration.active) === 2;
       if (current) postponed = true;
       // Force online upgrade discovery. Offline, an already installed compatible
-      // worker remains usable; the generation handshake below is mandatory.
-      else try { await registration.update(); } catch (_) {}
+      // worker remains usable; the generation handshake below is mandatory. A worker this
+      // visit has just fetched and is installing (nothing active or waiting) is the newest
+      // there is: asking again only waits (about a second per scope in Firefox).
+      else if (registration.active || registration.waiting || !registration.installing) try { await registration.update(); } catch (_) {}
       var candidate = current ? registration.active : registration.installing || registration.waiting || registration.active;
       if (!candidate) throw unavailable();
       if (candidate.state !== 'activated') await new Promise(function (resolve, reject) {

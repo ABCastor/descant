@@ -379,13 +379,19 @@
     if (!S.demo && v.path === articlePath()) { try { global.localStorage.setItem(key(), v.id); } catch (e) { v.error = 'Your browser could not remember your place. Allow browser storage, then try again.'; render(); return; } }
     close(); paintNotice();
   }
-  // Refreshed on every keystroke: the ticks are rebuilt only when what they show changed.
+  // Refreshed on every keystroke: the ticks are rebuilt only when what they show changed. A tick
+  // shows only these fields, so they decide first, and the dates (a slow locale format) are
+  // formatted only when one of them changed.
   function renderRail() {
     var rail = D.getElementById('saves-rail'); if (!rail) return;
-    var ticks = versions().slice().reverse().map(function (v) {
-      return { id: v.id, current: v.id === currentId(), by: (v.authorRole || v.by) === 'agent' || v.author === 'the agent' ? 'agent' : 'human',
+    var list = versions().slice().reverse(), now = currentId();
+    var shown = JSON.stringify(list.map(function (v) { return [v.id, v.id === now, v.authorRole, v.by, v.author, v.who, v.when]; }));
+    if (rail.castorShown === shown && rail.childNodes && rail.childNodes.length === list.length) return;
+    var ticks = list.map(function (v) {
+      return { id: v.id, current: v.id === now, by: (v.authorRole || v.by) === 'agent' || v.author === 'the agent' ? 'agent' : 'human',
         title: authorName(v) + ' · ' + saveTime(v), label: 'Compare current writing with the version saved on ' + saveTime(v) + ' by ' + authorName(v) };
     }), drawn = JSON.stringify(ticks);
+    rail.castorShown = shown;
     if (rail.castorTicks === drawn && rail.childNodes && rail.childNodes.length === ticks.length) return;
     rail.textContent = ''; rail.setAttribute('role', 'group');
     rail.setAttribute('aria-label', 'Saved versions');
