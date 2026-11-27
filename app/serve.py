@@ -228,6 +228,16 @@ def _agent_app():
     return SimpleNamespace(**globals())
 
 
+def said(sentence, detail=None):
+    """What the writer reads when Git, the repository gate or the disk fails under a save or an
+    import: a sentence in Descant's words. The tool's own words (its output, a path, an errno)
+    go to this server's log, where whoever runs it can read them."""
+    detail = " ".join(str(detail or "").split())
+    if detail:
+        print("  descant: %s (%s)" % (sentence, detail[-800:]), flush=True)
+    return sentence
+
+
 def git(*args, timeout=20):
     done = subprocess.run(
         ["git", "-C", str(REPO_ROOT), *args],
@@ -635,7 +645,7 @@ def commit_files(changes, subject, people=None, trailers=None, move=None, writin
                 raise ValueError("the retained move changed; this save waits")
             moved = git("mv", "--", *[path.relative_to(REPO_ROOT).as_posix() for path in move])
             if moved.returncode:
-                raise ValueError("Git could not move that file: " + moved.stderr.strip())
+                raise ValueError(said("the server could not move that file in the article’s history; this save waits", moved.stderr))
         for target, data in changes.items():
             if retained:
                 continue
@@ -655,7 +665,7 @@ def commit_files(changes, subject, people=None, trailers=None, move=None, writin
         if staging and not staged:
             added = git("add", "--", *staging)
             if added.returncode:
-                raise ValueError("Git could not stage this save: " + added.stderr.strip())
+                raise ValueError(said("the server could not record this save in the article’s history; this save waits", added.stderr))
         gate = subprocess.run([str(REPO_ROOT / "check.sh"), *(["--writing-save", writing_save] if writing_save else [])],
                               cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
         if gate.returncode:
@@ -667,7 +677,7 @@ def commit_files(changes, subject, people=None, trailers=None, move=None, writin
             raise ValueError("the save candidate changed before commit; its files are retained")
         saved = git("commit", *author, "-m", subject, "-m", trailers or identity, "--", *relative, timeout=40)
         if saved.returncode:
-            raise ValueError("Git could not commit this save: " + saved.stderr.strip())
+            raise ValueError(said("the server could not record this save in the article’s history; its files are retained", saved.stderr))
         sha = git("rev-parse", "HEAD").stdout.strip()
         if blobs(sha) != desired:
             raise ValueError("the exact save bytes are not committed")
@@ -1687,10 +1697,10 @@ def commit_comment_action(target, data, subject, people, trailers, companions=No
         gate = subprocess.run([str(REPO_ROOT / "check.sh")], cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
         if gate.returncode: raise ValueError("the repository gate refused this action: " + (gate.stdout + gate.stderr)[-600:])
         added = git("add", "--", relative)
-        if added.returncode: raise ValueError("Git could not stage this action: " + added.stderr.strip())
+        if added.returncode: raise ValueError(said("the server could not record this comment action in the article’s history; this save waits", added.stderr))
         try:
             saved = git("commit", *author, "-m", subject, "-m", trailers or identity, "--", relative, timeout=40)
-            if saved.returncode: raise ValueError("Git could not commit this action: " + saved.stderr.strip())
+            if saved.returncode: raise ValueError(said("the server could not record this comment action in the article’s history; this save waits", saved.stderr))
         except (OSError, ValueError, subprocess.TimeoutExpired):
             recorded = git_blob(relative)
             if recorded.returncode or recorded.stdout != data: raise
@@ -2612,8 +2622,12 @@ def file_errors(method):
     def guarded(self, *args, **kwargs):
         try:
             return method(self, *args, **kwargs)
-        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        except ValueError as error:
             return self.reply(422, {"saved": False, "error": str(error)[:800]})
+        except subprocess.TimeoutExpired as error:
+            return self.reply(422, {"saved": False, "error": said("the server took too long to record this change; try again", error)})
+        except OSError as error:
+            return self.reply(422, {"saved": False, "error": said("the server could not write the files just now; try again", error)})
     return guarded
 
 
@@ -3890,7 +3904,7 @@ class Handler(SimpleHTTPRequestHandler):
                 try: commit_comment_action(target, comment_action_bytes(event), "Keep a comment action", people=writing_session(who),
                     trailers="Principal: %s\nActor: human\nBasis: instruction\nComment-Action: %s" % (who, identifier),
                     companions=dict([mention]) if mention else None)
-                except (ValueError, OSError, subprocess.TimeoutExpired) as error: return self.reply(422, {"ok": False, "reason": "save-failed", "error": str(error)[:200]})
+                except (ValueError, OSError, subprocess.TimeoutExpired) as error: return self.reply(422, {"ok": False, "reason": "save-failed", "error": str(error)[:200] if isinstance(error, ValueError) else said("the server could not record this comment action just now; try again", error)})
                 # The synchronous commit/push may rebase onto newer action state.
                 committed = comment_action_events(path, committed_only=True)
                 return self.reply(200, with_comment_credit(path, {"ok": True, "receipt": {"opId": op, "request": body, "resultRev": rev+1, "authority": "git", "gitDurable": True}, "thread": comment_action_projection(path, doc["thread"], who, events=committed)}))
@@ -4048,17 +4062,19 @@ class Handler(SimpleHTTPRequestHandler):
                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, timeout=60)
                 if gate.returncode != 0:
+                    # The gate's own report stays: it names the marker that blocks the save, which a founder
+                    # needs to clear it (a reviewer is told only that the save failed).
                     raise RuntimeError("completion gate refused the comments:\n" + gate.stdout)
                 relative = [target.relative_to(REPO_ROOT).as_posix() for target, _, _ in changes]
                 added = git("add", "--", *relative)
                 if added.returncode != 0:
-                    raise RuntimeError("git could not stage the comment files: " + added.stderr.strip())
+                    raise RuntimeError(said("the server could not record the comments in the article’s history", added.stderr))
                 article_slug = piece_folder(path).name
                 committed = git("commit", *identity["author"],
                                 "-m", identity["subject"] % article_slug,
                                 "-m", identity["trailers"], "--", *relative, timeout=40)
                 if committed.returncode != 0:
-                    raise RuntimeError("git could not commit the comments: " + committed.stderr.strip())
+                    raise RuntimeError(said("the server could not record the comments in the article’s history", committed.stderr))
             except (OSError, subprocess.TimeoutExpired, RuntimeError) as error:
                 intended = {target.relative_to(REPO_ROOT).as_posix(): data for target, _, data in changes}
                 if not publication.landed_commit(REPO_ROOT, before_sha, intended):
@@ -4074,7 +4090,8 @@ class Handler(SimpleHTTPRequestHandler):
                         else:
                             atomic_write(target, before)
                     return self.reply(422, {"ok": False, "reason": "save-failed",
-                                            "error": str(error)[:800]})
+                                            "error": str(error)[:800] if isinstance(error, RuntimeError)
+                                            else said("the server could not write the comments just now; try again", error)})
 
             # Never return the validation snapshot after a commit/push/rebase.
             events = comment_action_events(path, committed_only=True)
@@ -4195,7 +4212,7 @@ class Handler(SimpleHTTPRequestHandler):
                 atomic_write(target, submitted)
             except OSError as error:
                 return self.reply(500, {"ok": False, "reason": "write-failed",
-                                        "error": "the article could not be written atomically: " + str(error)[:200]})
+                                        "error": said("The server could not write this version to its disk, so it is not saved yet.", error)})
             try:
                 gate = subprocess.run([str(REPO_ROOT / "check.sh"), "--writing-save", path], cwd=str(REPO_ROOT),
                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -4222,11 +4239,13 @@ class Handler(SimpleHTTPRequestHandler):
                     failure = "git could not commit this save: " + committed.stderr.strip()[:300]
             except (OSError, subprocess.TimeoutExpired) as error:
                 failure = "git could not run the commit: " + str(error)[:200]
+            # The writer reads what happened; Git's own words stay in this server's log.
             # The working file goes back only when no commit holds this text. A commit that
             # landed stays with its file, whatever happened after it.
             if failure and not self.committed(path, current_sha, submitted):
                 atomic_write(target, before)
-                return self.reply(500, {"ok": False, "reason": "commit-failed", "error": failure})
+                return self.reply(500, {"ok": False, "reason": "commit-failed",
+                                        "error": said("The server could not record this version in the article’s history, so it is not saved yet.", failure)})
             sha = git("rev-parse", "HEAD").stdout.strip()
             media = served_media(piece_folder(path))
             HELD[(path, hashlib.sha256(submitted).hexdigest())] = held
@@ -4476,7 +4495,7 @@ class Handler(SimpleHTTPRequestHandler):
         except ValueError as error:
             return self.reply(400, {"ok": False, "error": str(error)[:600]})
         except OSError as error:
-            return self.reply(500, {"ok": False, "error": "the import could not be written: " + str(error)[:200]})
+            return self.reply(500, {"ok": False, "error": said("The server could not write this item to its disk. Try importing it again.", error)})
         if done.get("state") in ("created", "updated", "kept"):
             print("  import %s %s" % (done["state"], done.get("folder") or done.get("path")))
         return self.reply(200, dict(done, ok=True))

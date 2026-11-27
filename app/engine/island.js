@@ -604,9 +604,17 @@
         }
       }
     });
+    // Every command's state from one caret read (the editor's commandStates), asked once per refresh.
+    var states = null;
+    function unable(id) {
+      if (!e) return true;
+      if (!e.commandStates) return !!(e.can && !e.can(id));
+      if (!states) states = e.commandStates();
+      return !states[id];
+    }
     if (S.row) Array.prototype.forEach.call(S.row.children, function (button) {
       var id = button.dataset.command;
-      setDisabled(button, id === 'undo' || id === 'redo' ? !state[id] : id === 'comment' ? !selected(e) : !e || !!(e.can && !e.can(id)));
+      setDisabled(button, id === 'undo' || id === 'redo' ? !state[id] : id === 'comment' ? !selected(e) : unable(id));
     });
     if (S.row && S.row.parentNode && S.root.dataset.arrangement === 'writing') peek(S.row.parentNode, S.row);
     if (S.row && S.row.parentNode) edges(S.row.parentNode, S.row);

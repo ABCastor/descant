@@ -13,6 +13,10 @@
   // the ONE data: form allowed through: an <img> cannot run script, not even from an
   // SVG, and every other scheme still resolves to '#'.
   const IMAGE_DATA_URL = /^data:image\/(?:avif|gif|jpeg|png|svg\+xml|webp);base64,[A-Za-z0-9+/=\s]+$/i;
+  // What an inline render read besides its text and options (see renderInlineInternal).
+  const READ_PAGE = 1, READ_NOTES = 2, READ_REFERENCES = 4, READ_CONTEXT = 8;
+  let inlineReads = 0;
+  const inlineKept = new Map();
 
   function escapeHtml(value) {
     return String(value)
@@ -35,11 +39,13 @@
     let relative;
     try { relative = decodeURIComponent(url); } catch (e) { relative = ''; }
     if (relative && !/^(?:[a-z][a-z0-9+.-]*:|\/)|[\\\u0000-\u001f\u007f:#?]|(?:^|\/)\.{1,2}(?:\/|$)|\/\//i.test(relative)) {
+      inlineReads |= READ_PAGE;
       const piece = Castor.app && Castor.app.data && Castor.app.data.piece;
       const entries = piece && Array.isArray(piece.fileEntries) ? piece.fileEntries : [];
       const entry = entries.find(file => file && file.kind === 'file' && file.path === url);
       if (entry && typeof entry.url === 'string' && /^\/(?:write\/)?api\/files\/content\?/.test(entry.url)) url = entry.url;
     }
+    if (/^\/api\/files\/content\?/.test(url)) inlineReads |= READ_PAGE;
     if (Castor.role && Castor.role.publicWriter && /^\/api\/files\/content\?/.test(url)) return '/write' + url;
     return url;
   }
@@ -821,7 +827,42 @@
     return finish(root);
   }
 
+  /* One keystroke asks for the same paragraph's inline HTML several times (the live
+     paragraph, the marks check, the autolink positions), so the last few answers are kept.
+     A kept answer is reused only where it cannot differ from a fresh one: same text,
+     same options that shape the output, and a render that read nothing else. A render
+     that consulted the page's attachments or the writer role (READ_PAGE), recorded into
+     the caller's context (footnote numbers, used references, reference spans:
+     READ_CONTEXT), or resolved against a non-empty reference table is never kept. One that
+     never looked at the writer-notes option or the reference table holds for any value of
+     it; an empty table resolves nothing, like none. */
+  function noReferences(references) {
+    if (!references) return true;
+    for (const key in references) return false;
+    return true;
+  }
   function renderInlineInternal(text, options) {
+    const opts = options || {};
+    if (opts.inLink || opts.referenceSpans) return renderInlineFresh(text, opts);
+    const key = (opts.editSource ? 'e' : '') + (opts.showMarks ? 'm' : '') + (opts.tableCell ? 't' : '') + (opts.referenceOffset || 0) + '\u0000' + text;
+    const notes = Boolean(opts.showWriterNotes), empty = noReferences(opts.references);
+    const kept = inlineKept.get(key);
+    if (kept && (kept.notes === null || kept.notes === notes) && (!kept.references || empty)) {
+      inlineKept.delete(key); inlineKept.set(key, kept);
+      return kept.html;
+    }
+    const outer = inlineReads;
+    inlineReads = 0;
+    let html, reads;
+    try { html = renderInlineFresh(text, opts); } finally { reads = inlineReads; inlineReads = outer | reads; }
+    if (!(reads & (READ_PAGE | READ_CONTEXT)) && !(reads & READ_REFERENCES && !empty)) {
+      inlineKept.set(key, { html, notes: reads & READ_NOTES ? notes : null, references: !!(reads & READ_REFERENCES) });
+      if (inlineKept.size > 24) inlineKept.delete(inlineKept.keys().next().value);
+    }
+    return html;
+  }
+
+  function renderInlineFresh(text, options) {
     const opaqueTokens = [];
     const opts = options || {};
     const footnotes = opts.footnotes || null;
@@ -876,6 +917,7 @@
         if (marker) {
           const close = text.indexOf(']', index + marker[0].length);
           if (close >= 0) {
+            inlineReads |= READ_NOTES;
             if (opts.showWriterNotes) {
               /* Same text, byte for byte -- comment anchors match a block's text and
                  a marker that quietly changed shape would move every anchor in the
@@ -895,6 +937,7 @@
       if (text.startsWith('%%', index)) {
         const end = findClosing(text, '%%', index + 2);
         if (end >= 0) {
+          inlineReads |= READ_NOTES;
           if (opts.showWriterNotes) html += sourceMark("%%", opts) + `<span class="writer-note">${escapeHtml(text.slice(index + 2, end))}</span>` + sourceMark("%%", opts);
           index = end + 2;
           continue;
@@ -1013,6 +1056,8 @@
         }
         // A malformed definition stays visible instead of becoming a shortcut.
         const definitionLike = labelEnd >= 0 && text[labelEnd + 1] === ':' && /^ {0,3}$/.test(text.slice(0, index));
+        // Whether or not this call has a table, the answer depends on one here.
+        if (labelEnd >= 0 && text[labelStart] !== '^' && !definitionLike) inlineReads |= READ_REFERENCES;
         if (labelEnd >= 0 && text[labelStart] !== '^' && opts.references && !definitionLike) {
           let end = labelEnd, key = text.slice(labelStart, labelEnd);
           const explicit = text[labelEnd + 1] === '[';
@@ -1021,6 +1066,7 @@
             if (end >= 0) key = text.slice(labelEnd + 2, end) || key;
           }
           const reference = end >= 0 && opts.references[referenceLabel(key)];
+          if (reference) inlineReads |= READ_CONTEXT;
           if (reference && opts.usedReferences) opts.usedReferences.add(referenceLabel(key));
           if (reference) {
             const label = text.slice(labelStart, labelEnd), url = literalHref(reference.destination);
@@ -1045,6 +1091,7 @@
       if (text.startsWith('[^', index)) {
         const end = text.indexOf(']', index + 2);
         if (end > index + 2) {
+          inlineReads |= READ_CONTEXT;
           const key = text.slice(index + 2, end);
           const exists = footnotes && Object.prototype.hasOwnProperty.call(footnotes, key);
           const missing = exists ? '' : ' missing-note';

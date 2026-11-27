@@ -824,6 +824,35 @@
     return true;
   }
 
+  /* The one text node of `shown` whose words differ from `wanted`, when the two trees are
+     otherwise the same: the same elements, in the same places, with the same attributes in
+     the same order, and every other text node equal. Anything else (two text nodes, a
+     comment, an element apart) answers null and the caller rebuilds. */
+  function oneTextApart(shown, wanted) {
+    var found = null;
+    function same(a, z) {
+      if (a.nodeType !== z.nodeType) return false;
+      if (a.nodeType === 3) {
+        if (a.data === z.data) return true;
+        if (found) return false;
+        found = { node: a, data: z.data };
+        return true;
+      }
+      if (a.nodeType !== 1 || a.nodeName !== z.nodeName) return false;
+      var x = a.attributes, y = z.attributes;
+      if (!x || !y || x.length !== y.length) return false;
+      for (var i = 0; i < x.length; i++) if (x[i].name !== y[i].name || x[i].value !== y[i].value) return false;
+      return children(a, z);
+    }
+    function children(a, z) {
+      var p = a.childNodes, q = z.childNodes;
+      if (!p || !q || p.length !== q.length) return false;
+      for (var i = 0; i < p.length; i++) if (!same(p[i], q[i])) return false;
+      return true;
+    }
+    return children(shown, wanted) && found ? found : null;
+  }
+
   function updateMirror(wrap, b) {
     var started = global.performance && performance.now ? performance.now() : Date.now();
     b.type = classify(b.source);
@@ -835,7 +864,7 @@
       var writerLine = /^<p class="cw-writer-line">/.test(html), marks = wrap.classList;
       if (marks && marks.add && (!marks.contains || marks.contains('cw-writer-source') !== writerLine)) marks[writerLine ? 'add' : 'remove']('cw-writer-source');
       if (host && host.childNodes && !composing) {
-        var next = document.createElement('div'); next.innerHTML = editingHtml(html, b.source);
+        var inner = editingHtml(html, b.source), next = document.createElement('div'); next.innerHTML = inner;
         // A plain insertion only changes text. Keep WebKit's live nodes and IME
         // session; rebuild only after a formatting boundary changed.
         function structure(root) {
@@ -845,7 +874,14 @@
           }).join('');
         }
         if (host.textContent !== b.source || structure(host) !== structure(next)) {
-          var held = caretSource(); host.innerHTML = editingHtml(html, b.source);
+          var held = caretSource(), patch = held && typeof oneTextApart === 'function' ? oneTextApart(host, next) : null;
+          // The new paragraph differs from the one shown by the words of one text node
+          // (a key typed beside a link or a bold phrase): change those words, so the
+          // paragraph is not rebuilt and laid out again for one letter. Same nodes,
+          // names, attributes and words as the full rebuild; the caret is put back alike
+          // (only with a caret to put back: without one, the rebuild decides where it goes).
+          if (patch) patch.node.data = patch.data;
+          else host.innerHTML = inner;
           if (!host.firstChild) host.appendChild(document.createTextNode(''));
           if (held) setCaret(b.id, held.start, held.end, true);
         }
@@ -5829,7 +5865,18 @@
   }
   function can(id) {
     if (opts.readOnly || composing || !focusId || COMMAND_IDS.indexOf(id) < 0) return false;
-    var b = blockOf(focusId), c = caretSource();
+    return canAt(id, blockOf(focusId), caretSource());
+  }
+  /* can() for every command at once, reading the caret once: the bar asks on every key, and
+     each can() walks the paragraph's DOM for the same caret. The same answers as can(id) for
+     each id, and the same caret read (caretSource, and what it remembers). */
+  function commandStates() {
+    var out = {}, ready = !(opts.readOnly || composing || !focusId);
+    var b = ready ? blockOf(focusId) : null, c = ready ? caretSource() : null;
+    COMMAND_IDS.forEach(function (id) { out[id] = ready && canAt(id, b, c); });
+    return out;
+  }
+  function canAt(id, b, c) {
     if (!b || !c) return false;
     if (b.type === 'code' || b.type === 'frontmatter') return false;
     // Toolbar indentation nests list items. Moving quote markers, metadata or
@@ -6331,6 +6378,7 @@
     focusBlock: focusBlock,
     command: command,
     can: can,
+    commandStates: commandStates,
     commands: function () { return COMMAND_IDS.slice(); },
     blur: blurCurrent,
     hideKeyboard: function () {
