@@ -2202,6 +2202,7 @@
     var opener = document.getElementById('castor-session');
     if (Castor.popovers && opener && card.showPopover) {
       card.setAttribute('popover', 'auto');
+      if (Castor.sheet) Castor.sheet.popover(card);
       card.addEventListener('toggle', function (e) { if (e.newState === 'closed' && document.getElementById('castor-who') === card) closeWhoCard(); });
       card.showPopover();
     }
@@ -4402,6 +4403,11 @@
       new global.MutationObserver(closeMore).observe(els.app, { attributes: true, attributeFilter: ['data-preset'] });
     }
 
+    // On the phone the Menu is a sheet: pulled down, it closes (sheet.js).
+    if (Castor.sheet) Castor.sheet.bind(sheet, {
+      enabled: function () { return !!(els.app && els.app.dataset.mode === 'phone'); },
+      close: function () { closeMore(); }
+    });
     moreEls = { word: word, sheet: sheet, type: type, rule: null };
     return moreEls;
   }
@@ -4422,6 +4428,15 @@
     // a lower stacking context than the docks, so raising the child cannot help.
     if (on && Castor.capsule && els.app && els.app.dataset.mode === 'phone' && Castor.panels) {
       Castor.panels.ids.forEach(function (id) { Castor.panels.close(id); });
+    }
+    // Leaving: a still copy takes the leave (down as the phone's sheet, a short fall as the bar's menu),
+    // the same in every browser (Firefox cannot animate an element out of display: none). Not when
+    // Settings is rising over it, when it was pulled down, or when it is put back under Settings.
+    var shown = !moreEls.sheet.hidden;
+    if (!on && shown && Castor.sheet && Castor.sheet.ghost && !moreEls.sheet.hasAttribute('data-under-push') &&
+        !moreEls.sheet.hasAttribute('data-sheet-dragging') && !moreEls.sheet.hasAttribute('data-sheet-instant')) {
+      moreEls.sheet.setAttribute('data-sheet-shape', els.app && els.app.dataset.mode === 'phone' ? 'sheet' : 'card');
+      try { Castor.sheet.ghost(moreEls.sheet); } catch (e) { /* it still closes; only its leaving is not drawn */ }
     }
     // Unhide before measuring the real preset-filtered rows.
     moreEls.sheet.hidden = !on;

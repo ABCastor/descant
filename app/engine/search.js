@@ -406,6 +406,10 @@
        be in the field: it never selects them. It gives the field the focus only if
        the flap opened some other way and nothing in it has the focus yet. */
     if (lens) lens.setAttribute('aria-expanded', String(isOpen()));
+    // A full-height sheet under the top row on a phone and an iPad held upright (its field stays above
+    // the keyboard), a card under the lens on a laptop (sheet.js). Pulled shut, it closes as Escape
+    // does: the caret goes back where the keys opened it from.
+    if (Castor.sheet) Castor.sheet.popover(panel, { fill: true, pulled: function () { close(true); } });
     panel.addEventListener('toggle', function (e) {
       if (lens) lens.setAttribute('aria-expanded', String(e.newState === 'open'));
       if (e.newState === 'open') {

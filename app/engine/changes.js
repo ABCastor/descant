@@ -180,7 +180,7 @@
         bottom: desktop ? 'auto' : Math.max(0, global.innerHeight - rect.bottom) + 'px',
         maxHeight: (rect.height * .85) + 'px' });
     }
-    S.root.parentNode.appendChild(menu); menu.showModal();
+    S.root.parentNode.appendChild(menu); if (global.Castor && global.Castor.sheet) global.Castor.sheet.dialog(menu); menu.showModal();
   }
   function unchanged(root, block) {
     var p = element('div', 'changes-current-text');

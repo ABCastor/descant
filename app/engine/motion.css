@@ -2,8 +2,9 @@
    Motion and touch: the one kit every moving or pressable thing uses.
 
    Timing follows a native reading app's measured rhythm: a menu or a note 280 ms,
-   the writing bar 290 ms with no overshoot, a sheet 410 ms in and 120 ms out, a
-   side page 500 ms on a critically damped spring, every exit 120 ms. Only
+   the writing bar 290 ms with no overshoot, a sheet 410 ms in and 200 ms out (a
+   sheet crosses most of the screen: in 120 ms it would jump, not slide), a page
+   inside a sheet 500 ms on a critically damped spring, every other exit 120 ms. Only
    transform, translate, scale and opacity move, from CSS (never a script loop: in
    an app's web view script-driven animation runs at 60 fps even on a 120 Hz
    screen). A finger down shows the press on the first frame, with no grey flash
@@ -18,8 +19,8 @@
   --motion-menu: 280ms;      /* menus, the page's menu for selected words, notes, a new comment card, Search */
   --motion-bar: 290ms;       /* the phone's writing bar: up, tucked, back */
   --motion-sheet-in: 410ms;  /* a sheet rising */
-  --motion-sheet-out: 120ms; /* a sheet leaving */
-  --motion-panel: 500ms;     /* a page pushed in from the side (Settings) */
+  --motion-sheet-out: 200ms; /* a sheet leaving */
+  --motion-panel: 500ms;     /* a page pushed in from the side inside a sheet (a Settings choice) */
   --motion-out: 120ms;       /* anything else leaving */
   --motion-fade: 150ms;      /* fades: a sheet's content, a scrim, and every change under Reduce Motion */
   /* Arrive: fast, then settling with no overshoot. Leave: gathering speed. */
@@ -54,7 +55,7 @@ html { -webkit-tap-highlight-color: transparent; }
 @container castorapp (max-width: 700px) {
   .dock { transition: transform var(--motion-sheet-out) var(--ease-leave); }
   .dock[data-open="1"] { transition: transform var(--motion-sheet-in) var(--ease-arrive); }
-  .dock[data-swiping="1"] { transition: none; }
+  .dock[data-swiping="1"], .dock[data-sheet-dragging] { transition: none; }
   .dock .dock-inner { transition: opacity var(--motion-out) linear; }
   .dock[data-open="1"] .dock-inner { transition: opacity var(--motion-fade) linear; }
 }
@@ -62,41 +63,54 @@ html { -webkit-tap-highlight-color: transparent; }
 @container castorapp (min-width: 700.01px) and (max-width: 1100px) {
   #app[data-mode="tablet"] #dock-left, #app[data-mode="tablet"] #dock-right { transition: transform var(--motion-sheet-out) var(--ease-leave); }
   #app[data-mode="tablet"] :is(#dock-left, #dock-right)[data-open="1"] { transition: transform var(--motion-sheet-in) var(--ease-arrive); }
-  #app[data-mode="tablet"] :is(#dock-left, #dock-right)[data-swiping="1"] { transition: none; }
+  #app[data-mode="tablet"] :is(#dock-left, #dock-right):is([data-swiping="1"], [data-sheet-dragging]) { transition: none; }
 }
+/* A list in a sheet stops at its top instead of bouncing: from there the same finger pulls the sheet. */
+#app:is([data-mode="phone"], [data-mode="tablet"]) .dock :is(.dock-inner, .panel-body, .panel) { overscroll-behavior-y: none; }
+/* A laptop's cards (and a wide iPad's) keep their place in the margin and rise into it on the sheet's
+   curve; leaving, they sink and fade in the 120 ms exit, still drawn until they are gone. */
+#app[data-mode="desktop"] .dock {
+  transition: opacity var(--motion-out) var(--ease-leave), transform var(--motion-out) var(--ease-leave), visibility 0s linear var(--motion-out);
+}
+#app[data-mode="desktop"] .dock[data-open="1"] {
+  transition: opacity var(--motion-fade) linear, transform var(--motion-sheet-in) var(--ease-arrive), visibility 0s;
+}
+#app[data-mode="desktop"] .dock[data-sheet-dragging] { transition: none; }
 
-/* ---- Menu (the phone's sheet of everything else) ---------------------------- */
+/* ---- Menu: on the phone the sheet of everything else; elsewhere the bar's More ---------
+   On the phone it rises from the bottom like Comments; the bar's More is a small menu over its
+   button and rises a few pixels into place. Leaving is app.js's: a still copy takes sheet.js's leave
+   (down as a sheet, a short fall as a menu). */
 
 #app #topbar.mast #more-sheet {
   transition: opacity var(--motion-menu) var(--ease-arrive), translate var(--motion-menu) var(--ease-arrive);
 }
 @starting-style {
-  #app #topbar.mast #more-sheet { opacity: 0; translate: 0 -8px; }
-}
-#app #topbar.mast #more-sheet[hidden]:not([data-under-push]) {
-  opacity: 0; translate: 0 -8px;
-  transition: opacity var(--motion-out) var(--ease-leave), translate var(--motion-out) var(--ease-leave), display var(--motion-out) allow-discrete;
+  #app #topbar.mast #more-sheet { opacity: 0; translate: 0 8px; }
 }
 
-/* ---- Settings: a page pushed in from the side, and its own pages ----------- */
-
-.castor-settings[data-sheet][data-pushed]:popover-open { animation-duration: var(--motion-panel); animation-timing-function: var(--ease-settle); }
-#app[data-mode="phone"] #topbar.mast #more-sheet[data-under-push] { animation-duration: var(--motion-panel); animation-timing-function: var(--ease-settle); }
-/* Opened by itself (not pushed from the Menu), Settings rises like a menu. Leaving is motion.js's
-   (Done): WebKit cannot animate a popover after it is hidden. */
-.castor-settings[data-sheet]:popover-open:not([data-pushed]) {
-  transition: opacity var(--motion-menu) var(--ease-arrive), translate var(--motion-menu) var(--ease-arrive);
+#app[data-mode="phone"] #topbar.mast #more-sheet {
+  overscroll-behavior-y: none; transition: translate var(--motion-sheet-in) var(--ease-arrive);
+  /* the grab stroke every sheet carries (see the one sheet, below) */
+  padding-top: 16px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='3'%3E%3Crect width='34' height='3' rx='1.5' fill='%239b9b93' fill-opacity='.55'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: 50% 7px; background-size: 34px 3px;
 }
-@starting-style { .castor-settings[data-sheet]:popover-open:not([data-pushed]) { opacity: 0; translate: 0 8px; } }
+@starting-style {
+  #app[data-mode="phone"] #topbar.mast #more-sheet { opacity: 1; translate: 0 100%; }
+}
+#app #topbar.mast #more-sheet[data-sheet-dragging] { transition: none !important; }
+/* Back from Settings: the Menu was under it all along, so it is simply there. */
+#app #topbar.mast #more-sheet[data-sheet-instant] { transition: none; }
+
+/* ---- Settings ------------------------------------------------------------------
+   Settings is one of the sheets below (sheet.js). Chosen from the phone's Menu it rises over the
+   Menu, which stays under it until it has risen; Back sends it down and the Menu is there. Its own
+   pages (a choice of several) still slide in from the side, inside the sheet. */
+
+#app[data-mode="phone"] #topbar.mast #more-sheet[data-under-push] { display: flex !important; pointer-events: none; }
 .castor-settings[data-sheet] .settings-sub { transition: transform var(--motion-out) var(--ease-leave); }
 .castor-settings[data-sheet] .settings-sub[data-open] { transition: transform var(--motion-panel) var(--ease-settle); }
-
-/* ---- Search ----------------------------------------------------------------- */
-
-@media (prefers-reduced-motion: no-preference) {
-  .find-panel:popover-open { clip-path: none; transition: opacity var(--motion-menu) var(--ease-arrive), translate var(--motion-menu) var(--ease-arrive); }
-  @starting-style { .find-panel:popover-open { opacity: 0; translate: 0 -8px; } }
-}
 
 /* ---- the page's menu for selected words (Copy, Comment, Share) ---------------- */
 
@@ -119,14 +133,55 @@ html { -webkit-tap-highlight-color: transparent; }
 @keyframes motion-drop { from { opacity: 0; translate: 0 -6px; } }
 @keyframes motion-fade-in { from { opacity: 0; } }
 
-/* ---- a writing goal: its sheet and its tick ------------------------------------
-   The sheet rises 8 px into place like a menu (on the phone it drops from under the top row,
-   as the Menu does); leaving is goals.js's 120 ms exit. A reached goal draws its tick in. */
-#app .castor-goal:popover-open { transition: opacity var(--motion-menu) var(--ease-arrive), translate var(--motion-menu) var(--ease-arrive); }
-@starting-style { #app .castor-goal:popover-open { opacity: 0; translate: 0 8px; } }
-@starting-style { #app[data-mode="phone"] .castor-goal:popover-open { opacity: 0; translate: 0 -8px; } }
+/* ---- a writing goal's tick -------------------------------------------------------
+   The goal's sheet is one of the sheets below. A reached goal draws its tick in. */
 .goal-mark .goal-tick { transform-box: fill-box; transform-origin: center; scale: .6; transition: opacity var(--motion-fade) ease-out, scale var(--motion-menu) var(--ease-arrive); }
 .goal-mark[data-state="reached"] .goal-tick { scale: 1; }
+
+/* ---- the one sheet (sheet.js) -----------------------------------------------------
+   Every popover and dialog pane is drawn here as one of two shapes, chosen by sheet.js from the
+   app's own width: data-sheet-shape="sheet" on a phone and an iPad held upright, "card" on a laptop
+   and a wide iPad.
+   - A sheet sits on the bottom edge, full width, 16 px corners on top, a grab stroke at its top, and
+     rises from below the screen exactly as Comments does (410 ms, the arrival curve). data-castor-
+     sheet="fill" reaches up to under the top row (a pane with a field the keyboard comes up for);
+     "fit" is as tall as its content. A keyboard pushes a sheet up (--sheet-kb), never covers it. On
+     an iPad its content keeps a 640 px column in the middle.
+   - A card stays where it stands and rises 12 px into place on the same curve.
+   Leaving is sheet.js's (a still copy takes the 200 ms leave, or the carry of a pull). The geometry
+   is important here on purpose: each pane's own rules place it as a card and must lose to the sheet. */
+[data-castor-sheet][data-sheet-shape="sheet"] {
+  position: fixed !important; inset: auto 0 var(--sheet-kb, 0px) 0 !important; margin: 0 !important;
+  width: auto !important; max-width: none !important; min-width: 0 !important; height: auto !important;
+  max-height: calc(100dvh - 72px - var(--sheet-kb, 0px)) !important;
+  box-sizing: border-box; overflow-x: hidden; overflow-y: auto; overscroll-behavior: none;
+  border: 0 !important; border-top: 1px solid var(--rule) !important;
+  border-radius: var(--radius-sheet, 16px) var(--radius-sheet, 16px) 0 0 !important;
+  padding-top: 20px !important; padding-bottom: max(var(--s4, 16px), env(safe-area-inset-bottom)) !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='34' height='3'%3E%3Crect width='34' height='3' rx='1.5' fill='%239b9b93' fill-opacity='.55'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important; background-position: 50% 7px !important; background-size: 34px 3px !important;
+  box-shadow: var(--shadow-overlay, 0 2px 6px rgba(27, 25, 21, .06), 0 18px 44px rgba(27, 25, 21, .12));
+  translate: 0 0; transform: none;
+  transition: translate var(--motion-sheet-in) var(--ease-arrive);
+}
+[data-castor-sheet="fill"][data-sheet-shape="sheet"] { top: 60px !important; max-height: none !important; }
+[data-castor-sheet][data-sheet-shape="sheet"][data-sheet-wide] {
+  padding-left: max(var(--s5, 24px), calc((100% - 640px) / 2)) !important;
+  padding-right: max(var(--s5, 24px), calc((100% - 640px) / 2)) !important;
+}
+[data-castor-sheet][data-sheet-shape="card"] {
+  transition: opacity var(--motion-fade) linear, translate var(--motion-sheet-in) var(--ease-arrive);
+}
+@starting-style {
+  [data-castor-sheet][data-sheet-shape="sheet"]:is(:popover-open, [open]) { translate: 0 100%; transform: none; opacity: 1; clip-path: none; }
+  [data-castor-sheet][data-sheet-shape="card"]:is(:popover-open, [open]) { translate: 0 12px; transform: none; opacity: 0; clip-path: none; }
+}
+[data-castor-sheet][data-sheet-dragging] { transition: none !important; }
+/* The pane itself takes the focus as it opens (so Tab starts inside it); its edge is the sheet's own,
+   not a focus ring round the whole sheet. Its controls keep theirs. */
+[data-castor-sheet]:focus, [data-castor-sheet]:focus-visible { outline: none; }
+/* What a dialog dims behind it is light, and comes with it. */
+dialog[data-castor-sheet]::backdrop { background: var(--scrim, rgba(18, 17, 14, .14)); animation: motion-fade-in var(--motion-sheet-in) var(--ease-arrive); }
 
 /* ---- the phone's floating writing bar ---------------------------------------
    Up with the keyboard and back from its tucked end in 290 ms, no overshoot;
@@ -163,7 +218,8 @@ html { -webkit-tap-highlight-color: transparent; }
   }
   /* The surfaces that come and go fade where they rest. */
   .dock, .dock .dock-inner, #app #topbar.mast #more-sheet, .castor-settings[data-sheet], .castor-settings[data-sheet] .settings-sub,
-  .find-panel, .selection-menu, .castor-posted, .command-island, .command-island-tuck, .walkthrough-card, #app .castor-goal, .goal-mark .goal-tick {
+  .find-panel, .selection-menu, .castor-posted, .command-island, .command-island-tuck, .walkthrough-card, #app .castor-goal, .goal-mark .goal-tick,
+  [data-castor-sheet] {
     transform: none !important; translate: none !important; scale: none !important;
     transition-property: opacity, visibility, display, overlay !important;
     transition-duration: var(--motion-fade) !important;
@@ -174,9 +230,11 @@ html { -webkit-tap-highlight-color: transparent; }
     #app:not([data-mode="desktop"]) .dock:not([data-open="1"]) { opacity: 0; visibility: hidden; pointer-events: none; }
   }
   .castor-settings[data-sheet] .settings-sub:not([data-open]) { opacity: 0; visibility: hidden; }
-  @starting-style { .find-panel:popover-open, .castor-settings[data-sheet]:popover-open:not([data-pushed]), #app .castor-goal:popover-open, #app[data-mode="phone"] .castor-goal:popover-open { opacity: 0; } }
-  .castor-thread-slot.is-floating, .castor-posted, .castor-settings[data-sheet][data-pushed]:popover-open {
+  /* Named with its shape, so it outweighs the sheet's own starting style (opaque, below the screen). */
+  @starting-style { [data-castor-sheet][data-sheet-shape]:is(:popover-open, [open]), #app[data-mode] #topbar.mast #more-sheet { opacity: 0; } }
+  dialog[data-castor-sheet]::backdrop { animation-duration: var(--motion-fade) !important; }
+  .castor-thread-slot.is-floating, .castor-posted {
     animation: motion-fade-in var(--motion-fade) ease-out !important;
   }
-  #app[data-mode="phone"] #topbar.mast #more-sheet[data-under-push] { animation: none !important; display: none !important; }
+  #app[data-mode="phone"] #topbar.mast #more-sheet[data-under-push] { display: none !important; }
 }

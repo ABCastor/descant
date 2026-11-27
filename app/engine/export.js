@@ -97,6 +97,7 @@
     dialog.addEventListener('close', finish);
     dialog.appendChild(explanation); dialog.appendChild(field); dialog.appendChild(close);
     document.body.appendChild(dialog);
+    if (global.Castor && global.Castor.sheet) global.Castor.sheet.dialog(dialog);
     if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', '');
     field.focus(); field.select();
     return dialog;

@@ -597,7 +597,7 @@
     foot.appendChild(go); dialog.appendChild(foot);
     var putBack = liftWashes();
     dialog.addEventListener('close', function () { putBack(); dialog.remove(); });
-    screen.appendChild(dialog); dialog.showModal();
+    screen.appendChild(dialog); if (global.Castor && global.Castor.sheet) global.Castor.sheet.dialog(dialog); dialog.showModal();
   }
 
   Castor.drafts = Castor.versions = {

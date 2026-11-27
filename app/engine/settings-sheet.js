@@ -218,32 +218,9 @@
     if (menu) menu.removeAttribute('data-under-push');
   }
   /* Escape and a tap outside close the popover natively (light dismiss), and WebKit cannot animate a
-     popover once it is hidden. So as it closes that way, a still copy of it, exactly where it stood,
-     takes the same 120 ms leave Done takes (motion.js), then goes: three ways out, one motion, with
-     the popover's own light dismiss kept. A close asked from inside it (Done, Back, a row) has none. */
+     popover once it is hidden: sheet.js lets a still copy take the leave in its place (down as a sheet,
+     a short fall as a card). A close asked from inside it (Done, Back, a row) draws its own leave. */
   var askedInside = 0;
-  function copyLeaves() {
-    if (!Castor.motion || !Castor.motion.leave || !panel.getBoundingClientRect || !global.getComputedStyle) return;
-    var at = panel.getBoundingClientRect();
-    if (!at.width || !at.height) return;
-    var style = global.getComputedStyle(panel), copy = panel.cloneNode(true), i;
-    // Same classes, attributes and place in the page, so the page's rules draw it as they draw the
-    // popover; it keeps the popover attribute those rules name. Never shown as a popover, it differs
-    // only by what open popovers get: its display (an inline one wins over a closed popover's none)
-    // and its place, held where the popover stood, over everything.
-    ['position:fixed', 'display:' + style.display, 'opacity:' + style.opacity, 'left:' + at.left + 'px', 'top:' + at.top + 'px', 'right:auto', 'bottom:auto', 'width:' + at.width + 'px', 'height:' + at.height + 'px',
-      'margin:0', 'box-sizing:border-box', 'translate:none', 'transform:none', 'animation:none', 'transition:none', 'z-index:2147483000', 'pointer-events:none']
-      .forEach(function (pair) { var k = pair.indexOf(':'); copy.style.setProperty(pair.slice(0, k), pair.slice(k + 1)); });
-    copy.setAttribute('aria-hidden', 'true');
-    copy.setAttribute('data-leaving-copy', '');
-    copy.inert = true;
-    // After the popover in the page, so every id still finds the real one first.
-    panel.parentNode.insertBefore(copy, panel.nextSibling);
-    copy.scrollTop = panel.scrollTop;
-    var subs = panel.querySelectorAll('.settings-sub'), copies = copy.querySelectorAll('.settings-sub');
-    for (i = 0; i < subs.length && i < copies.length; i++) copies[i].scrollTop = subs[i].scrollTop;
-    Castor.motion.leave(copy, function () { if (copy.parentNode) copy.parentNode.removeChild(copy); });
-  }
   function wire() {
     panel = doc.getElementById('castor-settings');
     if (!panel || wired) return;
@@ -256,35 +233,43 @@
         else if (event.target && panel.contains(event.target)) askedInside = Date.now();
       }, true);
     });
-    panel.addEventListener('beforetoggle', function (event) {
-      if (event.newState !== 'closed' || panel._castorLeaving || Date.now() - askedInside < 1000) return;
-      try { copyLeaves(); } catch (e) { /* the popover still closes; only its leaving is not drawn */ }
-    });
+    // One of the sheets: full height under the top row on the phone (as the Menu is), as tall as it
+    // needs on an iPad held upright, a card in its corner on a laptop.
+    if (Castor.sheet) Castor.sheet.popover(panel, { fill: phone, handle: '.settings-head, .settings-sub-head', ghost: function () { return Date.now() - askedInside >= 1000; } });
+    function leaveThen(then) {
+      if (Castor.sheet) Castor.sheet.leave(panel, then);
+      else if (Castor.motion) Castor.motion.leave(panel, then);
+      else then();
+    }
     var done = doc.getElementById('settings-done'), back = doc.getElementById('settings-back');
     if (done) done.addEventListener('click', function () {
       if (!panel.hidePopover) return;
-      if (Castor.motion) Castor.motion.leave(panel, function () { panel.hidePopover(); });
-      else panel.hidePopover();
+      leaveThen(function () { panel.hidePopover(); });
     });
     if (back) back.addEventListener('click', function () {
-      if (panel.hidePopover) panel.hidePopover();
-      // After this tap has finished, or the Menu's own outside-tap rule would close it again.
       endPush();
-      global.setTimeout(function () { var menu = doc.getElementById('more-word'); if (menu) menu.click(); }, 0);
+      // The Menu is put back under Settings at once (it was there all along), and Settings goes down
+      // off it. After this tap has finished, or the Menu's own outside-tap rule would close it again.
+      var sheet = doc.getElementById('more-sheet');
+      if (sheet) sheet.setAttribute('data-sheet-instant', '');
+      global.setTimeout(function () {
+        var menu = doc.getElementById('more-word'); if (menu) menu.click();
+        global.requestAnimationFrame(function () { global.requestAnimationFrame(function () { if (sheet) sheet.removeAttribute('data-sheet-instant'); }); });
+      }, 0);
+      leaveThen(function () { if (panel.hidePopover) panel.hidePopover(); });
     });
-    // Settings chosen from the phone's Menu is a page pushed from it, with the way back.
+    // Settings chosen from the phone's Menu rises over it, with the way back.
     doc.addEventListener('click', function (event) {
       var hit = event.target.closest && event.target.closest('#menu-settings');
       if (!hit) return;
       fromMenu = true;
-      // Marked before the sheet opens, so its first frame is already off to the right.
       if (phone()) panel.setAttribute('data-pushed', '');
-      // The Menu stays painted under the page being pushed over it, then goes.
+      // The Menu stays painted under Settings while Settings rises over it, then goes.
       var menu = doc.getElementById('more-sheet');
       if (menu && phone()) {
         endPush();
         menu.setAttribute('data-under-push', '');
-        pushTimer = global.setTimeout(endPush, 340);
+        pushTimer = global.setTimeout(endPush, (Castor.motion ? Castor.motion.ms('sheet-in') : 410) + 60);
       }
     }, true);
     panel.addEventListener('toggle', function (event) {

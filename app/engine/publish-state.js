@@ -312,7 +312,7 @@
     hideSheet(); sheet = el('dialog'); sheet.className = 'descant-publish-sheet';
     sheet.setAttribute('aria-label', title); sheet.appendChild(el('h2', title));
     var opened = sheet; sheet.addEventListener('close', function () { if (sheet === opened) hideSheet(); });
-    D.body.appendChild(sheet); sheet.showModal(); return sheet;
+    D.body.appendChild(sheet); if (global.Castor && global.Castor.sheet) global.Castor.sheet.dialog(sheet); sheet.showModal(); return sheet;
   }
   function showDiff() {
     if (C.changes && C.changes.open) { hideSheet(); C.changes.open('website'); return Promise.resolve(); }

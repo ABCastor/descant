@@ -43,7 +43,7 @@
     var retry = button('Try again',load); retry.hidden = true; box.appendChild(retry);
     box.appendChild(button('Close',close));
     box.addEventListener('close',function () { if (sheet === box) close(); });
-    D.body.appendChild(box); box.showModal();
+    D.body.appendChild(box); if (global.Castor && global.Castor.sheet) global.Castor.sheet.dialog(box); box.showModal();
     function current() { return sheet === box && held === epoch && article === path() && who === founder(); }
     function render(data) {
       access.replaceChildren(el('h3','Who has access'));

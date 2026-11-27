@@ -579,7 +579,6 @@
     var inner = el('div', 'dock-inner');
     var grab = el('div', 'sheet-grabber');
     grab.setAttribute('aria-hidden', 'true');
-    grab.addEventListener('pointerdown', onSheetPointerDown);
     inner.appendChild(grab);
     clip.appendChild(inner);
     var rez = el('div', 'dock-resizer');
@@ -590,6 +589,7 @@
     rez.addEventListener('keydown', onResizeKey);
     dockEl.appendChild(clip);
     dockEl.appendChild(rez);
+    wireSheetPull(dockEl);
   }
 
   function renderSide(side) {
@@ -598,6 +598,13 @@
     var inner = dock.querySelector('.dock-inner');
     var grab = inner.querySelector('.sheet-grabber');
     var ids = visibleIds(side);
+    clearTimeout(leavingTimers[side]);
+    if (!ids.length && dock.dataset.open === '1' && inner.querySelector('.panel')) {
+      dock.dataset.open = '0';
+      dock.setAttribute('aria-hidden', 'true');
+      leavingTimers[side] = setTimeout(function () { if (!visibleIds(side).length) renderSide(side); }, exitMs() + 60);
+      return;
+    }
     /* Collapse exists to share a column between stacked panels. A panel alone in
        its column always shows its body and offers no Collapse. */
     var stacked = ids.length > 1;
@@ -944,42 +951,30 @@
     save();
   }
 
-  /* --- the phone bottom sheet --------------------------------------------- */
+  /* --- the sheet: pulled down, it closes (sheet.js) -------------------------- */
 
-  var swipe = null;
-
-  function onSheetPointerDown(e) {
-    if (state.mode !== 'phone') return;
-    var dock = e.currentTarget.closest('.dock');
-    swipe = { dock: dock, y0: e.clientY, dy: 0, t0: Date.now() };
-    dock.dataset.swiping = '1';
-    e.currentTarget.setPointerCapture(e.pointerId);
-    window.addEventListener('pointermove', onSheetMove);
-    window.addEventListener('pointerup', onSheetUp, { once: true });
-    e.preventDefault();
+  /* A finger anywhere on the sheet (once its list is at the top), or the mouse on its grab handle
+     or its head, pulls it; let go far or fast enough and everything on that side closes. On a
+     laptop's card only a finger pulls (the mouse drags a card's head to move it). */
+  function wireSheetPull(dock) {
+    if (!Castor.sheet || !Castor.sheet.bind) return;
+    Castor.sheet.bind(dock, {
+      handle: '.sheet-grabber, .panel-head',
+      enabled: function (kind) { return state.mode !== 'desktop' || kind === 'touch'; },
+      close: function () {
+        var side = dock === els.left ? 'left' : 'right';
+        openIds(side).forEach(function (id) { delete state.open[id]; if (state.summoned === id) state.summoned = null; });
+        sync();
+      }
+    });
   }
 
-  function onSheetMove(e) {
-    if (!swipe) return;
-    swipe.dy = Math.max(0, e.clientY - swipe.y0);
-    swipe.dock.style.setProperty('--sheet-y', swipe.dy + 'px');
-  }
-
-  function onSheetUp() {
-    window.removeEventListener('pointermove', onSheetMove);
-    if (!swipe) return;
-    var fast = swipe.dy / Math.max(1, Date.now() - swipe.t0) > 0.5;
-    delete swipe.dock.dataset.swiping;
-    swipe.dock.style.removeProperty('--sheet-y');
-    var shut = swipe.dy > 60 || fast;
-    var dock = swipe.dock;
-    swipe = null;
-    if (shut) {
-      if (Castor.motion) Castor.motion.haptic('snap');
-      var side = dock === els.left ? 'left' : 'right';
-      openIds(side).forEach(function (id) { delete state.open[id]; });
-      sync();
-    }
+  /* A closing dock keeps its panels on it until it has left, so what slides away is the sheet
+     you were looking at, not an empty one. */
+  var leavingTimers = {};
+  function exitMs() {
+    var m = Castor.motion && Castor.motion.ms;
+    return m ? (state.mode === 'desktop' ? m('out') : m('sheet-out')) : DUR;
   }
 
   /* --- mode ---------------------------------------------------------------- */

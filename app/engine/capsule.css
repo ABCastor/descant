@@ -504,15 +504,8 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
 .castor-settings[data-sheet] .settings-sub .cw-reading-options button { font-size: 17px; }
 .castor-settings[data-sheet] .settings-sub .cw-reading-options small { margin-left: auto; font-size: 13px; }
 .castor-settings[data-sheet] .settings-sub #descant-offline { padding: 0 4px; }
-/* A pushed page has this one entrance: the popover's own fade-in would run again after it (WebKit). */
-.castor-settings[data-sheet][data-pushed]:popover-open { animation: settings-push .32s cubic-bezier(.32, .72, 0, 1); transition: none; }
-#app[data-mode="phone"] #topbar.mast #more-sheet[data-under-push] { display: block !important; animation: menu-under-push .32s cubic-bezier(.32, .72, 0, 1) forwards; pointer-events: none; }
-@keyframes menu-under-push { to { transform: translateX(-28%); filter: brightness(.9); } }
-@keyframes settings-push { from { transform: translateX(100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .castor-settings[data-sheet] .settings-sub { transition: none; }
-  .castor-settings[data-sheet][data-pushed]:popover-open { animation: none; }
-  #app[data-mode="phone"] #topbar.mast #more-sheet[data-under-push] { display: none !important; }
 }
 /* Touch keyboards replace, rather than add to, the top row. */
 #app .command-island[data-arrangement="writing"] {

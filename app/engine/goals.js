@@ -487,25 +487,15 @@
     close();
   }
 
-  /* Arriving is CSS (motion.css). Leaving takes the kit's 120 ms exit before the popover hides:
-     Done animates the sheet itself; Escape and a tap outside close it natively (WebKit cannot
-     animate a hidden popover), so a still copy of it takes the same exit where it stood. */
-  function leaveFrames(phone) {
-    return C.motion && C.motion.reduced() ? [{ opacity: 1 }, { opacity: 0 }]
-      : [{ opacity: 1, translate: '0 0' }, { opacity: 0, translate: phone ? '0 -8px' : '0 8px' }];
-  }
-  function phone() { var app = D.getElementById('app'); return !!(app && app.dataset.mode === 'phone'); }
-  function animateOut(node, then) {
-    if (!node.animate) { then(); return; }
-    var calm = C.motion && C.motion.reduced();
-    var motion = node.animate(leaveFrames(phone()), { duration: C.motion ? C.motion.ms(calm ? 'fade' : 'out') : 120, easing: calm ? 'ease-out' : 'cubic-bezier(.4, 0, 1, 1)', fill: 'forwards' });
-    motion.onfinish = function () { then(); motion.cancel(); };
-  }
+  /* Arriving and leaving are the one sheet's (sheet.js): Done sends the sheet itself away; Escape and a
+     tap outside close it natively (WebKit cannot animate a hidden popover), so a still copy of it
+     takes the same leave where it stood. */
   function close() {
     var panel = ui.panel;
     if (!panel || !isOpen() || panel._leaving) return;
     panel._leaving = true;
-    animateOut(panel, function () { panel._leaving = false; try { panel.hidePopover(); } catch (e) { /* already closed */ } });
+    var hide = function () { panel._leaving = false; try { panel.hidePopover(); } catch (e) { /* already closed */ } };
+    if (C.sheet) C.sheet.leave(panel, hide); else hide();
   }
   function wireLeaving(panel) {
     ['pointerdown', 'keydown'].forEach(function (name) {
@@ -523,21 +513,7 @@
     });
     global.addEventListener('pointerdown', function () { ui.pointerAt = Date.now(); }, true);
     global.addEventListener('keydown', function () { ui.pointerAt = 0; }, true);
-    panel.addEventListener('beforetoggle', function (event) {
-      if (event.newState !== 'closed' || panel._leaving || Date.now() - ui.askedInside < 1000) return;
-      try {
-        var at = panel.getBoundingClientRect();
-        if (!at.width || !at.height) return;
-        var copy = panel.cloneNode(true);
-        ['position:fixed', 'display:block', 'left:' + at.left + 'px', 'top:' + at.top + 'px', 'right:auto', 'bottom:auto', 'width:' + at.width + 'px',
-          'height:' + at.height + 'px', 'margin:0', 'inset:auto', 'translate:none', 'transition:none', 'animation:none', 'z-index:2147483000', 'pointer-events:none']
-          .forEach(function (pair) { var k = pair.indexOf(':'); copy.style.setProperty(pair.slice(0, k), pair.slice(k + 1)); });
-        copy.removeAttribute('id'); copy.removeAttribute('popover'); copy.setAttribute('aria-hidden', 'true'); copy.inert = true;
-        Array.prototype.forEach.call(copy.querySelectorAll('[id]'), function (n) { n.removeAttribute('id'); });
-        panel.parentNode.insertBefore(copy, panel.nextSibling);
-        animateOut(copy, function () { if (copy.parentNode) copy.parentNode.removeChild(copy); });
-      } catch (e) { /* it still closes; only its leaving is not drawn */ }
-    });
+    if (C.sheet) C.sheet.popover(panel, { handle: '.goal-head', ghost: function () { return !panel._leaving && Date.now() - ui.askedInside >= 1000; } });
   }
   function open() {
     if (!founder() || !articlePath()) return;

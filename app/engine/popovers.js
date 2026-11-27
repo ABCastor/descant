@@ -19,6 +19,8 @@
     opener.setAttribute('aria-expanded', 'false');
     opener.setAttribute('aria-haspopup', 'dialog');
     panel.setAttribute('popover', 'auto');
+    // Every pane bound here comes and goes as the one sheet (sheet.js).
+    if (C.sheet && C.sheet.popover) C.sheet.popover(panel);
     if (panel.getAttribute && /^(alertdialog|dialog)$/.test(panel.getAttribute('role') || '')) {
       panel.setAttribute('tabindex', '-1');
       panel.setAttribute('aria-modal', 'true');

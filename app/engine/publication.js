@@ -134,7 +134,7 @@
         .catch(function (error) { if (captured === epoch) card._error = error.message; })
         .finally(function () { if (captured === epoch) { busy = false; controls(); if (card._error) { say(card._error); card._error = ''; } } });
     }));
-    D.body.appendChild(dialog); dialog.showModal();
+    D.body.appendChild(dialog); if (global.Castor && global.Castor.sheet) global.Castor.sheet.dialog(dialog); dialog.showModal();
   }
   function mount(context) {
     ctx = context;
