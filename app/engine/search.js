@@ -213,13 +213,20 @@
       var c = row.cmd;
       return { title: c.title, detail: c.available ? [c.hint, c.keys].filter(Boolean).join(' · ') : 'not in this page' };
     }
-    var h = row.hit;
-    if (row.kind === 'title') return { title: h.title, detail: here ? 'The article you are in' : 'Open the article', mark: true };
+    var h = row.hit, label = typeof h.label === 'string' && h.label ? h.label : '';
+    // A writer's private label names the piece beside its title: the title, then " · label".
+    var name = label ? h.title + ' \u00b7 ' + label : h.title;
+    if (row.kind === 'title') {
+      // Found by its label: the marked words are the label's, after the title.
+      var byLabel = label && h.snippet === label && h.snippet !== h.title;
+      return { title: name, detail: here ? 'The article you are in' : 'Open the article', mark: true,
+        match: byLabel && h.match ? [h.match[0] + name.length - label.length, h.match[1] + name.length - label.length] : h.match };
+    }
     if (row.kind === 'comment') {
       return { title: h.snippet, mark: true,
-        detail: (h.author ? h.author + ', on ' : 'On ') + (here ? 'this article' : h.title) };
+        detail: (h.author ? h.author + ', on ' : 'On ') + (here ? 'this article' : name) };
     }
-    return { title: h.snippet, mark: true, detail: here ? 'This article' : h.title };
+    return { title: h.snippet, mark: true, detail: here ? 'This article' : name };
   }
 
   function render(q, hits, more, commands) {
@@ -265,7 +272,7 @@
         b.setAttribute('aria-selected', 'false');
         if (row.kind === 'command' && !row.cmd.available) b.setAttribute('aria-disabled', 'true');
         var title = el('strong', 'search-result-title');
-        if (said.mark) marked(title, said.title, q, row.hit && row.hit.match); else title.textContent = said.title;
+        if (said.mark) marked(title, said.title, q, said.match || (row.hit && row.hit.match)); else title.textContent = said.title;
         b.appendChild(title);
         if (said.detail) b.appendChild(el('small', 'search-result-detail', said.detail));
         b.addEventListener('mousedown', function (e) { e.preventDefault(); });   // the field keeps the focus
@@ -443,6 +450,7 @@
   }
 
   Castor.search = {
+    describe: describe,
     open: open,
     close: function () { close(false); },
     isOpen: isOpen,

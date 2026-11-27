@@ -66,6 +66,11 @@ def local_graph(root, centre_path, folders, safe, live_record):
                           "live": "live-matching" if live and live["matches"] else "live-changed" if live else "none",
                           "draft": fields.get("published") is not True,
                           "receipt": live, "tags": tags(fields, raw), "targets": link_targets(body)}
+        # The writers' private label tells two pieces with one title apart. This graph is the
+        # writers' own (the server never gives it to readers); the public graph never reads it.
+        label = fields.get("label")
+        if isinstance(label, str) and " ".join(label.split()):
+            articles[path]["label"] = " ".join(label.split())[:100]
         for alias in (title, folder.name, path, path[:-3]):
             aliases.setdefault(alias.casefold(), path)
     # A public slug wins over an ambiguous title or folder alias.
@@ -84,7 +89,7 @@ def local_graph(root, centre_path, folders, safe, live_record):
         shared = sorted(centre["tags"] & article["tags"])
         if not (outgoing or incoming or shared):
             continue
-        nodes.append({key: article[key] for key in ("kind", "path", "title", "slug", "live", "draft")})
+        nodes.append({key: article[key] for key in ("kind", "path", "title", "slug", "live", "draft", "label") if key in article})
         if outgoing or incoming:
             edges.append({"from": centre_path if outgoing else path, "to": path if outgoing else centre_path,
                           "kind": "link", "both": outgoing and incoming})
@@ -103,5 +108,5 @@ def local_graph(root, centre_path, folders, safe, live_record):
             if checked is not None and checked.is_file():
                 sources.append({"kind": "material", "name": file.relative_to(materials).as_posix(),
                                 "path": path, "size": checked.stat().st_size})
-    return {"centre": {key: centre[key] for key in ("path", "title", "slug")} | {"live": centre["receipt"]},
+    return {"centre": {key: centre[key] for key in ("path", "title", "slug", "label") if key in centre} | {"live": centre["receipt"]},
             "nodes": nodes, "sources": sources, "edges": edges}

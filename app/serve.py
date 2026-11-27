@@ -588,9 +588,10 @@ def sandbox_path(root, relative, allow_root=False):
 def commit_files(changes, subject, people=None, trailers=None, move=None, writing_save=None):
     """Commit exact bounded bytes, including an unchanged candidate retained by a crash.
 
-    `writing_save` names the article.md among the changes that holds a writer's words: the
-    check then reads it as it reads a typed save, so a writing rule (an em dash) holds the
-    article back from publishing instead of refusing the words."""
+    `writing_save` names the article.md among the changes that holds a writer's words (or a
+    tuple of the files that do, an article and a version swapped together): the check then
+    reads them as it reads a typed save, so a writing rule (an em dash) holds the article back
+    from publishing instead of refusing the words."""
     if getattr(READ_ONLY_CAPTURE, 'active', False):
         raise ValueError('offline-read-only')
     relative = [target.relative_to(REPO_ROOT).as_posix() for target in changes]
@@ -666,7 +667,8 @@ def commit_files(changes, subject, people=None, trailers=None, move=None, writin
             added = git("add", "--", *staging)
             if added.returncode:
                 raise ValueError(said("the server could not record this save in the article’s history; this save waits", added.stderr))
-        gate = subprocess.run([str(REPO_ROOT / "check.sh"), *(["--writing-save", writing_save] if writing_save else [])],
+        saves = [writing_save] if isinstance(writing_save, str) else list(writing_save or ())
+        gate = subprocess.run([str(REPO_ROOT / "check.sh"), *[arg for each in saves for arg in ("--writing-save", each)]],
                               cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
         if gate.returncode:
             held, refused = gate_failures(gate.stdout + "\n" + gate.stderr) if writing_save else ([], [""])
@@ -1182,14 +1184,23 @@ def site_publishers(name):
 EDITION_KEYS = ("edition", "site", "url", "published_at", "article_sha256", "commit")
 
 
+def edition_fields(entry):
+    """An edition's public fields, plus the writers' name of the variant it published, when recorded."""
+    shown = {key: entry.get(key) for key in EDITION_KEYS}
+    variant = entry.get("variant")
+    if isinstance(variant, str) and one_line_name(variant):
+        shown["variant"] = one_line_name(variant)
+    return shown
+
+
 def live_editions(record):
     """A record's numbered editions, keeping only their public fields. A record written before
     editions existed is Edition 1, from its own fields."""
     found = record.get("editions")
     if isinstance(found, list):
-        return [{key: entry.get(key) for key in EDITION_KEYS} for entry in found
+        return [edition_fields(entry) for entry in found
                 if isinstance(entry, dict) and type(entry.get("edition")) is int and entry["edition"] >= 1]
-    return [dict({key: record.get(key) for key in EDITION_KEYS}, edition=1)]
+    return [dict(edition_fields(record), edition=1)]
 
 
 def article_path(value):
@@ -1220,6 +1231,47 @@ def draft_field(text, name, default=""):
     except ValueError:
         pass
     return value if isinstance(value, str) else default
+
+
+PRIVATE_FIELDS = ("label", "variant")
+
+
+def private_names(markdown):
+    """The writer-only names in an article's front matter: `label` (which piece this is) and
+    `variant` (which of its texts the article holds now). Never published, never sent to readers."""
+    return {key: value for key in PRIVATE_FIELDS for value in [" ".join(draft_field(markdown, key).split())] if value}
+
+
+def without_private_names(markdown):
+    """The text with its writer-only front matter lines left out, for a reader."""
+    header = draft_header(markdown)
+    if not header:
+        return markdown
+    kept = [line for line in header.split("\n") if not re.match(r"(?:%s):" % "|".join(PRIVATE_FIELDS), line)]
+    return "\n".join(kept) + markdown[len(header):]
+
+
+def frontmatter_with(header, key, value):
+    """The front matter block with one plain line `key: "value"` set; every other line as it was."""
+    lines = header[:-1].split("\n")
+    hits = [n for n in range(1, len(lines) - 1) if re.match(re.escape(key) + r":", lines[n])]
+    if len(hits) > 1:
+        raise ValueError("Keep one %s in the front matter." % key)
+    line = key + ": " + json.dumps(value, ensure_ascii=False)
+    if hits:
+        lines[hits[0]] = line
+    else:
+        lines.insert(len(lines) - 1, line)
+    return "\n".join(lines) + "\n"
+
+
+def one_line_name(value):
+    """A version name: one line of 1 to 100 characters, or '' when it is not one."""
+    text = str(value if value is not None else "")
+    if re.search(r"[\x00-\x1f\x7f\u2028\u2029]", text):
+        return ""
+    text = " ".join(text.split())
+    return text if 1 <= len(text) <= 100 else ""
 
 
 def draft_entry(path, text=None):
@@ -2046,23 +2098,31 @@ def frontmatter_end(lines):
         return -1
 
 
-def search_article(path, folder, title, markdown, needle):
-    """(title hits, text hits, comment hits) for one article; `needle` is lower case."""
+def search_article(path, folder, title, markdown, needle, private=True):
+    """(title hits, text hits, comment hits) for one article; `needle` is lower case. A writer's
+    search also finds a piece by its label (`private`); every hit then carries the label."""
     titles, texts, comments = [], [], []
     lines = markdown.splitlines()
     end = frontmatter_end(lines)
+    label = private_names(markdown).get("label", "") if private else ""
+    named = {"label": label} if label else {}
     if needle in title.lower():
         line = next((n + 1 for n, text in enumerate(lines[:end + 1]) if text.startswith("title:")), 1)
         at = title.lower().find(needle)
         titles.append({"path": path, "title": title, "kind": "title", "snippet": title, "line": line,
-                       "match": [utf16(title[:at]), utf16(title[:at + len(needle)])]})
+                       "match": [utf16(title[:at]), utf16(title[:at + len(needle)])], **named})
+    elif needle in label.lower():
+        line = next((n + 1 for n, text in enumerate(lines[:end + 1]) if text.startswith("label:")), 1)
+        at = label.lower().find(needle)
+        titles.append({"path": path, "title": title, "kind": "title", "snippet": label, "line": line,
+                       "match": [utf16(label[:at]), utf16(label[:at + len(needle)])], **named})
     for n, text in enumerate(lines):
         if n <= end:
             continue
         found = search_snippet(text, needle)
         if found:
             texts.append({"path": path, "title": title, "kind": "text",
-                          "snippet": found[0], "match": found[1], "line": n + 1})
+                          "snippet": found[0], "match": found[1], "line": n + 1, **named})
     review = folder / "review"
     targets = comment_files(review)
     for target in targets:
@@ -2095,7 +2155,7 @@ def search_article(path, folder, title, markdown, needle):
                                  **{k: said[k] for k in ("by", "principal", "model") if said.get(k)},
                                  **({"onBehalfOf": credit} if said.get("by") == "agent" and not said.get("principal") and
                                     (credit := (credited_messages(target) + [None] * (at + 1))[at]) else {}),
-                                 "quote": thread["anchor"]["quote"]})
+                                 "quote": thread["anchor"]["quote"], **named})
     return titles, texts, comments
 
 
@@ -3344,6 +3404,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "phase": head.get("phase", ""),
                 "owner": head.get("owner", ""),
                 **({"group": head["group"]} if head.get("group") else {}),
+                **({} if hasattr(self, "reviewer") else private_names(markdown)),
                 "locked": self.piece_locked(path),
                 "live": bool(self.article_live_record(path)),
             })
@@ -3390,7 +3451,7 @@ class Handler(SimpleHTTPRequestHandler):
             except (OSError, UnicodeError):
                 continue
             title = (build.frontmatter_title(markdown, folder.name) if build else None) or folder.name
-            found = search_article(path, folder, title, markdown, needle)
+            found = search_article(path, folder, title, markdown, needle, private=not hasattr(self, "reviewer"))
             titles += found[0]
             texts += found[1]
             comments += found[2]
@@ -3428,6 +3489,12 @@ class Handler(SimpleHTTPRequestHandler):
             article_bytes = shown.stdout
             markdown = point_media(article_bytes.decode("utf-8"), media)
         versions = piece_versions(path, media)
+        names = {} if draft_path(path) else private_names(markdown)
+        if hasattr(self, "reviewer"):
+            # A reader never sees the writers' private names, in the text or in its saves.
+            names, markdown = {}, without_private_names(markdown)
+            versions = [dict(v, markdown=without_private_names(v["markdown"])) if isinstance(v.get("markdown"), str) else v
+                        for v in versions]
         build = build_module()
         title = draft_entry(path)["title"] if draft_path(path) else (build.frontmatter_title(markdown, folder.name) if build else folder.name)
         piece_name = path.split("/drafts/", 1)[0] if draft_path(path) else folder.relative_to(REPO_ROOT).as_posix()
@@ -3435,6 +3502,7 @@ class Handler(SimpleHTTPRequestHandler):
         return self.reply(200, {
             "path": path,
             "title": title,
+            **names,
             "folder": piece_name,
             "markdown": markdown,
             "versions": versions,
@@ -3677,7 +3745,9 @@ class Handler(SimpleHTTPRequestHandler):
                     text = ("---\ntitle: " + json.dumps(title, ensure_ascii=False) + "\nby: " + json.dumps(name, ensure_ascii=False) +
                             "\nbase: " + git("log", "-1", "--format=%H", "--", piece + "/article.md").stdout.strip() + "\n---\n" +
                             article[len(draft_header(article)):])
-                sha = commit_files({target: text.encode("utf-8")}, "Create draft " + target.name, writing_session(who))
+                # A copy holds the writer's words as the article does, typed trailing spaces included.
+                sha = commit_files({target: text.encode("utf-8")}, "Create draft " + target.name, writing_session(who),
+                                   writing_save=path if body.get("copy") is True else None)
                 return self.reply(200, dict(draft_entry(path), ok=True, sha=sha))
             path = draft_path(body.get("path"))
             if not path or not path.startswith(piece + "/drafts/"):
@@ -3732,6 +3802,8 @@ class Handler(SimpleHTTPRequestHandler):
                     replacement = re.sub(r"(\r?\n)---(\r?\n)?$", lambda m: m.group(1) + field + m.group(1) + "---" + (m.group(2) or ""), header, count=1)
                 sha = commit_files({target: (replacement + text[len(header):]).encode("utf-8")},
                                    ("Hide draft " if body["hidden"] else "Show draft ") + target.name, writing_session(who))
+            elif action == "current":
+                return self.make_version_current(piece, who, path, target, text, header, body)
             elif action == "move":
                 article = piece + "/article.md"
                 if article in LOCKED_PIECES:
@@ -3749,6 +3821,57 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 return self.reply(400, {"error": "Unknown draft action."})
             return self.reply(200, dict(draft_entry(path), ok=True, sha=sha))
+
+    def make_version_current(self, piece, who, path, target, text, header, body):
+        """A version becomes the article; the article's text becomes a version. One commit holds
+        both texts, so neither is ever only in history. The article keeps its own front matter
+        (title, label, everything published or private) and names the variant it now holds. The
+        writer's own version leaves the list, its text being the article now; another writer's
+        stays theirs. Callers hold WRITE_LOCK and have checked that the version is current."""
+        article = piece + "/article.md"
+        if article in LOCKED_PIECES:
+            return self.reply(423, {"error": "The article is locked by another writer."})
+        if not draft_current(article, body.get("articleBase")):
+            return self.reply(409, {"error": "The article changed since it was opened. Open it again before switching."})
+        if b"\r" in target.read_bytes():
+            return self.reply(422, {"error": CRLF_VERSION})
+        article_target = REPO_ROOT / article
+        old = article_target.read_text("utf-8")
+        old_header = draft_header(old)
+        incoming = text[len(header):]
+        if not old_header:
+            return self.reply(400, {"error": "The article needs front matter before it can hold variants."})
+        if not incoming.strip():
+            return self.reply(400, {"error": "This version is empty, so it cannot become the article."})
+        chosen = one_line_name(draft_field(text, "title")) or one_line_name(Path(path).stem[11:].replace("-", " "))
+        named = body.get("name")
+        kept_name = one_line_name(named) if named is not None else (
+            private_names(old).get("variant") or "Before " + chosen)
+        if not kept_name or not chosen:
+            return self.reply(400, {"error": "A version name is one line, up to 100 characters."})
+        try:
+            new_header = frontmatter_with(old_header, "variant", chosen)
+        except ValueError as error:
+            return self.reply(400, {"error": str(error)})
+        root = sandbox_path(REPO_ROOT, piece + "/drafts/" + who)
+        kept = unique_path(root, datetime.date.today().isoformat() + "-" + comment_slug(kept_name) + ".md") if root else None
+        if kept is None or sandbox_path(REPO_ROOT, kept.relative_to(REPO_ROOT).as_posix()) is None:
+            return self.reply(403, {"error": "That drafts folder is unavailable."})
+        by = re.sub(r"\s*<[^>]*>\s*$", "", AUTHORS.get(who) or who)
+        article_sha = git("log", "-1", "--format=%H", "--", article).stdout.strip()
+        kept_text = ("---\ntitle: " + json.dumps(kept_name, ensure_ascii=False) + "\nby: " + json.dumps(by, ensure_ascii=False) +
+                     "\nbase: " + article_sha + "\n---\n" + old[len(old_header):])
+        changes = {article_target: (new_header + incoming).encode("utf-8"), kept: kept_text.encode("utf-8")}
+        if DRAFT_RE.fullmatch(path)[1] == who:
+            changes[target] = None
+        people = writing_session(who)
+        trailers = session_commit(people)[1] + "\nTaken-from: " + path + "@" + body.get("base")
+        sha = commit_files(changes, "Use the version " + chosen + " as the article; keep " + kept_name + " beside it",
+                           people, trailers=trailers,
+                           writing_save=(article, kept.relative_to(REPO_ROOT).as_posix()))
+        kept_path = kept.relative_to(REPO_ROOT).as_posix()
+        return self.reply(200, {"ok": True, "sha": sha, "path": article, "variant": chosen,
+                                "kept": draft_entry(kept_path), "removed": path if target in changes else None})
 
     def api_agent_get(self):
         try:

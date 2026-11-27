@@ -86,7 +86,10 @@
         else {
           var go = button('', function () { open(node); }, 'links-go');
           if (node.kind === 'article') go.appendChild(dot(node));
-          go.appendChild(element('span', title, 'links-title')); row.appendChild(go);
+          go.appendChild(element('span', title, 'links-title'));
+          // The writers' private label (this panel is theirs alone): which of two same-titled pieces.
+          if (typeof node.label === 'string' && node.label) go.appendChild(element('span', node.label, 'castor-label links-private'));
+          row.appendChild(go);
         }
         if (item.tags) row.appendChild(element('small', item.tags.map(function (tag) { return '#' + tag; }).join(' '), 'links-tags'));
         if (node.kind === 'material') row.appendChild(element('small', node.size < 1024 ? node.size + ' B' : Math.ceil(node.size / 1024) + ' KB', 'links-size'));
@@ -360,7 +363,7 @@
     held.label.setAttribute('x', node.lx - node.x); held.label.setAttribute('y', node.ly - node.y);
     held.plate.setAttribute('x', (node.box.x0 - node.x - 2).toFixed(1)); held.plate.setAttribute('y', (node.box.y0 - node.y - 1).toFixed(1));
     held.plate.setAttribute('width', (node.box.x1 - node.box.x0 + 4).toFixed(1)); held.plate.setAttribute('height', (node.box.y1 - node.box.y0 + 2).toFixed(1));
-    held.name.textContent = title;
+    held.name.textContent = typeof node.data.label === 'string' && node.data.label ? title + ' · ' + node.data.label : title;
     var words = centre ? title + ', you are here' : 'Open ' + title + ', ' + (node.dir === 'both' ? 'they link to each other' : node.dir === 'out' ? 'linked from here' : node.dir === 'in' ? 'links here' : 'shares ' + node.tags.map(function (t) { return '#' + t; }).join(' '));
     held.el.setAttribute('aria-label', words); held.el.setAttribute('data-centre', centre ? 'true' : 'false');
     held.el.setAttribute('aria-disabled', centre ? 'true' : 'false'); held.el.setAttribute('tabindex', centre ? -1 : 0);

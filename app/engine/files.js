@@ -562,7 +562,10 @@
     row.appendChild(branch);
     if (entry.kind !== 'folder') row.appendChild(thumbnail(entry));
     else row.appendChild(el('span', 'files-thumb files-thumb-folder'));
-    row.appendChild(el('span', 'files-name', opts.label || baseName(entry.path)));
+    var nameEl = row.appendChild(el('span', 'files-name', opts.label || baseName(entry.path)));
+    // The private label rides inside the name, so one ellipsis clips the pair in the row's grid.
+    var privateLabel = opts.privateLabel && Castor.labels && Castor.labels.node(DOC, { label: opts.privateLabel }, 'files-private-label');
+    if (privateLabel) nameEl.appendChild(privateLabel);
     if (entry.kind === 'folder') {
       row.setAttribute('aria-expanded', String(!S.folded[entry.path]));
     } else {
@@ -739,6 +742,51 @@
     readCanvasStore();
   }
 
+  /* The piece's private label: a name only writers see, to tell two pieces with one title apart
+     ("which About is this?"). It is one front matter line, saved like a typed change through the
+     editor (journaled, undoable) and never published; the public title stays as it is. The field
+     is kept across redraws, so what is being typed is never lost to a refresh. */
+  function currentLabel() {
+    var ed = Castor.editor;
+    return Castor.labels && ed && ed.getSource && !piece().draft ? Castor.labels.label(ed.getSource()) : '';
+  }
+  function labelField() {
+    var L = Castor.labels, ed = Castor.editor, role = Castor.role || {};
+    if (!L || !ed || !ed.updateFrontmatter || !ed.getSource || role.reviewer || role.reader || role.role === 'reviewer') return null;
+    if (!pieceFolder() || piece().draft || (ed.canEditSubtitle && !ed.canEditSubtitle())) return null;
+    var key = pieceFolder();
+    if (S.labelField && S.labelField.key === key) {
+      if (DOC.activeElement !== S.labelField.input) S.labelField.input.value = currentLabel();
+      return S.labelField.node;
+    }
+    var wrap = el('div', 'files-label'), input = el('input', 'files-label-input'), note = el('p', 'files-label-note', 'Only writers see it. The title stays as it is.');
+    var name = el('label', 'files-label-name', 'Private label');
+    input.type = 'text'; input.maxLength = 100; input.value = currentLabel(); input.placeholder = 'For example: About me';
+    input.id = 'files-label-input'; name.setAttribute('for', input.id);
+    input.setAttribute('aria-label', 'Private label, only writers see it');
+    input.setAttribute('autocomplete', 'off');
+    function apply() {
+      try {
+        if (ed.updateFrontmatter(function (source) { return L.withLabel(source, input.value); }, 'label') === false)
+          throw new Error('This article cannot be changed here.');
+        note.textContent = 'Only writers see it. The title stays as it is.';
+        if (Castor.pieces && Castor.pieces.relabel) Castor.pieces.relabel(key + '/article.md', currentLabel());
+        // The piece's own row shows the new label; the field itself is kept across the redraw.
+        global.setTimeout(function () { if (DOC.activeElement !== input) renderFiles(); }, 0);
+      } catch (error) { note.textContent = error.message; }
+    }
+    input.addEventListener('change', apply);
+    input.addEventListener('keydown', function (event) {
+      event.stopPropagation();
+      if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); apply(); if (input.blur) input.blur(); }
+      else if (event.key === 'Escape') { input.value = currentLabel(); if (input.blur) input.blur(); }
+    });
+    ['beforeinput', 'paste', 'copy'].forEach(function (type) { input.addEventListener(type, function (event) { event.stopPropagation(); }); });
+    wrap.appendChild(name); wrap.appendChild(input); wrap.appendChild(note);
+    S.labelField = { key: key, node: wrap, input: input };
+    return wrap;
+  }
+
   function renderFiles(focusPath) {
     var body = S.filesBody;
     if (!body) return;
@@ -763,6 +811,8 @@
       });
       body.appendChild(fresh);
     }
+    var labelling = labelField();
+    if (labelling) body.appendChild(labelling);
 
     var tree = el('div', 'files-tree');
     tree.setAttribute('role', 'tree');
@@ -777,7 +827,7 @@
       var rootGroup = el('div', 'files-tree-group');
       rootGroup.setAttribute('role', 'group');
       var article = articleEntry();
-      if (article) rootGroup.appendChild(fileRow(article, 2, { label: piece().title || baseName(article.path) }));
+      if (article) rootGroup.appendChild(fileRow(article, 2, { label: piece().title || baseName(article.path), privateLabel: currentLabel() }));
       var materials = entryAt('materials');
       if (materials) rootGroup.appendChild(folderNode(materials, 2, { label: 'Materials' }));
       childrenOf('').forEach(function (entry) {
@@ -798,7 +848,7 @@
     if (others.length) {
       var otherEntry = { path: '@other-pieces', kind: 'folder', type: 'folder', preview: 'folder' };
       var otherChildren = others.map(function (article) {
-        return { path: '@other-pieces/' + (article.path || article.title + '.md'), kind: 'file', type: 'text/markdown', preview: 'markdown', otherName: article.title, articlePath: article.path };
+        return { path: '@other-pieces/' + (article.path || article.title + '.md'), kind: 'file', type: 'text/markdown', preview: 'markdown', otherName: article.title, articlePath: article.path, privateLabel: article.label };
       });
       var otherNode = el('div', 'files-node files-other-pieces');
       var otherRow = fileRow(otherEntry, 1, { readOnly: true, label: 'Articles' });
@@ -812,7 +862,7 @@
         otherChildren.forEach(function (entry, i) {
           var group = others[i].group || '';
           if (!group) {
-            otherGroup.appendChild(fileRow(entry, 2, { readOnly: true, otherPiece: true, articlePath: entry.articlePath, openTarget: entry.otherName, label: entry.otherName }));
+            otherGroup.appendChild(fileRow(entry, 2, { readOnly: true, otherPiece: true, articlePath: entry.articlePath, openTarget: entry.otherName, label: entry.otherName, privateLabel: entry.privateLabel }));
             return;
           }
           if (!groups[group]) { groups[group] = []; groupOrder.push(group); }
@@ -828,7 +878,7 @@
           if (!S.folded[groupEntry.path]) {
             var inner = el('div', 'files-tree-group'); inner.setAttribute('role', 'group');
             groups[group].forEach(function (entry) {
-              inner.appendChild(fileRow(entry, 3, { readOnly: true, otherPiece: true, articlePath: entry.articlePath, openTarget: entry.otherName, label: entry.otherName }));
+              inner.appendChild(fileRow(entry, 3, { readOnly: true, otherPiece: true, articlePath: entry.articlePath, openTarget: entry.otherName, label: entry.otherName, privateLabel: entry.privateLabel }));
             });
             node.appendChild(inner);
           }

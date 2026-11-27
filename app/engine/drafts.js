@@ -2,12 +2,16 @@
    versions are whole texts kept beside it in drafts/<writer>/, a saved point
    from history, or an edition: the text as it went live, by number. Versions are read side by side in aligned rows, and a paragraph
    taken from one is an ordinary save of the article. Finish puts unused
-   versions away: a commit removes the file and its text stays in history. */
+   versions away: a commit removes the file and its text stays in history.
+   A piece's whole alternative texts are its variants: the article holds one, named by `variant:`
+   in its front matter, and "Make it the article" swaps a version in on the server, one commit
+   that keeps the article's previous text beside it as a version, so no variant is ever lost. */
 (function (global) {
   'use strict';
   var Castor = global.Castor || (global.Castor = {}), D = global.document;
   var MAX = 3, STALE = 14 * 864e5, LETTERS = 'ABC';
-  var P = { body: null, entries: [], away: [], chosen: null, busy: false, message: '', request: 0, mounted: false, editionText: {} };
+  var P = { body: null, entries: [], away: [], chosen: null, busy: false, message: '', request: 0, mounted: false, editionText: {},
+    switching: null, switchName: '', naming: false, nameValue: '' };
   var V = null, screen = null, banner = null, inertNodes = [];
   var names = Castor.people ? Castor.people.names() : {};
   function path() { return Castor.piecePath ? Castor.piecePath() : ''; }
@@ -51,6 +55,11 @@
     });
   }
   function mine(entry) { return !!entry && entry.person === who(); }
+  // The writers' name of the text the article holds now ('' when it has none or a version is open).
+  function articleVariant() {
+    if (path() !== articlePath() || !Castor.labels || !Castor.editor || !Castor.editor.getSource) return '';
+    return Castor.labels.variant(Castor.editor.getSource());
+  }
   function day(when) {
     var d = new Date(when);
     return isFinite(d.getTime()) ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
@@ -98,7 +107,8 @@
     var list = Array.isArray(live.editions) ? live.editions : [Object.assign({}, live, { edition: 1 })];
     return list.filter(function (e) { return e && typeof e.edition === 'number'; }).slice().reverse().map(function (e) {
       var known = P.editionText[e.edition];
-      return { key: 'edition:' + e.edition, title: 'Edition ' + e.edition, by: e.site || live.site || '', when: e.published_at,
+      return { key: 'edition:' + e.edition, title: 'Edition ' + e.edition + (typeof e.variant === 'string' && e.variant ? ' · ' + e.variant : ''),
+        by: e.site || live.site || '', when: e.published_at,
         markdown: known && known.commit === e.commit ? known.markdown : null, origin: articlePath() + '@' + e.commit,
         history: true, edition: e.edition, recorded: !!(e.article_sha256 && e.commit), commit: e.commit };
     });
@@ -149,7 +159,7 @@
     if (!c) pick.setAttribute('aria-disabled', 'true');
     pick.appendChild(node('span', letter || '', 'versions-chip' + (c && c.agent ? ' is-agent' : '')));
     var words = node('span', null, 'versions-words');
-    words.appendChild(node('b', c ? c.title : 'This article'));
+    words.appendChild(node('b', c ? c.title : articleVariant() || 'This article'));
     words.appendChild(node('span', c ? [c.by, day(c.when)].filter(Boolean).join(' · ') : 'The text that publishes'));
     pick.appendChild(words);
     if (unrecorded) row.appendChild(node('span', 'Text not recorded', 'versions-note'));
@@ -193,16 +203,23 @@
     if (P.unlisted) return;  // the listing failed: say why, and claim nothing about what versions exist
     var list = chosen(), letter = function (key) { var i = list.indexOf(key); return i < 0 ? '' : LETTERS[i + 1]; };
     append(node('h3', 'Open versions', 'versions-group'));
-    append(versionRow(null, 'A', true));
+    var aRow = versionRow(null, 'A', true);
+    if (path() === articlePath() && Castor.labels && Castor.editor && Castor.editor.updateFrontmatter) aRow.appendChild(naming());
+    append(aRow);
     P.entries.forEach(function (entry) {
       var c = fileVersion(entry), row = versionRow(c, letter(c.key), list.indexOf(c.key) >= 0), tools = node('div', null, 'versions-tools');
       tools.appendChild(button('Edit', function () { return act(function () { return saved().then(function () { return open(entry.path); }); }); }, 'versions-link'));
+      if (P.switching !== entry.path) tools.appendChild(button('Make it the article', function () {
+        P.switching = entry.path; P.switchName = articleVariant() || 'Before ' + entry.title; P.message = ''; render();
+      }, 'versions-link'));
       // Only the writer's own, and never the file open in the editor.
       if (mine(entry) && entry.path !== path() && Date.now() - new Date(entry.date).getTime() >= STALE) {
         tools.appendChild(node('span', 'Open since ' + day(entry.date) + '.', 'versions-note'));
         tools.appendChild(button('Put away?', function () { return act(function () { return putAway(entry); }); }, 'versions-link'));
       }
-      row.appendChild(tools); append(row);
+      row.appendChild(tools);
+      if (P.switching === entry.path) row.appendChild(switchForm(entry));
+      append(row);
     });
     if (!P.entries.length) append(node('p', 'No other versions yet. An agent’s rewrite, or a copy you make to try another way, appears here.', 'versions-note'));
     if (!form) {
@@ -244,6 +261,69 @@
     go.disabled = P.busy || !list.length || path() !== articlePath();
     append(go);
   }
+  /* Naming the article's text: its variant name is one front matter line, saved like a typed
+     change (journaled, undoable), never published. */
+  function naming() {
+    var tools = node('div', null, 'versions-tools'), current = articleVariant();
+    if (!P.naming) {
+      tools.appendChild(button(current ? 'Rename this text' : 'Name this text', function () {
+        P.naming = true; P.nameValue = current; render();
+      }, 'versions-link'));
+      return tools;
+    }
+    var form = node('form', null, 'versions-name'), field = node('input');
+    field.type = 'text'; field.maxLength = 100; field.value = P.nameValue;
+    field.placeholder = 'For example: Path'; field.setAttribute('aria-label', 'Name of the article’s text');
+    field.addEventListener('input', function () { P.nameValue = field.value; });
+    field.addEventListener('focus', function () { aboveKeyboard(field); });
+    var done = button('Name', function () {}); done.type = 'submit';
+    form.appendChild(field); form.appendChild(done);
+    form.appendChild(button('Cancel', function () { P.naming = false; render(); }, 'versions-link'));
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      try {
+        if (Castor.editor.updateFrontmatter(function (source) { return Castor.labels.withVariant(source, field.value); }, 'variant') === false)
+          throw new Error('This article cannot be renamed here.');
+        P.naming = false; P.message = '';
+      } catch (error) { P.message = error.message; }
+      render();
+    });
+    tools.appendChild(form);
+    return tools;
+  }
+  // The swap, asked in the row: what the article's text is kept as. Nothing is lost either way.
+  function switchForm(entry) {
+    var form = node('form', null, 'versions-switch'), field = node('input');
+    form.appendChild(node('p', 'The article becomes ' + entry.title + '. Its text now stays beside it as a version, named:', 'versions-note'));
+    field.type = 'text'; field.maxLength = 100; field.required = true; field.value = P.switchName;
+    field.setAttribute('aria-label', 'Keep the article’s text as');
+    field.addEventListener('input', function () { P.switchName = field.value; });
+    field.addEventListener('focus', function () { aboveKeyboard(field); });
+    var go = button('Switch', function () {}); go.type = 'submit'; go.disabled = P.busy;
+    form.appendChild(field); form.appendChild(go);
+    form.appendChild(button('Cancel', function () { P.switching = null; render(); }, 'versions-link'));
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var name = String(field.value || '').replace(/\s+/g, ' ').trim();
+      return act(function () { return switchTo(entry, name); });
+    });
+    return form;
+  }
+  function switchTo(entry, name) {
+    if (!name) return Promise.reject(new Error('Name the text the article keeps beside it.'));
+    return (path() === articlePath() ? Promise.resolve() : Castor.pieces.open(articlePath())).then(saved).then(function (snap) {
+      if (snap.path !== articlePath()) throw new Error('Open the article before switching.');
+      return recorded({ entry: entry }).then(function () {
+        return call(Castor.endpoints.api('drafts'), { action: 'current', piece: piece(), who: who(), path: entry.path,
+          base: entry.sha, articleBase: snap.base, name: name });
+      });
+    }).then(function (got) {
+      P.switching = null;
+      var said = 'The article is now ' + (got.variant || entry.title) + '. ' + ((got.kept && got.kept.title) || name) +
+        ' is kept beside it, under Open versions.';
+      return Promise.resolve(Castor.app && Castor.app.reload && Castor.app.reload()).then(refresh).then(function () { P.message = said; });
+    });
+  }
   function open(target) {
     return Castor.pieces.open(target).then(function (opened) {
       if (!opened) throw new Error('The version could not be opened.');
@@ -270,6 +350,16 @@
     banner.appendChild(node('span', 'Version: ' + draft.title));
     banner.appendChild(button('Back to article', function () {
       return act(function () { return saved().then(function () { return Castor.pieces.open(articlePath()); }); });
+    }));
+    banner.appendChild(button('Use as the article', function () {
+      var entryPath = draft.path, title = draft.title;
+      return act(function () {
+        return saved().then(function () { return Castor.pieces.open(articlePath()); }).then(function () {
+          P.switching = entryPath; P.switchName = articleVariant() || 'Before ' + title;
+          if (Castor.panels && Castor.panels.open) Castor.panels.open('drafts');
+          return refresh();
+        });
+      });
     }));
     banner.appendChild(button('Compare with the article', function () {
       var key = 'file:' + draft.path;

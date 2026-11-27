@@ -715,6 +715,17 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
 #app .versions-link:hover { background: var(--wash); }
 #app .versions-tools .versions-link:first-child { margin-left: calc(-1 * var(--s2)); }
 #app .versions-create { display: flex; gap: var(--s2); margin: var(--s4) 0 0; }
+/* Naming the article's text, and the switch asked in a version's row: the create row's field and
+   outlined pill, under the row's own tools. */
+#app :is(.versions-name, .versions-switch) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); width: 100%; margin: 0; }
+#app .versions-switch { padding: 0 0 var(--s3) 60px; box-sizing: border-box; }
+#app .versions-switch .versions-note { flex: 1 0 100%; margin: 0; font-size: 12px; }
+#app :is(.versions-name, .versions-switch) input {
+  flex: 1 1 160px; min-width: 0; height: 36px; box-sizing: border-box; padding: 0 var(--s3);
+  border: 1px solid var(--edge); border-radius: var(--radius-field, 6px); background: var(--paper); color: var(--ink);
+  font: 400 14px/1 var(--font-ui);
+}
+
 #app .versions-create input {
   flex: 1; min-width: 0; height: 36px; box-sizing: border-box; padding: 0 var(--s3);
   border: 1px solid var(--edge); border-radius: var(--radius-field, 6px); background: var(--paper); color: var(--ink);
@@ -835,7 +846,8 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
 #app .versions-foot { display: flex; gap: var(--s2); margin-top: var(--s4); }
 #app .versions-foot .versions-done { flex: 1; }
 @media (pointer: coarse) {
-  #app :is(.versions-take, .versions-button, .versions-link, .versions-seg button, .versions-back, .versions-next, .versions-done, .versions-foot button, .versions-create input, .versions-create button) { min-height: 44px; }
+  #app :is(.versions-take, .versions-button, .versions-link, .versions-seg button, .versions-back, .versions-next, .versions-done, .versions-foot button, .versions-create input, .versions-create button,
+    .versions-name input, .versions-name button, .versions-switch input, .versions-switch button) { min-height: 44px; }
   /* iOS zooms the page when a field below 16px takes focus, and the zoom stays after the keyboard closes. */
   #app .versions-create input { font-size: 16px; }
 }
@@ -913,6 +925,27 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
 /* Import (import.js): the Files panel's own view, from the choice to the receipt. */
 #app .files-new-area .files-import { margin-left: var(--s4); }
 /* Files: New article leads the library (files.js), one row with its page-and-plus mark. */
+/* A writer's private label beside a title, wherever writers pick a piece (tabs, the chooser, Files,
+   Links, Search): the same face, quieter, after a middle dot. Readers never get it. */
+#app .castor-label { color: var(--ink-2); font-weight: 400; }
+#app .castor-label::before { content: "\00b7"; margin: 0 .4em; color: var(--ink-3); }
+/* The label gives way before the title when the tab is short of room. */
+#app #castor-tabs .castor-tab-label {
+  display: block; flex: 0 100 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-box: trim-both cap alphabetic; padding-block: 5px; margin-block: -5px;
+}
+#app #castor-tabs .castor-tab[aria-selected="true"] .castor-tab-label { color: var(--ink-2); }
+/* Files: the piece's private label, edited in place above the tree. */
+#app .files-label { display: grid; gap: var(--s1, 4px); margin: 0 0 var(--s3, 12px); }
+#app .files-label-name { color: var(--ink-2); font: 500 12px/1.2 var(--font-ui); }
+#app .files-label-input {
+  box-sizing: border-box; width: 100%; min-height: 36px; margin: 0; padding: 0 var(--s3, 12px);
+  border: 1px solid var(--edge); border-radius: var(--radius-field, 6px); background: var(--paper); color: var(--ink);
+  font: 400 14px/1.2 var(--font-ui);
+}
+#app .files-label-input::placeholder { color: var(--ink-2); }
+#app .files-label-note { margin: 0; color: var(--ink-2); font: 400 12px/1.35 var(--font-ui); }
+@media (any-pointer: coarse) { #app .files-label-input { min-height: 44px; } }
 #app .files-new-article {
   all: unset; box-sizing: border-box; display: flex; align-items: center; gap: var(--s2, 8px); width: 100%;
   min-height: 36px; margin: 0 0 var(--s2, 8px); padding: 0 var(--s2, 8px) 0 2px; border-radius: var(--radius-sm, 6px);

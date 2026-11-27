@@ -991,7 +991,7 @@
     var items = Array.prototype.slice.call(strip.querySelectorAll('.castor-tab-item'));
     var more = strip.querySelector('.castor-tabs-more');
     if (!more) return;
-    items.forEach(function (item) { item.hidden = false; });
+    items.forEach(function (item) { item.hidden = false; if (item.style) item.style.maxWidth = ''; });
     more.hidden = false;
     more.textContent = items.length + ' more';
     var gap = parseFloat(global.getComputedStyle(strip).columnGap) || 0;
@@ -1002,7 +1002,13 @@
     if (total <= available) { more.hidden = true; strip.scrollLeft = 0; return; }
     available -= more.getBoundingClientRect().width + gap;
     var current = items.filter(function (item) { return item.querySelector('.castor-tab[aria-selected="true"]'); })[0];
-    if (current) available -= widths[items.indexOf(current)] + gap;
+    if (current) {
+      // A long title with its private label gives way to N more: the current tab is capped to the room
+      // left, and its label (then its title) ends in an ellipsis.
+      var own = widths[items.indexOf(current)];
+      if (own + gap > available) { if (current.style) current.style.maxWidth = Math.max(available - gap, 96) + 'px'; available = 0; }
+      else available -= own + gap;
+    }
     var hidden = 0;
     items.forEach(function (item, i) {
       if (item === current) return;
@@ -1356,6 +1362,8 @@
     var list = line('div', 'castor-empty-list');
     pieces.forEach(function (p) {
       var open = line('button', 'castor-empty-open', p.title);
+      var emptyLabel = Castor.labels && Castor.labels.node(document, p);
+      if (emptyLabel) open.appendChild(emptyLabel);
       open.type = 'button';
       open.dataset.path = p.path;
       open.addEventListener('click', function () { openPiece(p.path); });
@@ -1393,7 +1401,7 @@
   function chooserItems(query) {
     var q = String(query || '').trim().toLowerCase();
     return pieces.slice().sort(function (a, b) { return (b.order || 0) - (a.order || 0); })
-      .filter(function (p) { return !q || String(p.title || '').toLowerCase().indexOf(q) >= 0; });
+      .filter(function (p) { return !q || (String(p.title || '') + ' ' + String(p.label || '')).toLowerCase().indexOf(q) >= 0; });
   }
   function fillChooser() {
     if (!chooser) return;
@@ -1401,6 +1409,8 @@
     var found = chooserItems(chooser.search.value);
     found.forEach(function (p) {
       var open = line('button', 'castor-chooser-open', p.title);
+      var chooserLabel = Castor.labels && Castor.labels.node(document, p);
+      if (chooserLabel) open.appendChild(chooserLabel);
       open.type = 'button';
       open.dataset.path = p.path;
       open.addEventListener('click', function () { chooseArticle(p.path); });
@@ -1635,7 +1645,7 @@
     var mac = !Castor.keys || Castor.keys.os() === 'mac';
     C.register({ id: 'tabs.beside', title: 'Open article beside', section: 'Go to',
       when: function () { return !!(Castor.files && Castor.files.openArticle && C.openList); },
-      run: function () { C.openList({ title: 'Open beside', items: pieces.map(function (p) { return { id: p.path, label: p.title }; }),
+      run: function () { C.openList({ title: 'Open beside', items: pieces.map(function (p) { return { id: p.path, label: Castor.labels ? Castor.labels.named(p) : p.title }; }),
         onPick: function (item) { var p = pieces.find(function (p) { return p.path === item.id; }); if (p) Castor.files.openArticle(p.path, p.title); } }); } });
     C.register({ id: 'tabs.new', title: 'Open or start an article', hint: 'a new tab', section: 'Go to',
       when: function () { return !reviewing() && !!(liveState && liveState.path); }, run: function () { openChooser(); } });
@@ -1655,7 +1665,7 @@
     C.register({ id: 'tabs.reopen', title: 'Reopen a closed article', hint: 'its tab comes back', section: 'Go to',
       when: function () { return Castor.tabs.closed().length > 0 && !!C.openList; },
       run: function () {
-        C.openList({ title: 'Reopen a closed article', items: Castor.tabs.closed().map(function (p) { return { id: p.path, label: p.title }; }),
+        C.openList({ title: 'Reopen a closed article', items: Castor.tabs.closed().map(function (p) { return { id: p.path, label: Castor.labels ? Castor.labels.named(p) : p.title }; }),
           onPick: function (item) { openPiece(item.id); } });
       } });
   }
@@ -1704,7 +1714,7 @@
     if (pieces.length < 2 || !shown.length) { dropStrip(); return; }
     var strip = ensureStrip();
     if (recall('tabs') !== 'folded') store('tabs', 'open');
-    var signature = shown.map(function (p) { return p.path + '\n' + p.title; }).join('\n') + (chooser ? '\n+chooser' : '');
+    var signature = shown.map(function (p) { return p.path + '\n' + p.title + '\n' + (p.label || ''); }).join('\n') + (chooser ? '\n+chooser' : '');
     if (strip._pieces !== signature) {
     strip._pieces = signature;
     strip.textContent = '';
@@ -1725,6 +1735,9 @@
       name.className = 'castor-tab-name';
       name.textContent = piece.title;
       b.appendChild(name);
+      // The writers' private label tells two pieces with one title apart; it is never published.
+      var privateLabel = Castor.labels && Castor.labels.node(document, piece, 'castor-tab-label');
+      if (privateLabel) b.appendChild(privateLabel);
       if (i < 9) b.setAttribute('aria-keyshortcuts', tabChord().aria + (i + 1));
       b.title = 'Drag to reorder. Move left or right with ' + ((!Castor.keys || Castor.keys.os() === 'mac') ? 'Cmd+Option+Shift+Arrow.' : 'Ctrl+Alt+Shift+Arrow.');
       b.addEventListener('click', function () { if (b._dragged) { b._dragged = false; return; } openPiece(piece.path); });
@@ -3934,7 +3947,20 @@
     },
     /* No article is open on the empty page, though the editor still holds the last
        one (piecePath keeps naming it, so its saves and comments stay bound to it). */
-    current: function () { return emptied ? '' : openArticle(); }
+    current: function () { return emptied ? '' : openArticle(); },
+    // A writer changed a piece's private label: its tab says so at once, before the next listing.
+    relabel: function (path, label) {
+      var changed = false;
+      pieces = pieces.map(function (p) {
+        if (p.path !== path || (p.label || '') === (label || '')) return p;
+        changed = true;
+        var next = Object.assign({}, p);
+        if (label) next.label = label; else delete next.label;
+        return next;
+      });
+      if (changed) renderTabs();
+      return changed;
+    }
   };
 
   function reloadLive() {

@@ -17,6 +17,40 @@
     return header[1] + next.join(newline) + header[3] + text.slice(header[0].length);
   }
   function withSource(source, value) { return withField(source, 'subtitle', value, 'subtitle'); }
+  /* Two private names live in front matter for writers only and are never published: `label`
+     tells two pieces apart ("which About is this?") without touching the public title, and
+     `variant` names which of the piece's texts the article holds now. */
+  function withPrivate(key, words) {
+    return function (source, value) {
+      var text = String(value);
+      if (/[\r\n\u0000-\u001f\u007f\u2028\u2029]/.test(text)) throw Error('A ' + words + ' is one line of plain text.');
+      text = text.replace(/\s+/g, ' ').trim();
+      if (text.length > 100) throw Error('A ' + words + ' is up to 100 characters.');
+      return withField(source, key, text, words);
+    };
+  }
+  function privateField(source, key) {
+    var header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(String(source || ''));
+    var line = header && new RegExp('^' + key + ':[ \\t]*(.*)$', 'm').exec(header[1]);
+    var value = line ? line[1].trim() : '';
+    if (/^".*"$/.test(value)) { try { value = JSON.parse(value); } catch (e) { /* keep it as written */ } }
+    else if (/^'.*'$/.test(value)) value = value.slice(1, -1).replace(/''/g, "'");
+    return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  }
+  // A piece as writers name it in their lists: the title, then its label when it has one.
+  function named(piece) {
+    var title = String((piece && piece.title) || ''), label = piece && typeof piece.label === 'string' ? piece.label.trim() : '';
+    return label ? title + ' \u00b7 ' + label : title;
+  }
+  // The label beside a title in a list row: quieter than the title, and read as part of its name.
+  function labelNode(doc, piece, cls) {
+    var label = piece && typeof piece.label === 'string' ? piece.label.trim() : '';
+    if (!label || !doc || !doc.createElement) return null;
+    var n = doc.createElement('span');
+    n.className = 'castor-label' + (cls ? ' ' + cls : '');
+    n.textContent = label;
+    return n;
+  }
   // A title stays unquoted, as authors write it, only when the parser reads the
   // plain form back as exactly the same string (not a number, true or null).
   function withTitle(source, value) {
@@ -203,5 +237,10 @@
     sync();
   }
   C.subtitle = { mount: mount, withSource: withSource, withTitle: withTitle };
+  C.labels = { withLabel: withPrivate('label', 'label'), withVariant: withPrivate('variant', 'variant name'),
+    label: function (source) { return privateField(source, 'label'); },
+    variant: function (source) { return privateField(source, 'variant'); },
+    named: named, node: labelNode };
+  C.subtitle.labels = C.labels;
   if (typeof module !== 'undefined' && module.exports) module.exports = C.subtitle;
 })(typeof window !== 'undefined' ? window : globalThis);
