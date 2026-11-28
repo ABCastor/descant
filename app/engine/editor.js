@@ -139,11 +139,18 @@
   // Resolve from the current source, including edits made before the delayed
   // reparse. Focus and serialization must share the same reference authority.
   var referenceContextKey = null, referenceContext = {};
+  // Whether a source holds a boundary, by source: a key changes one block, so the others' answers hold.
+  var referenceBoundaries = new Map();
   function currentReferences() {
     var definitions = [], boundaries = [];
     blocks.forEach(function (b, at) {
       // Fences and raw blocks can hide a later definition even across a blank line.
-      var boundary = b.source.match(/(?:^|\n) {0,3}(?:`{3,}|~{3,}|---)[^\n]*|<\/?(?:script|pre|style|textarea)\b|<!--|-->|<\?|\?>|<!\[CDATA\[|\]\]>|<![A-Z]|>/gi);
+      var boundary = referenceBoundaries.get(b.source);
+      if (boundary === undefined) {
+        boundary = /(?:^|\n) {0,3}(?:`{3,}|~{3,}|---)[^\n]*|<\/?(?:script|pre|style|textarea)\b|<!--|-->|<\?|\?>|<!\[CDATA\[|\]\]>|<![A-Z]|>/i.test(b.source);
+        if (referenceBoundaries.size > 4096) referenceBoundaries.clear();
+        referenceBoundaries.set(b.source, boundary);
+      }
       if (boundary) boundaries.push([b.id, b.sep, b.source]);
       if (b.source.indexOf(']:') < 0) return;
       var context = b.source;
@@ -1032,13 +1039,14 @@
     start = clamp(start, 0, b.source.length);
     end = clamp(end == null ? start : end, 0, b.source.length);
     var sel = global.getSelection();
-    var r = document.createRange();
+    var r = document.createRange(), placed = false;
     try {
       var single = textOf(el);
       var a = single ? { node: single, offset: start } : sourcePoint(el, start, true);
       var z = single ? { node: single, offset: end } : sourcePoint(el, end, start === end);
       r.setStart(a.node, a.offset);
       r.setEnd(z.node, z.offset);
+      placed = true;
     } catch (err) {
       r.selectNodeContents(el); r.collapse(false);
     }
@@ -1047,7 +1055,11 @@
     // preventScroll it pans the window to centre the paragraph, and the page puts it back, a jump on a
     // tap into another paragraph. So the host is focused without a scroll before the range and again after.
     if (document.activeElement !== el) el.focus({ preventScroll: true });
-    if (typeof selectionTurn !== 'undefined') selectionTurn++; sel.removeAllRanges(); sel.addRange(r);
+    if (typeof selectionTurn !== 'undefined') selectionTurn++;
+    // A selection that already holds a range moves in one step (removing it first is a second
+    // selection change the browser pays for); the same ends, in the same direction.
+    if (placed && sel.rangeCount && sel.setBaseAndExtent) sel.setBaseAndExtent(r.startContainer, r.startOffset, r.endContainer, r.endOffset);
+    else { sel.removeAllRanges(); sel.addRange(r); }
     frameReads.invalidateSelection();
     rememberNativeCaret({ start: Math.min(start, end), end: Math.max(start, end) });
     el.focus({ preventScroll: true });
@@ -4162,7 +4174,8 @@
         if (key === 'code') { var members = ownedNodes(p); ticks = members.length && (/^`+/.exec(source.slice(members[0].at)) || ['`'])[0]; }
         if (p.tagName === 'A' && !(p.className && /(?:^| )tag(?: |$)/.test(p.className))) link = p;
       }
-      for (var i = 0; i < n.len; i++) chars.push({ text: parent && parent.closest('.cw-code-newline') ? ' ' : (n.node.nodeValue == null ? n.node.data || '' : n.node.nodeValue).charAt(i), at: n.at + i, end: n.at + i + 1, styles: styles.slice(), originalStyles: styles.slice(), link: link, originalLink: link, ticks: ticks, parent: parent });
+      var codeNewline = !!(parent && parent.closest('.cw-code-newline')), words = n.node.nodeValue == null ? n.node.data || '' : n.node.nodeValue;
+      for (var i = 0; i < n.len; i++) chars.push({ text: codeNewline ? ' ' : words.charAt(i), at: n.at + i, end: n.at + i + 1, styles: styles.slice(), originalStyles: styles.slice(), link: link, originalLink: link, ticks: ticks, parent: parent });
     });
     nodes.forEach(function (n) {
       if (hiddenSource(n.node) && /^(?:<br\s*\/?>)$/i.test(n.node.nodeValue)) chars.push({ text: '\n', at: n.at, end: n.at + n.len, styles: [], originalStyles: [], rawAt: n.at, breakSource: n.node.nodeValue });
@@ -4277,7 +4290,9 @@
     }
     // Native reconciliation can temporarily expose raw source instead of
     // hidden marker nodes. Structural prefixes still belong to the block.
-    chars = chars.filter(function (c) {
+    // A paragraph has no structural prefix (structuralPrefix answers 0), so every character stays
+    // unless the source opens with a line break: then the first character's line starts after it.
+    if (!(b.type === 'inline' || b.type === 'p') || source.charAt(0) === '\n') chars = chars.filter(function (c) {
       var lineAt = source.lastIndexOf('\n', c.at - 1) + 1, end = source.indexOf('\n', lineAt);
       return c.at >= lineAt + structuralPrefix(source.slice(lineAt, end < 0 ? source.length : end));
     });
@@ -4407,9 +4422,15 @@
           walk(probe, []);
           return actual.length === list.length && actual.every(function (c, index) {
             var wanted = list[index];
+            if (c.text !== wanted.text) return false;
             var target = wanted.link && (wanted.link.nodeType ? attr(wanted.link, 'href') || attr(wanted.link, 'data-target') || '' : wanted.link.target);
             if (!wanted.atom && (wanted.link ? !c.link || c.link.target !== target : c.link && !c.link.automatic)) return false;
-            return c.text === wanted.text && ['bold', 'italic', 'code', 'strike', 'highlight', 'sup', 'sub', 'span'].every(function (key) { return key !== 'code' && /\s/.test(c.text) || (c.styles.indexOf(key) >= 0) === (wanted.styles.indexOf(key) >= 0); });
+            // The same styles in the same order hold every key alike (most letters of a paragraph).
+            var mine = c.styles, theirs = wanted.styles, same = mine.length === theirs.length;
+            for (var k = 0; same && k < mine.length; k++) same = mine[k] === theirs[k];
+            if (same) return true;
+            var space = /\s/.test(c.text);
+            return ['bold', 'italic', 'code', 'strike', 'highlight', 'sup', 'sub', 'span'].every(function (key) { return key !== 'code' && space || (mine.indexOf(key) >= 0) === (theirs.indexOf(key) >= 0); });
           });
         }
     // Reuse authored spelling outside the edit before accepting a whole-paragraph
@@ -5394,7 +5415,12 @@
       chars.forEach(function (c) { if (touched.indexOf(c.link) >= 0) c.link = null; });
       for (var j = from; j < to; j++) if (!chars[j].atom) chars[j].link = action.link;
     } else if (action.kind === 'style') {
-      var off = selected.length && selected.every(function (c) { return c.styles.indexOf(action.style) >= 0; });
+      // On or off is decided by the selected letters, as across paragraphs (partStyled): a space at
+      // a styled word's edge, or between a word and a link, cannot carry the style in Markdown, so
+      // counted it would keep the style on forever and the second press would change nothing.
+      var lettered = selected.filter(function (c) { return !c.atom && /\S/.test(c.text); });
+      var decided = lettered.length ? lettered : selected;
+      var off = decided.length && decided.every(function (c) { return c.styles.indexOf(action.style) >= 0; });
       selected.forEach(function (c) { c.styles = c.styles.filter(function (s) { return s !== action.style; }); if (!off) c.styles.push(action.style); });
     }
     // Preserve each structural prefix. Only the affected block is serialized;
