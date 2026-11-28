@@ -2575,7 +2575,7 @@
       held.appendChild(el('p', 'castor-comment-pending-text', record.text));
       var resume = el('button', null, 'Resume draft'); resume.type = 'button';
       resume.addEventListener('click', function (event) {
-        event.stopPropagation(); closeComposer(); resumeDraft(record); layout(true);
+        event.stopPropagation(); if (!setComposerAside()) return; resumeDraft(record); layout(true);
       });
       var discard = el('button', null, 'Discard draft'); discard.type = 'button';
       discard.addEventListener('click', function (event) {
@@ -4062,11 +4062,89 @@
     }
   }
 
+  // The same words of the article: a comment's anchor says which words by the words themselves and
+  // the words around them.
+  function sameWords(a, b) {
+    return !!a && !!b && a.quote === b.quote && (a.prefix || '') === (b.prefix || '') && (a.suffix || '') === (b.suffix || '');
+  }
+  // Unsent words of a new comment on these words, kept on this device (open, closed or from before a
+  // reload), newest first. Words already sent are not a draft.
+  function keptDraft(anchor) {
+    var made = function (r) { return parseInt(String(r.id).slice(1), 36) || 0; };
+    return journalRecords().filter(function (r) {
+      return !r.thread && !r.submitted && r.path === piecePath() && r.text && r.text.trim() && sameWords(r.anchor, anchor);
+    }).sort(function (a, b) { return made(b) - made(a); })[0] || null;
+  }
+  // A box with words gives way to a new one as a closed draft: the Comments list offers it (Resume
+  // draft) and Comment on its words opens it again. False when the device cannot keep the words:
+  // the box then stays, with its words and the reason.
+  function setComposerAside() {
+    var c = S.composer;
+    if (!c) return true;
+    if (c.record && c.textarea.value.trim()) {
+      c.record.closed = true;
+      if (!rememberComposer()) { c.record.closed = false; return false; }
+      closeComposer();
+      layout(true);
+      return true;
+    }
+    closeComposer();
+    return true;
+  }
+  // iOS can put back the words its handles held a moment after Comment opened the box (words chosen by
+  // moving both handles): the box keeps the focus and the keyboard stays up, but the selection is in
+  // the article again, so the keys go nowhere and the page's menu comes back over the words. Until the
+  // writer's next touch or click, or the focus leaves the box, a selection outside the focused box
+  // goes back to the box's caret.
+  function keepCaretIn(field) {
+    if (keepCaretIn.stop) keepCaretIn.stop();
+    if (!field || !field.castorEditor || !global.getSelection) return;
+    function stop() {
+      DOC.removeEventListener('selectionchange', check);
+      DOC.removeEventListener('pointerdown', stop, true);
+      if (keepCaretIn.stop === stop) keepCaretIn.stop = null;
+    }
+    function check() {
+      if (keepCaretIn.stop !== stop) return;
+      if (!field.isConnected || !holdsFocus(field)) { stop(); return; }
+      var s = global.getSelection();
+      if (s && s.rangeCount && field.contains(s.anchorNode) && field.contains(s.focusNode)) return;
+      field.focus();
+    }
+    DOC.addEventListener('selectionchange', check);
+    DOC.addEventListener('pointerdown', stop, true);
+    keepCaretIn.stop = stop;
+    // Also once the page is drawn, for a selection put back without a selectionchange.
+    if (global.requestAnimationFrame) global.requestAnimationFrame(check);
+    global.setTimeout(check, 350);
+  }
+  function openComposerAgain() {
+    var c = S.composer, field = c.textarea, ed = field.castorEditor, list = ed && ed.getBlocks(), last = list && list[list.length - 1];
+    if (last) ed.restoreCaret({ blockId: last.id, start: last.source.length, end: last.source.length });
+    else {
+      field.focus({ preventScroll: true });
+      if (field.setSelectionRange) try { field.setSelectionRange(field.value.length, field.value.length); } catch (e) { /* not a text field */ }
+    }
+    keepCaretIn(c.textarea);
+    scheduleCommentFocus();
+    return c.node;
+  }
+
   function compose(anchor, record) {
     if (!available() || ended()) return null;
     switchScope();
     if (!S.page || !anchor || !anchor.quote) return null;
-    closeComposer();
+    if (!record) {
+      // Comment again on the same words opens their unsent words, with the caret at their end: the box
+      // still on screen (a finger's tap outside keeps it), or the words kept on this device.
+      if (S.composer && S.composer.record && !S.composer.record.thread && !S.composer.record.closed && sameWords(S.composer.anchor, anchor)) return openComposerAgain();
+      if (!setComposerAside()) return null;
+      var kept = keptDraft(anchor);
+      if (kept) {
+        resumeDraft(kept);
+        if (S.composer && sameWords(S.composer.anchor, anchor)) { layout(true); return openComposerAgain(); }
+      }
+    } else if (!setComposerAside()) return null;
     record = record || newComposerRecord(anchor);
     var r = resolveBlock(anchor), end = r && anchor.more && resolveParts(anchor.more, pageBlocks(), r.blockId).pop();
     var b = r ? blockById((end || r).blockId) : null;
@@ -4130,6 +4208,7 @@
     trackComposer();
     composerKeys(ta, box, submit);
     ta.focus({ preventScroll: true });
+    keepCaretIn(ta);
     scheduleCommentFocus();
     return slot;
   }
