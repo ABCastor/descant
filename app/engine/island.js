@@ -160,6 +160,22 @@
     return b;
   }
 
+  // A press anywhere on the bar keeps the focus in the paragraph, a greyed button's too. No browser sends
+  // a mouse event to a disabled button, and iOS sends a tap's mousedown even when its pointerdown was
+  // cancelled, so a press on a greyed button took the focus (and the keyboard) away. A greyed button
+  // lets the press through to the bar behind it (setDisabled), which cancels it here. Another control
+  // placed in the bar (the save state) keeps its own press.
+  function keepFocus(el) {
+    function cancel(event) {
+      var t = event.target && event.target.closest ? event.target : event.target && event.target.parentElement;
+      var control = t && t.closest('button,a,input,textarea,select,[contenteditable],[tabindex]');
+      if (control && el.contains(control) && !control.hasAttribute('data-command')) return;
+      event.preventDefault();
+    }
+    el.addEventListener('pointerdown', cancel);
+    el.addEventListener('mousedown', cancel);
+  }
+
   function ensure() {
     if (S.root || !DOC || !allowed()) return S.root;
     var root = DOC.createElement('aside');
@@ -229,6 +245,7 @@
       root.appendChild(keyboard);
     }
     root.appendChild(close);
+    keepFocus(root);
     root.dataset.docked = touchScreen() ? '1' : '0';
     if (touchScreen() && S.app) S.app.insertBefore(root, DOC.getElementById('footline'));
     else (S.frame || DOC.body).appendChild(root);
@@ -271,6 +288,7 @@
       group.appendChild(button);
       return button;
     });
+    keepFocus(group);
     footer.insertBefore(group, footer.firstChild);
   }
 
@@ -585,6 +603,8 @@
   function setDisabled(button, off) {
     if (button.disabled !== off) button.disabled = off;
     setAttr(button, 'aria-disabled', off ? 'true' : 'false');
+    var through = off ? 'none' : '';   // a press on it reaches the bar, which keeps the focus (keepFocus)
+    if (button.style && button.style.pointerEvents !== through) button.style.pointerEvents = through;
   }
   function selected(e) {
     var range = e && e.getCaret && e.getCaret();

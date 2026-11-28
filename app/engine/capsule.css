@@ -1183,6 +1183,9 @@ html:not([data-logo="2"]) #app[data-mode="phone"] #topbar.mast .descant-mark { w
   #app .castor-goal .goal-field input[type="date"] { -webkit-appearance: none; appearance: none; }
   .castor-who-pick { min-height: 44px; }
   .search-field input { min-height: 44px; }
+  /* Settings, Panels: each checkbox sits at its label's left edge, so the label reaches 12 px further
+     left, into the space before it, unseen; the row is 44 px tall already (signature.css). */
+  .castor-settings .set-panels label { padding-left: 12px; margin-left: -12px; }
   /* WebKit draws a native menu at its own height and ignores min-height. */
   .descant-publish-sheet select { box-sizing: border-box; height: 44px; }
 }

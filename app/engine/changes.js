@@ -43,6 +43,9 @@
     var d = new Date(v && v.when);
     return isFinite(d.getTime()) ? dateFormat(d, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'date unavailable';
   }
+  // The rail's format is made while the page is idle, waiting for the article (tens of ms on Linux's
+  // ICU), so the opening draws the rail with it ready.
+  if (global.requestIdleCallback) global.requestIdleCallback(function () { saveTime({ when: 0 }); });
   function liveKey(live) { return live ? [live.commit, live.article_sha256, live.published_at].join('|') : ''; }
   function websiteReason(live) {
     if (!live) return 'Not published yet';

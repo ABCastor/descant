@@ -1011,7 +1011,19 @@
     knotFrame = global.requestAnimationFrame(function () { knotFrame = 0; placeKnot(moving); });
   }
 
+  /* Fitting the strip reads its layout, and in the middle of the opening every read is a layout of the
+     whole page: the opening's layout passes ask for it several times. One fit at the next frame, before
+     it paints, answers them all. What must measure at once (a fold, a resize observed) fits now. */
+  var fitQueued = 0;
   function revealTab() {
+    if (Castor.capsule && global.requestAnimationFrame) {
+      if (!fitQueued) fitQueued = global.requestAnimationFrame(function () { fitQueued = 0; revealTabNow(); });
+      return;
+    }
+    revealTabNow();
+  }
+  function revealTabNow() {
+    if (fitQueued && global.cancelAnimationFrame) { global.cancelAnimationFrame(fitQueued); fitQueued = 0; }
     var strip = tabEls.strip;
     if (!strip || tabsFolded()) return;
     if (Castor.capsule) { fitArticleTabs(); return; }
@@ -1101,7 +1113,7 @@
         title.setAttribute('aria-hidden', 'true'); app.appendChild(title); tabEls.title = title;
         strip.addEventListener('scroll', function () { queueKnot(false); }, { passive: true });
         global.addEventListener('resize', function () { revealTab(); queueKnot(false); }, { passive: true });
-        if (global.ResizeObserver) new global.ResizeObserver(revealTab).observe(strip);
+        if (global.ResizeObserver) new global.ResizeObserver(function () { revealTabNow(); }).observe(strip);
         if (document.fonts) document.fonts.ready.then(revealTab);
       }
     }
@@ -1171,7 +1183,7 @@
     var titleBefore = fromTitle && fromTitle.getBoundingClientRect();
     paintFold(folded, true);
     refitHeader();
-    if (!folded) revealTab();
+    if (!folded) revealTabNow();
     var toTitle = folded ? tabEls.title : name;
     if (titleBefore && toTitle && toTitle.animate && !reducedMotion()) {
       var titleAfter = toTitle.getBoundingClientRect();
@@ -1821,7 +1833,7 @@
       });
     }
     // The sheet paints before measuring the strip, so this read cannot force its first layout.
-    if (global.requestAnimationFrame) global.requestAnimationFrame(function () { global.requestAnimationFrame(revealTab); });
+    if (global.requestAnimationFrame) global.requestAnimationFrame(function () { global.requestAnimationFrame(function () { revealTabNow(); }); });
     else setTimeout(revealTab, 32);
     queueKnot(true);
     installHint(strip);
@@ -3324,6 +3336,9 @@
       if (editorSource() === saver.text) {
         clearTimeout(saver.timer); saver.timer = 0;
         setSave(saver.restored ? 'restored' : 'saved');
+        // Typed back to the saved words (an edit, then Undo): the journal's copy of them is the server's
+        // own text, so it is confirmed here; left pending, it would be sent again later for nothing.
+        if (Castor.keep && keepOn()) Castor.keep.confirm(saver.path, saver.text, Castor.role.publicWriter ? Castor.role.who : undefined);
         return;
       }
       saver.restored = false;

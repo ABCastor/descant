@@ -1951,6 +1951,8 @@
         scheduleReparse();
         pending = []; literalRun = null;
         requestOverlay('snap');
+        // The article's text changed: the save hears it now, or the bar keeps saying Saved for the text before.
+        if (opts && opts.onChange) { try { opts.onChange(getSource()); } catch (e) { console.error(e); } }
         return;
       }
       refreshRendered(b);
@@ -2707,8 +2709,17 @@
     var clip = global.navigator && global.navigator.clipboard, text = String(global.getSelection ? global.getSelection() : '');
     return clip && clip.writeText ? clip.writeText(text).then(function () { return true; }, function () { return false; }) : Promise.resolve(false);
   }
+  // The words a press on the menu began over (the menu keeps them, selMenu.press). iOS can move the
+  // selection while the finger is still on a word of the menu (back to a link's word after both handles
+  // were moved): the press keeps its words, and the menu stays as it was under the finger
+  // (offerSelMenu), or its click never comes.
+  function pressedAnchor() {
+    var press = selMenu && selMenu.press;
+    return press && Date.now() - press.at < 2000 ? press.anchor : null;
+  }
   function runMenu(id, btn) {
-    var a = selAnchor;
+    var a = pressedAnchor() || selAnchor;
+    if (selMenu) selMenu.press = null;
     if (id === 'copy') {
       copyWords().then(function (ok) {
         btn.textContent = ok ? 'Copied' : 'Could not copy';
@@ -2757,6 +2768,8 @@
       if (item.command && Castor.commands && Castor.commands.hint) Castor.commands.hint(btn, item.command);
       else if (item.keys && Castor.keys && Castor.keys.hint) Castor.keys.hint(btn, item.keys[0], item.keys[1]);
       btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
+      btn.addEventListener('pointerdown', function () { if (selAnchor) selMenu.press = { anchor: selAnchor, at: Date.now() }; });
+      btn.addEventListener('pointercancel', function () { selMenu.press = null; });
       btn.addEventListener('click', function () { runMenu(id, btn); });
       selMenu.appendChild(btn);
     });
@@ -2807,6 +2820,8 @@
       active.contains(range.startContainer) && active.contains(range.endContainer));
   }
   function offerSelMenu(range) {
+    // A finger on the menu: it stays as it is under the finger (runMenu), or its click never comes.
+    if (selMenu && !selMenu.hidden && selMenu.press && Date.now() - selMenu.press.at < 2000) return;
     if (systemMenuOver(range)) hideSelMenu(); else showSelMenu(range.getBoundingClientRect(), range);
   }
   // A scroll or resize hides the menu where it stood; once the page is still it is back over the
@@ -3072,7 +3087,36 @@
     if (marked && marked.contains(r.startContainer)) return domOffset(marked, r.startContainer, r.startOffset);
     var b = blockOf(el.getAttribute('data-block-id'));
     if (!b) return null;
-    return readingSource(el, b, r.startContainer, r.startOffset);
+    var hit = typeof readingHit === 'function' ? readingHit(el, x, y, r) : { node: r.startContainer, offset: r.startOffset };
+    return readingSource(el, b, hit.node, hit.offset);
+  }
+  // The browser's place for a point in a paragraph drawn for reading, when it is beside the finger; else
+  // the nearest letter edge on the finger's line. WebKit answers a point just right of a note's last
+  // word (its words end in collapsed spaces before the back link) with the start of that line.
+  function readingHit(el, x, y, r) {
+    var at = { node: r.startContainer, offset: r.startOffset };
+    var box = r.getClientRects()[0] || r.getBoundingClientRect();
+    if (box && box.height && y >= box.top - 1 && y <= box.bottom + 1 && Math.abs(box.left - x) <= 12) return at;
+    var best = null, walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT), probe = document.createRange();
+    for (var t = walk.nextNode(); t; t = walk.nextNode()) {
+      var ui = t.parentElement && t.parentElement.closest('[data-castor-ui]');
+      if (ui && el.contains(ui) || !t.data.length) continue;
+      probe.selectNodeContents(t);
+      var spans = probe.getClientRects(), near = false;
+      for (var k = 0; k < spans.length && !near; k++) near = spans[k].height > 0 && y >= spans[k].top - spans[k].height && y <= spans[k].bottom + spans[k].height;
+      if (!near) continue;
+      for (var i = 0; i < t.data.length; i++) {
+        probe.setStart(t, i); probe.setEnd(t, i + 1);
+        var c = probe.getClientRects()[0];
+        if (!c || !c.height || !c.width) continue;
+        var dy = y < c.top ? c.top - y : y > c.bottom ? y - c.bottom : 0;
+        // A space is measured by its left edge only: past the one a line wraps at is the next line.
+        var dl = Math.abs(x - c.left), dr = /\s/.test(t.data.charAt(i)) ? Infinity : Math.abs(x - c.right);
+        var cand = dl <= dr ? { node: t, offset: i, dy: dy, dx: dl } : { node: t, offset: i + 1, dy: dy, dx: dr };
+        if (!best || cand.dy < best.dy - .5 || Math.abs(cand.dy - best.dy) <= .5 && cand.dx < best.dx) best = cand;
+      }
+    }
+    return best || at;
   }
   // The source offset of a point in a paragraph drawn for reading: its reading characters are counted
   // up to the point BEFORE an edit surface is installed, then found in the block's source as typed in.
@@ -3091,8 +3135,19 @@
     var temp = document.createElement('div');
     temp.innerHTML = liveHtml(b);
     var nodes = sourceNodes(temp), seen = 0;
+    // Drawn for reading, a note's number and the space after it ("1 The note") are reading characters
+    // that stand for no text in the source as typed in: an empty atom and the definition's gap. A
+    // point in them is the start of the words after them; past them, they are counted.
+    var drawn = temp.querySelectorAll ? temp.querySelectorAll('.cw-atom:empty,.cw-definition-gap') : [], d = 0, pending = 0;
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i], atom = n.node.parentElement && n.node.parentElement.closest('.cw-atom');
+      for (; d < drawn.length && drawn[d].compareDocumentPosition(n.node) & 4; d++) {
+        pending += drawn[d].classList.contains('cw-atom') ? (drawn[d].getAttribute('data-label') || '').length : 1;
+      }
+      if (pending && (atom || !hiddenSource(n.node))) {
+        if (count <= seen + pending) return n.at;
+        seen += pending; pending = 0;
+      }
       if (atom) {
         var label = atom.getAttribute('data-label') || '';
         if (count <= seen + label.length) return n.at + (count > seen ? n.len : 0);

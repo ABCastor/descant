@@ -788,6 +788,8 @@
         if (poll && S.retryReads[storageKey]) deferCommentRetry(storageKey);
         if (!poll && Castor.comments) {
           Castor.comments.durable = false;
+          // Unconfirmed until a read succeeds: the polls ask again after a wait, as after a failed send.
+          deferCommentRetry(storageKey);
           if (reviewing() && Castor.bus && Castor.bus.emit) Castor.bus.emit('comments:unavailable', { path: path, reason: 'The review service could not confirm your comments. Reconnect and reopen this article.' });
         }
       });
@@ -916,6 +918,9 @@
     var writerAccount = !reviewer && Castor.role.publicWriter ? Castor.role.id : '';
     function headForWire(t) { var copy = Object.assign({}, t); delete copy.legacyHead; return copy; }
     var canonical = S.serverCopies[storageKey];
+    // The server's copy is not known (its read was refused or offline) and no words or actions of ours
+    // wait: there is nothing to send, and nothing to mark as kept on this device.
+    if (!canonical && !unsavedWords(threads, []).length && !actionPending()) { told('kept'); return true; }
     if (roleConfirmed() && (!reviewer || readerAccount) && canonical &&
         JSON.stringify(threads.map(headForWire)) === JSON.stringify(canonical.map(headForWire))) {
       if (Castor.comments) Castor.comments.durable = !actionPending();
@@ -4549,14 +4554,17 @@
     positionTouchPeek();
   }
 
-  // A tap outside the composer posts the words in it (a posted comment can still be edited);
+  // A click outside the composer posts the words in it (a posted comment can still be edited);
   // an empty composer just closes. false keeps the words in the box as a draft, sent only by Post.
+  // A finger is different: on a touch screen a tap elsewhere is how a writer puts a thing away, so
+  // there the words stay in the box as a draft (TOUCH_TAP_OUTSIDE_SENDS) and only Post sends them.
   // Only a tap: a touch that becomes a scroll, or a press held as long as a long press (or moved),
   // in the article or in the comments, leaves the box as it is, even when the browser still clicks
   // for it. A mouse click and a key on a button are clicks. The post happens on that click, in the
   // document's capture phase, so before the button's own handler: the box posts and its card
   // rebuilds first, then the button (Reply, Edit...) acts, finding its comment by id, not by node.
   var TAP_OUTSIDE_SENDS = true;
+  var TOUCH_TAP_OUTSIDE_SENDS = false;
   var LONG_PRESS_MS = 500;   // iOS's long press
   // With a comment's keyboard up, a tap on the article places no caret there and closes that keyboard
   // (tapPassage, which also posts the box: the editor keeps that tap's click), so what the writer types
@@ -4572,18 +4580,21 @@
         S.page.contains(event.target) && !(event.target.closest && event.target.closest('[data-castor-ui]')) ? { at: Date.now(), field: DOC.activeElement } : null;
       return;
     }
+    // A tap with the comment's keyboard up (tapPassage) is a finger's.
+    var finger = event.type === 'tap';
     if (event.type === 'click') {
       var press = S.outsidePress, now = typeof event.timeStamp === 'number' ? event.timeStamp : Date.now();
       S.outsidePress = null;
-      if (press && (press.type === 'touch' || press.type === 'pen') && event.detail !== 0 &&
-          (now - press.at >= (typeof LONG_PRESS_MS === 'number' ? LONG_PRESS_MS : 500) ||
+      finger = !!press && (press.type === 'touch' || press.type === 'pen') && event.detail !== 0;
+      if (finger && (now - press.at >= (typeof LONG_PRESS_MS === 'number' ? LONG_PRESS_MS : 500) ||
            Math.abs(event.clientX - press.x) > 10 || Math.abs(event.clientY - press.y) > 10)) return;
     }
     var target = event.target;
+    var sends = finger ? TOUCH_TAP_OUTSIDE_SENDS : TAP_OUTSIDE_SENDS;
     if (S.composer && !(S.composer.record && S.composer.record.closed) &&
         !S.composer.node.contains(target) &&
         !(target.closest && target.closest('.castor-comment-undo')) &&
-        (TAP_OUTSIDE_SENDS || !S.composer.textarea.value.trim())) S.composer.submit();
+        (sends || !S.composer.textarea.value.trim())) S.composer.submit();
   }
 
   function tapPassage(e) {
