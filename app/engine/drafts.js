@@ -60,18 +60,24 @@
     if (path() !== articlePath() || !Castor.labels || !Castor.editor || !Castor.editor.getSource) return '';
     return Castor.labels.variant(Castor.editor.getSource());
   }
+  // A date format is slow to make and quick to use: one is made per shape and kept.
+  var dateFormats = {};
+  function dateFormat(d, options) {
+    var key = JSON.stringify(options);
+    return (dateFormats[key] || (dateFormats[key] = new Intl.DateTimeFormat('en-GB', options))).format(d);
+  }
   function day(when) {
     var d = new Date(when);
-    return isFinite(d.getTime()) ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+    return isFinite(d.getTime()) ? dateFormat(d, { day: 'numeric', month: 'short' }) : '';
   }
   // A save is named by when it was made, short: today its time ("14:32"), another day its date
   // and time ("9 Nov 14:32"), another year with the year. Saves in one minute add seconds.
   function moment(when, seconds) {
     var d = new Date(when), now = new Date();
     if (!isFinite(d.getTime())) return '';
-    var time = d.toLocaleTimeString('en-GB', seconds ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
+    var time = dateFormat(d, seconds ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
     if (d.toDateString() === now.toDateString()) return time;
-    return d.toLocaleDateString('en-GB', d.getFullYear() === now.getFullYear() ? { day: 'numeric', month: 'short' }
+    return dateFormat(d, d.getFullYear() === now.getFullYear() ? { day: 'numeric', month: 'short' }
       : { day: 'numeric', month: 'short', year: 'numeric' }) + ' ' + time;
   }
   function blocksOf(markdown) {

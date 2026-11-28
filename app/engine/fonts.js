@@ -114,29 +114,74 @@
   //     Ask again after webfonts load; Literata ships locally under `Word`.
   // ---------------------------------------------------------------------------
 
-  var availability = {};
-  function checkAll() {
-    if (typeof document === 'undefined') return;
+  // Measured when a font list is first shown, or a face at a time in idle moments, never in one
+  // block on load: each face is a canvas measure (on Linux a font lookup each), and the page has no
+  // use for the answers until someone looks at a list. A font that loads marks them stale.
+  var availability = {}, measured = false, SAMPLE = 'mmmmWWWWiiii0123456789', FALLBACKS = ['monospace', 'serif', 'sans-serif'];
+  function measurer() {
+    if (typeof document === 'undefined') return null;
     var canvas = document.createElement('canvas');
     var ctx = canvas.getContext && canvas.getContext('2d');
-    FACES.forEach(function (f) {
-      if (f.id === 'sf') {
-        availability[f.id] = /Mac|iPhone|iPad|iPod/.test((global.navigator &&
-          (global.navigator.platform || global.navigator.userAgent)) || '');
-        return;
-      }
-      availability[f.id] = !!ctx && [f.probe].concat(f.aliases || []).some(function (family) {
-        return ['monospace', 'serif', 'sans-serif'].some(function (fallback) {
-          ctx.font = '32px ' + fallback;
-          var base = ctx.measureText('mmmmWWWWiiii0123456789').width;
-          ctx.font = '32px "' + family + '", ' + fallback;
-          return ctx.measureText('mmmmWWWWiiii0123456789').width !== base;
-        });
+    if (!ctx) return { ctx: null, base: {} };
+    var base = {};
+    FALLBACKS.forEach(function (fallback) { ctx.font = '32px ' + fallback; base[fallback] = ctx.measureText(SAMPLE).width; });
+    return { ctx: ctx, base: base };
+  }
+  function measureFace(m, f) {
+    if (f.id === 'sf') {
+      return /Mac|iPhone|iPad|iPod/.test((global.navigator &&
+        (global.navigator.platform || global.navigator.userAgent)) || '');
+    }
+    return !!m.ctx && [f.probe].concat(f.aliases || []).some(function (family) {
+      return FALLBACKS.some(function (fallback) {
+        m.ctx.font = '32px "' + family + '", ' + fallback;
+        return m.ctx.measureText(SAMPLE).width !== m.base[fallback];
       });
     });
   }
+  function checkAll() {
+    var m = measurer();
+    if (!m) return;
+    measured = true; round++;
+    FACES.forEach(function (f) { availability[f.id] = measureFace(m, f); });
+  }
+  /* The same answers a face at a time, each in an idle moment, so a click is never kept waiting
+     behind the whole list; `then` runs once every face is measured (at once if they already are). */
+  var round = 0, idleWaiting = [];
+  function idle(fn) {
+    if (global.requestIdleCallback) global.requestIdleCallback(fn, { timeout: 2000 });
+    else (global.setTimeout || setTimeout)(function () { fn(null); }, 16);
+  }
+  function measureSoon(then) {
+    if (measured) { if (then) then(); return; }
+    if (then) idleWaiting.push(then);
+    if (idleWaiting.running) return;
+    idleWaiting.running = true;
+    var mine = ++round, m = null, left = FACES.slice(), found = {};
+    function finish() {
+      idleWaiting.running = false;
+      var waiting = idleWaiting.splice(0);
+      waiting.forEach(function (fn) { fn(); });
+    }
+    function slice(deadline) {
+      if (round !== mine) { idleWaiting.running = false; if (measured) finish(); else measureSoon(); return; }
+      m = m || measurer();
+      if (!m) { finish(); return; }
+      do { var f = left.shift(); found[f.id] = measureFace(m, f); }
+      while (left.length && deadline && deadline.timeRemaining() > 4);
+      if (left.length) { idle(slice); return; }
+      Object.keys(found).forEach(function (id) { availability[id] = found[id]; });
+      measured = true;
+      finish();
+    }
+    idle(slice);
+  }
+  function present(f) {
+    if (!measured) checkAll();
+    return availability[f.id];
+  }
   function statusOf(f) {
-    var known = availability[f.id];
+    var known = present(f);
     if (known !== true) return 'Not on this device';
     return f.note || '';
   }
@@ -346,7 +391,7 @@
     readingPicker.options.forEach(function (entry) {
       var f = entry.face, selected = entry.id === (current || '');
       entry.button.setAttribute('aria-checked', selected ? 'true' : 'false');
-      entry.button.disabled = !!f && availability[f.id] !== true && !selected;
+      entry.button.disabled = !!f && present(f) !== true && !selected;
       entry.name.textContent = (selected ? '✓ ' : '') + (f ? f.label : 'Default reading font');
       entry.note.textContent = f ? statusOf(f) : '';
     });
@@ -632,7 +677,6 @@
         ? document.documentElement.getAttribute('data-heading-marks') : null;
       world = readWorld();
       chosen = load();
-      checkAll();
       apply();
       if (!mounted) {
         registerCommands();
@@ -652,10 +696,13 @@
           }
         }
         if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
-          document.fonts.ready.then(function () { checkAll(); refreshPanel(); refreshReadingPicker(); });
-          if (document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', function () {
-            checkAll(); refreshPanel(); refreshReadingPicker();
-          });
+          // Each webfont that arrives fires loadingdone; the lists showing are measured again once.
+          var fontsArrived = function () {
+            measured = false; round++;
+            if (panelEl || readingPicker) measureSoon(function () { refreshPanel(); refreshReadingPicker(); });
+          };
+          document.fonts.ready.then(fontsArrived);
+          if (document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', fontsArrived);
         }
         // a chosen ramp follows the paper, so re-apply when the paper changes
         if (global.matchMedia) {
@@ -672,7 +719,7 @@
     },
     faces: function () {
       return FACES.map(function (f) {
-        return { id: f.id, label: f.label, kind: f.kind, stack: f.stack, note: statusOf(f), available: availability[f.id] === true };
+        return { id: f.id, label: f.label, kind: f.kind, stack: f.stack, note: statusOf(f), available: present(f) === true };
       });
     },
     retired: function () { return RETIRED_FACES.map(function (f) { return { id: f.id, label: f.label, reason: f.reason }; }); },
@@ -687,7 +734,8 @@
     panelBody: panelBody,
     mountReadingPicker: mountReadingPicker,
     worldDefaults: function () { return world; },
-    statusOf: function (id) { var f = faceById(id); return f ? statusOf(f) : ''; }
+    statusOf: function (id) { var f = faceById(id); return f ? statusOf(f) : ''; },
+    measureSoon: measureSoon
   };
 
   Castor.fonts = fonts;

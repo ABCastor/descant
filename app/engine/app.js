@@ -4826,7 +4826,22 @@
       if (Castor.role === identity && note) note.textContent = 'Colour was not saved. Try again.';
     } finally { paintReaderColor(); }
   }
+  /* The reading-font picker needs every face on this device measured, which is slow (a canvas per
+     face, and on Linux a font lookup each); once the article is shown the faces are measured one at a
+     time in idle moments and the picker is built after them, or at once when Settings opens. */
+  var readingPickerBuilt = false;
+  function buildReadingPicker() {
+    if (readingPickerBuilt || !Castor.fonts || !Castor.fonts.mountReadingPicker) return;
+    readingPickerBuilt = true;
+    Castor.fonts.mountReadingPicker(document.getElementById('set-reading-font'));
+  }
+  function scheduleReadingPicker() {
+    if (Castor.fonts && Castor.fonts.measureSoon) Castor.fonts.measureSoon(buildReadingPicker);
+    else if (global.requestIdleCallback) global.requestIdleCallback(buildReadingPicker, { timeout: 3000 });
+    else global.setTimeout(buildReadingPicker, 1000);
+  }
   function paintSettings() {
+    buildReadingPicker();
     if (Castor.readerShell) Castor.readerShell.settings();
     paintReaderColor();
     var format = document.getElementById('set-touch-format'); if (format) format.checked = recall('touchFormat') !== '0';
@@ -5139,8 +5154,8 @@
       if (!reviewing() && Castor.agentTray && Castor.agentTray.setEnabled) Castor.agentTray.setEnabled(trayControl.checked);
       paintSettings();
     });
-    // The picker's first choice is the world's own reading font, so it is also the reset.
-    if (Castor.fonts && Castor.fonts.mountReadingPicker) Castor.fonts.mountReadingPicker(document.getElementById('set-reading-font'));
+    // The picker's first choice is the world's own reading font, so it is also the reset. It is
+    // built once the article is shown (reveal), or as Settings opens.
     wireProfile(document.getElementById('set-prefs-note'));
   }
 
@@ -5488,6 +5503,7 @@
         try { if (global.performance && global.performance.mark) global.performance.mark('descant-ready'); } catch (e) { /* no timing */ }
         // The offline worker's upgrade check, postponed by the opening, runs now.
         if (Castor.offline && Castor.offline.afterShown) Castor.offline.afterShown();
+        scheduleReadingPicker();
       }
       /* Recovery has settled. Background frame throttling and font swapping
          must not hide a ready writing sheet. */

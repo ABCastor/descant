@@ -33,9 +33,15 @@
     return parseMd(source).blocks.filter(function (b) { return b.type !== 'frontmatter' && b.type !== 'reference-def' && b.html !== ''; });
   }
   function authorName(v) { return v.who || v.author || 'Unknown contributor'; }
+  // A date format is slow to make and quick to use: one is made per shape and kept.
+  var dateFormats = {};
+  function dateFormat(d, options) {
+    var key = JSON.stringify(options);
+    return (dateFormats[key] || (dateFormats[key] = new Intl.DateTimeFormat('en-GB', options))).format(d);
+  }
   function saveTime(v) {
     var d = new Date(v && v.when);
-    return isFinite(d.getTime()) ? d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'date unavailable';
+    return isFinite(d.getTime()) ? dateFormat(d, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'date unavailable';
   }
   function liveKey(live) { return live ? [live.commit, live.article_sha256, live.published_at].join('|') : ''; }
   function websiteReason(live) {
@@ -271,7 +277,7 @@
     root.appendChild(button(v.all ? 'Hide individual saves' : 'Show all saves', function () { v.all = !v.all; render(); }));
     var days = {};
     v.versions.slice().reverse().forEach(function (save) {
-      var date = new Date(save.when), day = isFinite(date.getTime()) ? date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Date unavailable';
+      var date = new Date(save.when), day = isFinite(date.getTime()) ? dateFormat(date, { day: 'numeric', month: 'short', year: 'numeric' }) : 'Date unavailable';
       (days[day] || (days[day] = [])).push(save);
     });
     Object.keys(days).forEach(function (day) {

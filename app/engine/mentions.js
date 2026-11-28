@@ -86,8 +86,16 @@
       if (body) body.textContent = 'Choose who is writing to see your mentions.';
       return Promise.resolve();
     }
-    return global.fetch(C.endpoints.api('mentions?who=') + who, {cache:'no-store'})
-      .then(function (r) { if (!r.ok) throw Error('mentions unavailable'); return r.json(); })
+    // The offline worker refuses a read that was pending while it bound this writer (409, as on a
+    // return to the tab): that is a retry, not an outage, so it is asked once more (as app.js asks for the piece).
+    function ask(again) {
+      return global.fetch(C.endpoints.api('mentions?who=') + who, {cache:'no-store'}).then(function (r) {
+        if (r.status === 409 && again && request === epoch) return ask(false);
+        if (!r.ok) throw Error('mentions unavailable');
+        return r.json();
+      });
+    }
+    return ask(true)
       .then(function (data) { if (request !== epoch) return; page = data; problem = ''; paint(); })
       .catch(function () {
         if (request !== epoch) return;

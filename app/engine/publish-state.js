@@ -397,7 +397,9 @@
     if (!sites().length) { site.disabled = true; box.appendChild(el('p', words.noSites)); }
     var tagsChanged = false;
     var picker = tagPicker(box, site, function (next) {
-      if (next) { original = next; tagsChanged = true; }
+      // A tag added or removed is one deliberate edit, not typing: it is saved now, so Publish
+      // is ready after one round trip instead of after the typing pause.
+      if (next) { original = next; tagsChanged = true; if (C.saver && C.saver.flush) C.saver.flush(); }
       if (syncSheet) syncSheet();
     }, function () { return busy; });
     var metadata = el('p'); box.appendChild(metadata);

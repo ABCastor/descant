@@ -221,10 +221,22 @@
     return Math.max(MIN_DOCK, Math.min(px, Math.max(MIN_DOCK, max)));
   }
 
+  /* A world's tokens are read from the page's style, and the read makes the browser restyle the
+     page first (after a long article is drawn, a whole style pass in the middle of script). They
+     change only with the page's own attributes (world, theme, settings), so each is read once and
+     again only after one of those changes. With nothing to watch, every read is fresh. */
+  var tokenCache = null, tokenWatch = null;
   function featureToken(name) {
     if (!global.getComputedStyle || !document.documentElement) return '';
+    if (!tokenWatch && global.MutationObserver) {
+      tokenWatch = new global.MutationObserver(function () { tokenCache = null; });
+      tokenWatch.observe(document.documentElement, { attributes: true });
+    }
+    if (tokenWatch && tokenCache && Object.prototype.hasOwnProperty.call(tokenCache, name)) return tokenCache[name];
     var style = Castor.frameReads ? Castor.frameReads.style(document.documentElement) : global.getComputedStyle(document.documentElement);
-    return style.getPropertyValue(name).trim();
+    var value = style.getPropertyValue(name).trim();
+    if (tokenWatch) (tokenCache || (tokenCache = {}))[name] = value;
+    return value;
   }
 
   /* --- the optional sibling surface ------------------------------------ */

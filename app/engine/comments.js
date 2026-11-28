@@ -2719,11 +2719,23 @@
     for (var i = 0; i < slots.length; i++) slots[i].remove();
   }
 
+  /* A world's margin tokens are read from the page's style, and the read makes the browser
+     restyle the page first; after a long article is drawn that is a whole second style pass. The
+     tokens change only with the page's own attributes (its world, theme, settings), so each is read
+     once and again only after one of those changes. With nothing to watch, every read is fresh. */
+  var featureTokens = null, featureWatch = null;
   function featureOn(name) {
     if (!global.getComputedStyle) return false;
+    if (!featureWatch && global.MutationObserver && DOC.documentElement) {
+      featureWatch = new global.MutationObserver(function () { featureTokens = null; });
+      featureWatch.observe(DOC.documentElement, { attributes: true });
+    }
+    if (featureWatch && featureTokens && Object.prototype.hasOwnProperty.call(featureTokens, name)) return featureTokens[name];
     var style = Castor.frameReads ? Castor.frameReads.style(DOC.documentElement) : global.getComputedStyle(DOC.documentElement);
     var v = style.getPropertyValue(name).trim().toLowerCase();
-    return v === 'on' || v === '1' || v === 'true';
+    var on = v === 'on' || v === '1' || v === 'true';
+    if (featureWatch) (featureTokens || (featureTokens = {}))[name] = on;
+    return on;
   }
   function marginRouted() { return featureOn('--margin-routing') || featureOn('--comment-margin'); }
 

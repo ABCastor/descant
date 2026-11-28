@@ -255,12 +255,23 @@
       menu.word.setAttribute('aria-expanded', 'false'); menu.word.setAttribute('aria-pressed', 'false');
     }
   }
+  /* The room beside the column places the docks. The column's width comes from its resize
+     observer, which reports after layout; reading the box here instead, as the chrome rearranges in
+     the middle of a click, would make the browser lay the page out early. A column the observer has
+     not reported yet is read once. */
+  var columnWidth = null, columnSeen = null;
   function measureMargins() {
     var app = doc.getElementById('app'), col = doc.querySelector('#page .page-column');
     if (!app || !col) return;
-    var width = col.getBoundingClientRect().width;
+    var width = col === columnSeen && columnWidth != null ? columnWidth : col.getBoundingClientRect().width;
     var free = Math.floor(((global.innerWidth || 0) - width) / 2 - 24);
     if (app._marginFree !== free) { app._marginFree = free; app.style.setProperty('--margin-free', free + 'px'); }
+  }
+  function columnResized(entries) {
+    var target = entries && entries.length ? entries[entries.length - 1].target : null;
+    if (!target) return;
+    columnSeen = target; columnWidth = target.getBoundingClientRect().width;
+    measureMargins();
   }
   function arrange() {
     if (arranging) return;
@@ -296,7 +307,7 @@
     if (Castor.bus && Castor.bus.on) ['comments:pending', 'comments:saved', 'comments:unsaved', 'piece:opened', 'live:reload'].forEach(function (name) { Castor.bus.on(name, arrange); });
     if (Castor.panels && Castor.panels.onLayout) Castor.panels.onLayout(arrangeChrome);
     global.addEventListener('resize', arrange, { passive: true });
-    if (global.ResizeObserver) { var col = doc.querySelector('#page .page-column'); if (col) new global.ResizeObserver(measureMargins).observe(col); }
+    if (global.ResizeObserver) { var col = doc.querySelector('#page .page-column'); if (col) new global.ResizeObserver(columnResized).observe(col); }
   }
   Castor.capsule = { arrange: arrange, layoutMenu: layoutMenu, commentPeek: commentPeek };
   if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', start); else start();
